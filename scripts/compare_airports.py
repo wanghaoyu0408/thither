@@ -2,15 +2,18 @@
 
     .\\.venv\\Scripts\\python.exe scripts\\compare_airports.py
 
-Two halves, deliberately separate:
+Three parts:
 
-    1. Real driving times from the Bay Area to each airport (Routes API), then a
-       live flight search. If the Duffel token is a test one, everything from
-       that search is sandbox data and is banner-marked as such.
+    1. Real driving times from the Bay Area to each airport (Routes API).
+    2. A flight search from all three, shown both as an overall ranking and as
+       the best option from each airport - the second is the comparison being
+       asked for, since one airport usually takes every slot in the first.
+    3. Why the recommendation wins, in figures that all came from a tool.
 
-    2. The trade-off reasoning, demonstrated on fixture offers shaped like real
-       ones - because Duffel's own docs say the sandbox has no realistic prices,
-       and a comparison built on invented fares would prove nothing.
+If the Duffel token is a test one, everything from the search is sandbox data
+and is banner-marked as such; Duffel's own docs say test mode has no realistic
+prices. Fixtures stand in for part three only when the search returns nothing
+to compare against, and say so.
 
 Needs GOOGLE_MAPS_API_KEY. DUFFEL_ACCESS_TOKEN is optional; without it part one
 does the airports only.
@@ -47,6 +50,68 @@ def sandbox_banner() -> None:
     print("!!  The provider token is a test one. Nothing below is bookable,")
     print("!!  and none of it should be shown to a traveller as a real fare.")
     print(f"{BANNER}\n")
+
+
+def show_ranked(ranked: list, *, dimensions: bool = False) -> None:
+    for item in ranked:
+        minutes = item.option.duration_minutes or 0
+        tag = "" if item.option.live_mode else "  [SANDBOX - NOT REAL]"
+        print(
+            f"    {item.option.origin}->{item.option.destination}  "
+            f"{item.per_person:>7.0f} {item.currency}  "
+            f"{item.option.stops} stop(s)  {minutes // 60}h{minutes % 60:02d}m  "
+            f"{','.join(item.option.airlines):<8} score {item.score.total:.3f}{tag}"
+        )
+        if dimensions:
+            print(f"          {item.score.dimensions}")
+
+
+def show_by_origin(ranked: list, airports: list[AirportOption]) -> None:
+    """Best option from each airport, which is the comparison being asked for.
+
+    A flat top-six hides it: when one airport dominates it takes every slot, and
+    "should we drive to Oakland instead?" goes unanswered.
+    """
+    drive = {a.iata: a.ground_travel_minutes for a in airports}
+    best: dict[str, object] = {}
+    counts: dict[str, int] = {}
+    for item in ranked:
+        origin = item.option.origin
+        counts[origin] = counts.get(origin, 0) + 1
+        if origin not in best:
+            best[origin] = item
+
+    print("\n    Best from each airport:")
+    for origin in sorted(best, key=lambda o: -best[o].score.total):
+        item = best[origin]
+        minutes = item.option.duration_minutes or 0
+        drive_note = (
+            f"{drive[origin]:.0f} min drive" if drive.get(origin) is not None else "drive unknown"
+        )
+        print(
+            f"       {origin}  {item.per_person:>7.0f} {item.currency}  "
+            f"{item.option.stops} stop(s)  {minutes // 60}h{minutes % 60:02d}m  "
+            f"{drive_note:<16} {counts[origin]:>3} option(s)  score {item.score.total:.3f}"
+        )
+
+
+def pick_alternative(ranked: list):
+    """What the recommendation should be compared against.
+
+    Normally the cheapest. But when the best option is also the cheapest -
+    which happens often on a route one airport dominates - the comparison worth
+    showing is the best from a *different* airport, since "should we drive to
+    Oakland instead?" is the question being asked.
+    """
+    if len(ranked) < 2:
+        return None
+
+    best = ranked[0]
+    cheapest = cheapest_of(ranked)
+    if cheapest is not None and cheapest.option.offer_ref != best.option.offer_ref:
+        return cheapest
+
+    return next((item for item in ranked[1:] if item.option.origin != best.option.origin), None)
 
 
 def fixture_offers() -> list[FlightOptionData]:
@@ -148,10 +213,16 @@ async def main() -> int:
 
             bay_area = [a for a in airports if a.iata in ("SFO", "OAK", "SJC")]
 
-            # --- 2. A live search, labelled for what it is -----------------
-            banner("2. Flight search")
+            preferences = FlightPreferences(
+                nonstop_importance=0.9, price_importance=0.6, schedule_importance=0.8
+            )
+
+            # --- 2. A real search, labelled for what it is -----------------
+            banner("2. Flight search: Bay Area -> Tokyo")
+            ranked: list = []
+
             if toolbox.flights is None:
-                print("    DUFFEL_ACCESS_TOKEN is not set; skipping the live search.")
+                print("    DUFFEL_ACCESS_TOKEN is not set; skipping the search.")
             else:
                 if not toolbox.flights.live_mode:
                     sandbox_banner()
@@ -162,6 +233,7 @@ async def main() -> int:
                         destinations=["NRT"],
                         departure_date=date.today() + timedelta(days=45),
                         adults=4,
+                        limit=100,
                     )
                 )
                 if not result.ok:
@@ -169,49 +241,47 @@ async def main() -> int:
                 elif result.found_nothing:
                     print("    no offers came back. The search itself worked.")
                 else:
-                    ranked = rank_flights(result.results, airports=bay_area, limit=5)
-                    for item in ranked:
-                        tag = "" if item.option.live_mode else "  [SANDBOX - NOT REAL]"
-                        print(
-                            f"    {item.option.origin}->{item.option.destination}  "
-                            f"{item.per_person:>8.0f} {item.currency}  "
-                            f"{item.option.stops} stop(s)  score {item.score.total:.3f}{tag}"
-                        )
+                    ranked = rank_flights(
+                        result.results, preferences=preferences, airports=bay_area
+                    )
+                    show_ranked(ranked[:6])
+                    show_by_origin(ranked, bay_area)
                 for warning in result.warnings:
                     print(f"    note: {warning}")
 
-            # --- 3. The reasoning, on data that means something ------------
-            banner("3. The trade-off, on realistic fixture fares")
-            print("    (the sandbox cannot supply realistic prices, so these are fixtures)")
+            # --- 3. The trade-off -----------------------------------------
+            alternative = pick_alternative(ranked)
+            source = "real fares"
 
-            preferences = FlightPreferences(
-                nonstop_importance=0.9, price_importance=0.6, schedule_importance=0.8
-            )
-            ranked = rank_flights(fixture_offers(), preferences=preferences, airports=bay_area)
-
-            print()
-            for item in ranked:
+            if alternative is None:
+                source = "illustrative fixtures"
+                banner("3. The trade-off, on illustrative fixtures")
                 print(
-                    f"    {item.option.origin}  {item.per_person:>6.0f} USD  "
-                    f"{item.option.stops} stop(s)  "
-                    f"{item.option.duration_minutes // 60}h{item.option.duration_minutes % 60:02d}m"
-                    f"   score {item.score.total:.3f}"
+                    "    The search returned nothing to compare against. These fixtures show\n"
+                    "    the reasoning that applies when it does."
                 )
-                print(f"          {item.score.dimensions}")
+                ranked = rank_flights(fixture_offers(), preferences=preferences, airports=bay_area)
+                alternative = pick_alternative(ranked)
+                print()
+                show_ranked(ranked, dimensions=True)
+            else:
+                banner("3. The trade-off, on the real fares above")
 
-            cheapest = cheapest_of(ranked)
-            if cheapest and cheapest.option.offer_ref != ranked[0].option.offer_ref:
-                trade_off = explain_choice(ranked[0], cheapest, airports=bay_area)
-                banner("Why the more expensive flight is the recommendation")
+            if ranked and alternative is not None:
+                best = ranked[0]
+                trade_off = explain_choice(best, alternative, airports=bay_area)
+                banner(f"Why the recommendation wins  ({source})")
                 print(
-                    f"    Recommended {ranked[0].option.origin}, "
-                    f"cheapest was {cheapest.option.origin}:\n"
+                    f"    Recommended {best.option.origin} at "
+                    f"{best.per_person:.0f} {best.currency}; "
+                    f"compared against {alternative.option.origin} at "
+                    f"{alternative.per_person:.0f} {alternative.currency}\n"
                 )
                 for statement in trade_off.statements:
                     print(f"       - {statement}")
                 print("\n    Every figure above came from the provider or the Routes API.")
-            else:
-                print("\n    The recommendation is also the cheapest; no trade-off to explain.")
+            elif ranked:
+                print("\n    Only one option came back; there is nothing to compare it against.")
 
             return 0
     except MissingCredentials as exc:

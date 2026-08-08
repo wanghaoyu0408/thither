@@ -207,21 +207,46 @@ def test_a_trivial_price_gap_does_not_score_like_a_large_one():
     """
     from app.services.flight_ranking import score_flight
 
-    near = score_flight(
-        offer("off_near", "SFO", price=610.0, stops=0, minutes=655),
-        cheapest=600.0,
-        dearest=610.0,
-        shortest=655,
-    )
-    far = score_flight(
-        offer("off_far", "SFO", price=1100.0, stops=0, minutes=655),
-        cheapest=600.0,
-        dearest=1100.0,
-        shortest=655,
-    )
+    def price_score(amount: float, cheapest: float) -> float:
+        return score_flight(
+            offer("off_x", "SFO", price=amount, stops=0, minutes=655),
+            cheapest=cheapest,
+            dearest=amount,
+            shortest=655,
+        ).score.dimensions["price"]
 
-    assert near.score.dimensions["price"] > 0.9
-    assert far.score.dimensions["price"] == 0.0
+    assert price_score(600.0, 600.0) == 1.0
+    assert price_score(610.0, 600.0) > 0.9
+    assert price_score(1100.0, 600.0) < 0.4
+
+
+def test_price_keeps_discriminating_among_expensive_fares():
+    """The floored version made everything past the tolerance score 0.0.
+
+    Seen live: a 916 and a 1072 fare tied, the tie fell to whichever offer id
+    sorted first, and the dearer one was recommended for no reason at all.
+    """
+    from app.services.flight_ranking import score_flight
+
+    def price_score(amount: float) -> float:
+        return score_flight(
+            offer("off_x", "SFO", price=amount, stops=0, minutes=635),
+            cheapest=526.0,
+            dearest=1200.0,
+            shortest=635,
+        ).score.dimensions["price"]
+
+    assert price_score(916.0) > price_score(1072.0)
+    assert price_score(1072.0) > 0.0
+
+
+def test_two_identical_fares_are_separated_by_price_not_by_offer_id():
+    cheaper = offer("off_zzz", "SFO", price=916.0, stops=0, minutes=635)
+    dearer = offer("off_aaa", "SFO", price=1072.0, stops=0, minutes=635)
+
+    ranked = rank_flights([dearer, cheaper], airports=BAY_AREA)
+
+    assert ranked[0].option.offer_ref == "off_zzz"
 
 
 def test_airport_drive_time_moves_the_ranking_on_its_own():

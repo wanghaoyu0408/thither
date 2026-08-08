@@ -104,6 +104,20 @@ class FlightService:
             warnings.append(f"{dropped} offer(s) had already expired and were discarded")
 
         offers = _apply_filters(offers, spec, warnings)
+
+        # Which airports actually have service matters as much as the fares.
+        # Searching SFO, OAK and SJC to Tokyo returns SFO only - and saying so
+        # is the answer to "should we fly from Oakland?", where showing SFO
+        # results without comment is not.
+        warnings.extend(_report_by_origin(offers, pairs, failures))
+
+        offers, duplicates = _dedupe(offers)
+        if duplicates:
+            warnings.append(
+                f"{duplicates} near-identical offer(s) collapsed (same flight, price and "
+                "conditions under different fare names)"
+            )
+
         offers.sort(key=lambda offer: (offer.price.amount, offer.offer_ref))
         offers = offers[: spec.limit]
 
@@ -159,6 +173,49 @@ class FlightService:
             VOLATILE_POLICY,
         )
         return offers
+
+
+def _report_by_origin(
+    offers: list[FlightOptionData],
+    pairs: list[tuple[str, str]],
+    failures: dict[str, ProviderError],
+) -> list[str]:
+    """Say what each origin produced, including the ones that produced nothing."""
+    counts: dict[str, int] = {}
+    for offer in offers:
+        counts[offer.origin] = counts.get(offer.origin, 0) + 1
+
+    notes: list[str] = []
+    for origin in dict.fromkeys(origin for origin, _destination in pairs):
+        if any(route.startswith(f"{origin}-") for route in failures):
+            continue
+        if not counts.get(origin):
+            notes.append(f"{origin}: no airline offered this route on these dates")
+    return notes
+
+
+def _dedupe(offers: list[FlightOptionData]) -> tuple[list[FlightOptionData], int]:
+    """Collapse offers that differ only in fare name.
+
+    Airlines return the same flight several times under different branding. Five
+    identical rows is not a shortlist (spec section 33), but the signature keeps
+    baggage and flexibility in it, so genuinely different fares survive.
+    """
+    seen: dict[tuple, FlightOptionData] = {}
+    for offer in offers:
+        signature = (
+            offer.origin,
+            offer.destination,
+            round(offer.price.amount, 2),
+            offer.stops,
+            offer.departure_at,
+            tuple(offer.airlines),
+            offer.baggage.checked if offer.baggage else None,
+            offer.refundable,
+            offer.changeable,
+        )
+        seen.setdefault(signature, offer)
+    return list(seen.values()), len(offers) - len(seen)
 
 
 def _drop_expired(offers: list[FlightOptionData]) -> tuple[list[FlightOptionData], int]:

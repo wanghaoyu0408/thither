@@ -24,8 +24,8 @@ DURATION_CEILING_MINUTES = 24 * 60
 # A drive this long makes an airport genuinely inconvenient.
 GROUND_CEILING_MINUTES = 120.0
 
-# A fare this much above the cheapest scores zero on price. Roughly the point
-# where "a bit more" becomes "a different budget".
+# A fare this far above the cheapest scores half. Roughly the point where "a bit
+# more" becomes "a different budget".
 PRICE_TOLERANCE = 0.30
 
 RED_EYE_HOURS = range(0, 6)
@@ -61,8 +61,12 @@ def _price_score(option: FlightOptionData, cheapest: float, dearest: float) -> f
     price = (option.price_per_person or option.price).amount
     if cheapest <= 0:
         return 1.0
-    excess = (price - cheapest) / cheapest
-    return max(0.0, 1.0 - excess / PRICE_TOLERANCE)
+    excess = max(0.0, (price - cheapest) / cheapest)
+    # Decays smoothly and never reaches zero. A linear version with a floor was
+    # the second wrong answer here: everything past the tolerance collapsed to
+    # 0.0, so a 916 and a 1072 fare scored identically and the tie fell to
+    # whichever offer id sorted first - which recommended the dearer one.
+    return round(1.0 / (1.0 + excess / PRICE_TOLERANCE), 4)
 
 
 def _duration_score(option: FlightOptionData, shortest: int | None) -> float | None:
@@ -273,7 +277,9 @@ def rank_flights(
         )
         for option in options
     ]
-    ranked.sort(key=lambda item: (-item.score.total, item.option.offer_ref))
+    # Price breaks a tie before the offer id does: two otherwise identical
+    # options should never be separated by which reference sorted first.
+    ranked.sort(key=lambda item: (-item.score.total, item.per_person, item.option.offer_ref))
     return ranked[:limit] if limit else ranked
 
 

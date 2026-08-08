@@ -19,7 +19,7 @@ validated `TripPatch` with revision control, lock enforcement and rejection memo
 | 2 | Google Places + Routes behind replaceable providers | done |
 | 3 | Itinerary generation, validator, scoped local replanning, agent | done |
 | 4 | Web research: Xiaohongshu / Reddit / blogs, resolved against Google | done |
-| 5 | Flights (Duffel), airport comparison, ranking with trade-offs | done — see caveat |
+| 5 | Flights (Duffel), airport comparison, ranking with trade-offs | done |
 | 6 | Hotels (neighborhood first, then Amadeus inventory) | not started |
 | 7 | Multi-traveler preferences, group scoring, fairness | not started |
 
@@ -113,34 +113,33 @@ so "no Xiaohongshu links" is distinguishable from "Xiaohongshu found nothing".
 .venv/Scripts/python.exe scripts/compare_airports.py
 ```
 
-Real driving times from the Bay Area to SFO, OAK and SJC, then a flight search, then the
-trade-off explained in figures that all came from a tool:
+Real driving times, then a real search from all three airports, then the trade-off in
+figures that all came from a tool:
 
 ```
-Recommended SFO, cheapest was OAK:
-   - 42 USD more per person
-   - 3h55m shorter
-   - nonstop instead of one stop at LAX
+Best from each airport:
+   SFO      916 USD  0 stop(s)  10h35m  56 min drive   54 option(s)  score 0.773
+   OAK      922 USD  1 stop(s)  17h29m  28 min drive    9 option(s)  score 0.570
+   SJC      927 USD  1 stop(s)  14h00m  76 min drive   37 option(s)  score 0.558
+
+Why the recommendation wins  (real fares)
+   - 390 USD more per person
+   - 17h15m shorter
+   - nonstop instead of one stop at MNL
 ```
 
-**The caveat, stated rather than buried.** Everything above — airport comparison with real
-drive times, ranking, the trade-off explanation — is verified. The Duffel *search* path is
-not, and this is why:
+That answers the question a traveller actually asks: Oakland is half the drive, but it
+costs seven more hours and a connection.
 
-- With a `duffel_test_` token the API is reachable, but Duffel's own docs say test mode
-  "won't see realistic flight schedules or prices", so it can only prove the contract, not
-  the recommendation quality.
-- With the live token currently configured, offer requests return
-  `403 insufficient_permissions`: the token needs the **`air.offer_requests.create`**
-  scope, which is granted per-token in the Duffel dashboard.
+The per-airport block exists because the flat ranking hides the comparison — when one
+airport dominates it takes every slot, and "should we drive to Oakland instead?" goes
+unanswered.
 
-So the ranking and explanation are demonstrated on fixture fares, and the live flight tests
-skip with that remedy named rather than passing vacuously. Real SFO/SJC/OAK fares are one
-dashboard setting away.
-
-Searching never costs anything at Duffel — only ticketing does — and this codebase has no
-path to ticket: `DuffelProvider` exposes exactly one public method, `search_offers`, and a
-test asserts the module contains nothing named for orders, payment, seats or cancellation.
+**Searching never costs anything at Duffel** — only ticketing does — and this codebase has
+no path to ticket: `DuffelProvider` exposes exactly one public method, `search_offers`, and
+a test asserts the module contains nothing named for orders, payment, seats or
+cancellation. A live token needs the `air.offer_requests.create` scope; without it the live
+tests skip naming that remedy rather than passing vacuously.
 
 ## How a change reaches the database
 
@@ -232,9 +231,14 @@ rule alone would be a hope; the stored flag and the validator are what make it h
 
 **Explicit preferences are not outbid by small savings.** An airline the traveller asked
 to avoid is filtered out rather than discounted, and "avoid red-eyes" is its own dimension
-rather than a fraction of a schedule weight. Price is scored against the cheapest fare
-proportionally, so a $10 gap no longer scores like a $500 one — the first version
-normalized across the candidate range, which made any saving look total.
+rather than a fraction of a schedule weight.
+
+**Price scoring took three attempts, and the two failures are instructive.** Normalizing
+across the candidate range made a $10 gap score exactly like a $500 one. Replacing that
+with a proportional score and a floor at +30% then made every expensive fare score zero,
+so a $916 and a $1072 fare tied and the tie fell to whichever offer id sorted first — the
+live run recommended the dearer of two identical flights. It is now a smooth decay that
+never saturates, and price breaks a score tie before the id does.
 
 **Airport convenience is a real driving time.** `search_airports` geocodes the location,
 finds airports in range, and asks the Routes API for actual drive times — the only honest
