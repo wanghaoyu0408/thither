@@ -18,10 +18,18 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./travel_agent.db"
     auto_create_tables: bool = True
 
-    # Placeholders for later milestones. Unused in Milestone 1.
+    # Google Places (New) + Routes. Required from Milestone 2.
+    google_maps_api_key: str | None = None
+    google_places_language: str | None = "en"
+    google_places_region: str | None = None
+
+    # Durable half of the tool cache. Only place ids and lat/lng ever persist;
+    # see app/services/cache.py.
+    cache_enabled: bool = True
+
+    # Placeholders for later milestones.
     openai_api_key: str | None = None
     duffel_access_token: str | None = None
-    google_maps_api_key: str | None = None
     amadeus_client_id: str | None = None
     amadeus_client_secret: str | None = None
     weather_api_key: str | None = None

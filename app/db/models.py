@@ -55,6 +55,27 @@ class TripRow(Base):
     )
 
 
+class ToolCacheRow(Base):
+    """Durable half of the tool cache.
+
+    Only holds content that may legally persist: place ids (no expiry) and
+    lat/lng (<=30 days). `expires_at` is a delete obligation, enforced by
+    `SqliteCache.purge_expired()`, not just a read-time filter.
+    """
+
+    __tablename__ = "tool_cache"
+
+    key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    content_class: Mapped[str] = mapped_column(String(32), nullable=False)
+
+    payload: Mapped[Any] = mapped_column("payload_jsonb", JSONType, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(TimestampType, default=utcnow, nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(TimestampType, nullable=True)
+
+    __table_args__ = (Index("ix_tool_cache_expires_at", "expires_at"),)
+
+
 class TripEventRow(Base):
     """Append-only audit trail. Never updated, never deleted."""
 

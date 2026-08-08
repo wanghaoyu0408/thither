@@ -46,7 +46,10 @@ def main() -> int:
                 },
             ),
         )
-        print(f"   {profile['name']}, home {profile['home_city']}, airports {profile['preferred_airports']}")
+        print(
+            f"   {profile['name']}, home {profile['home_city']}, "
+            f"airports {profile['preferred_airports']}"
+        )
 
         # 2. A trip. Revision starts at 0.
         trip = show(
@@ -207,7 +210,9 @@ def main() -> int:
             ),
         )
         print(f"   applied={released['applied']}  revision -> {released['revision']}")
-        print(f"   dinner now at {released['state']['itinerary']['days'][0]['items'][0]['start_at']}")
+        print(
+            f"   dinner now at {released['state']['itinerary']['days'][0]['items'][0]['start_at']}"
+        )
 
         # 7. Rejection memory.
         c.post(

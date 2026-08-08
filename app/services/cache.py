@@ -1,0 +1,253 @@
+"""Caching, constrained by what Google's terms actually permit.
+
+A blanket "store the response for 30 days" would breach the Maps Platform
+terms, so cached values are classified by *content*, not by endpoint:
+
+    PLACE_ID   exempt from ToS 3.2.3(b); storable indefinitely. Google
+               recommends refreshing ids older than 12 months.
+    LAT_LNG    temporarily cacheable for at most 30 consecutive days, after
+               which the values must be deleted.
+    VOLATILE   everything else - names, ratings, opening hours, reviews,
+               addresses, route durations. Not persistable. In-process only,
+               gone when the process exits.
+
+`SqliteCache` raises on VOLATILE rather than quietly downgrading it. A policy
+that is merely documented is a policy that erodes; one that throws is a policy
+that holds.
+
+Note the separation of concerns: this module exists to avoid API calls, which
+is what the terms restrict. `TripState.entities` persisting a place's facts is
+the user's own saved itinerary, governed instead by
+`PlaceEntity.facts_updated_at` and the staleness rule in place_service.
+"""
+
+import asyncio
+import hashlib
+import json
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from enum import StrEnum
+from typing import Any, Protocol
+
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from app.models.common import utcnow
+
+
+class ContentClass(StrEnum):
+    PLACE_ID = "place_id"
+    LAT_LNG = "lat_lng"
+    VOLATILE = "volatile"
+
+
+# Hard ceilings. A caller may ask for less, never for more.
+MAX_TTL: dict[ContentClass, timedelta | None] = {
+    ContentClass.PLACE_ID: None,  # no expiry
+    ContentClass.LAT_LNG: timedelta(days=30),
+    ContentClass.VOLATILE: timedelta(hours=1),
+}
+
+PERSISTABLE = frozenset({ContentClass.PLACE_ID, ContentClass.LAT_LNG})
+
+
+class CachePolicyError(RuntimeError):
+    """Raised when a caller tries to store content the terms do not allow."""
+
+
+@dataclass(frozen=True)
+class CachePolicy:
+    content_class: ContentClass
+    ttl: timedelta | None = None
+
+    def effective_ttl(self) -> timedelta | None:
+        ceiling = MAX_TTL[self.content_class]
+        if ceiling is None:
+            return self.ttl
+        return min(self.ttl, ceiling) if self.ttl else ceiling
+
+    def expires_at(self, now: datetime | None = None) -> datetime | None:
+        ttl = self.effective_ttl()
+        return None if ttl is None else (now or utcnow()) + ttl
+
+    @property
+    def persistable(self) -> bool:
+        return self.content_class in PERSISTABLE
+
+
+PLACE_ID_POLICY = CachePolicy(ContentClass.PLACE_ID)
+LAT_LNG_POLICY = CachePolicy(ContentClass.LAT_LNG)
+VOLATILE_POLICY = CachePolicy(ContentClass.VOLATILE)
+
+
+def naive_utc(value: datetime) -> datetime:
+    """SQLite does not preserve tzinfo, so timestamps round-trip as naive.
+
+    Comparing what comes back against an aware `utcnow()` raises TypeError, and
+    the expiry check would blow up rather than expire anything. Everything the
+    durable layer writes or compares is normalized to naive UTC.
+    """
+    return value.astimezone(UTC).replace(tzinfo=None) if value.tzinfo else value
+
+
+def cache_key(namespace: str, payload: Any) -> str:
+    """Stable key for a normalized request."""
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    digest = hashlib.sha256(blob.encode("utf-8")).hexdigest()[:32]
+    return f"{namespace}:{digest}"
+
+
+class Cache(Protocol):
+    async def get(self, key: str, policy: CachePolicy) -> Any | None: ...
+    async def set(self, key: str, value: Any, policy: CachePolicy) -> None: ...
+
+
+class InProcessCache:
+    """TTL dict. Backs VOLATILE content and short-lived reuse within a run."""
+
+    def __init__(self) -> None:
+        self._entries: dict[str, tuple[datetime | None, Any]] = {}
+
+    async def get(self, key: str, policy: CachePolicy) -> Any | None:
+        entry = self._entries.get(key)
+        if entry is None:
+            return None
+        expires_at, value = entry
+        if expires_at is not None and expires_at <= utcnow():
+            del self._entries[key]
+            return None
+        return value
+
+    async def set(self, key: str, value: Any, policy: CachePolicy) -> None:
+        self._entries[key] = (policy.expires_at(), value)
+
+    def clear(self) -> None:
+        self._entries.clear()
+
+
+class SqliteCache:
+    """Durable cache for the two content classes that may legally persist."""
+
+    def __init__(self, sessions: async_sessionmaker) -> None:
+        self._sessions = sessions
+
+    async def get(self, key: str, policy: CachePolicy) -> Any | None:
+        self._guard(policy)
+        from app.db.models import ToolCacheRow
+
+        async with self._sessions() as session:
+            row = await session.get(ToolCacheRow, key)
+            if row is None:
+                return None
+            if row.expires_at is not None and naive_utc(row.expires_at) <= naive_utc(utcnow()):
+                await session.delete(row)
+                await session.commit()
+                return None
+            return row.payload
+
+    async def set(self, key: str, value: Any, policy: CachePolicy) -> None:
+        self._guard(policy)
+        from app.db.models import ToolCacheRow
+
+        async with self._sessions() as session:
+            row = await session.get(ToolCacheRow, key)
+            if row is None:
+                row = ToolCacheRow(key=key)
+                session.add(row)
+            expires_at = policy.expires_at()
+            row.content_class = policy.content_class.value
+            row.payload = value
+            row.expires_at = None if expires_at is None else naive_utc(expires_at)
+            await session.commit()
+
+    async def purge_expired(self) -> int:
+        """Delete lapsed rows. The 30-day lat/lng limit is a delete obligation,
+        not merely a read-time filter."""
+        from app.db.models import ToolCacheRow
+
+        async with self._sessions() as session:
+            result = await session.execute(
+                delete(ToolCacheRow).where(
+                    ToolCacheRow.expires_at.is_not(None),
+                    ToolCacheRow.expires_at <= naive_utc(utcnow()),
+                )
+            )
+            await session.commit()
+            return result.rowcount or 0
+
+    async def count(self) -> int:
+        from app.db.models import ToolCacheRow
+
+        async with self._sessions() as session:
+            rows = await session.execute(select(ToolCacheRow.key))
+            return len(rows.scalars().all())
+
+    @staticmethod
+    def _guard(policy: CachePolicy) -> None:
+        if not policy.persistable:
+            raise CachePolicyError(
+                f"{policy.content_class.value!r} content must not be written to durable "
+                "storage; only place ids (indefinitely) and lat/lng (<=30 days) may persist"
+            )
+
+
+class LayeredCache:
+    """In-process in front of SQLite, falling back gracefully.
+
+    VOLATILE never reaches the durable layer - it is not an error to cache it,
+    only an error to persist it.
+    """
+
+    def __init__(self, memory: InProcessCache, durable: SqliteCache | None = None) -> None:
+        self._memory = memory
+        self._durable = durable
+
+    async def get(self, key: str, policy: CachePolicy) -> Any | None:
+        hit = await self._memory.get(key, policy)
+        if hit is not None:
+            return hit
+        if self._durable is None or not policy.persistable:
+            return None
+        hit = await self._durable.get(key, policy)
+        if hit is not None:
+            await self._memory.set(key, hit, policy)
+        return hit
+
+    async def set(self, key: str, value: Any, policy: CachePolicy) -> None:
+        await self._memory.set(key, value, policy)
+        if self._durable is not None and policy.persistable:
+            await self._durable.set(key, value, policy)
+
+
+class RequestDeduper:
+    """Collapses concurrent identical calls into one in-flight request.
+
+    Unconditionally safe - nothing is stored - and the main practical saving:
+    building an itinerary recomputes the same route matrix repeatedly inside a
+    single run.
+    """
+
+    def __init__(self) -> None:
+        self._inflight: dict[str, asyncio.Future] = {}
+
+    async def run(self, key: str, factory: Callable[[], Awaitable[Any]]) -> Any:
+        existing = self._inflight.get(key)
+        if existing is not None:
+            return await asyncio.shield(existing)
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+        self._inflight[key] = future
+        try:
+            result = await factory()
+        except BaseException as exc:
+            future.set_exception(exc)
+            # Nobody may be awaiting the future; keep the loop quiet about it.
+            future.exception()
+            raise
+        else:
+            future.set_result(result)
+            return result
+        finally:
+            self._inflight.pop(key, None)

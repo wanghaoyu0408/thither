@@ -93,6 +93,37 @@ async def test_events_are_named_after_what_changed(session):
     assert events[-1]["payload"]["operations"][0]["path"] == "/constraints/-"
 
 
+async def test_shortlist_and_entity_writes_get_named_events(session):
+    """Otherwise the audit trail is a wall of anonymous patch_applied rows."""
+    repo = TripRepository(session)
+    state = await repo.create(sample_state())
+
+    await repo.apply_patch(
+        state.trip_id,
+        patch(
+            PatchOperation(op="set", path="/entities/ent_cafe/rating", value=4.6),
+            PatchOperation(
+                op="add",
+                path="/decisions/place_shortlists/dinner_day1",
+                value={
+                    "decision_id": "dec_dinner1",
+                    "status": "shortlisted",
+                    "options": [
+                        {
+                            "option_id": "opt_cafe",
+                            "data": {"entity_id": "ent_cafe", "purpose": "dinner"},
+                            "status": "shortlisted",
+                        }
+                    ],
+                },
+            ),
+        ),
+    )
+
+    named = {e["event_type"] for e in await repo.list_events(state.trip_id)}
+    assert {"entity_updated", "shortlist_updated"} <= named
+
+
 async def test_stale_base_revision_leaves_the_database_untouched(session):
     repo = TripRepository(session)
     state = await repo.create(sample_state())

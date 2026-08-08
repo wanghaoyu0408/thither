@@ -5,6 +5,7 @@ the itinerary addresses places by id, and a dangling reference would make
 either silently stop working.
 """
 
+from app.models.decision import PlaceOption
 from app.models.trip import TripState
 from app.services.lock_service import collect_lock_targets
 
@@ -49,6 +50,15 @@ def check_integrity(state: TripState) -> list[str]:
             problems.append(
                 f"decision {name!r} selects unknown option {decision.selected_option_id!r}"
             )
+
+        # Shortlisted places point at the registry rather than copying facts,
+        # so a broken link would leave the option meaningless.
+        for option in decision.options:
+            if isinstance(option.data, PlaceOption) and option.data.entity_id not in state.entities:
+                problems.append(
+                    f"decision {name!r} option {option.option_id!r} references unknown "
+                    f"entity {option.data.entity_id!r}"
+                )
 
     # Constraints scoped to a traveler must name a traveler on this trip.
     traveler_ids = [traveler.traveler_id for traveler in state.travelers]

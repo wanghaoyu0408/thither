@@ -7,19 +7,16 @@ recommended what it did, and replans *part* of a trip when you ask.
 It does not book anything, does not touch payments, and does not treat LLM-generated
 facts as authoritative.
 
-## Status: Milestone 1 complete — state core
+## Status: Milestones 1-2 complete
 
 The architectural claim this project rests on is that **`TripState` is the source of
 truth and the LLM may never overwrite it freely**. Every mutation goes through a
 validated `TripPatch` with revision control, lock enforcement and rejection memory.
 
-Milestone 1 builds exactly that, with no LLM and no external APIs, because every later
-milestone writes *through* this layer.
-
 | Milestone | Scope | Status |
 |---|---|---|
 | 1 | TripState, patch engine, locks, rejections, persistence, REST | done |
-| 2 | Google Places + Routes (`search_places`, `get_routes`) | not started |
+| 2 | Google Places + Routes behind replaceable providers | done |
 | 3 | Itinerary generation, validator, local replanning | not started |
 | 4 | Web research (Xiaohongshu / Reddit / blogs via web search) | not started |
 | 5 | Flights (Duffel) | not started |
@@ -38,8 +35,17 @@ python -m venv .venv
 .venv/Scripts/python.exe -m pip install -e ".[dev]"
 ```
 
-Copy `.env.example` to `.env`. Milestone 1 only reads `DATABASE_URL`, which defaults to
-SQLite — nothing else needs filling in yet.
+Copy `.env.example` to `.env`. `DATABASE_URL` defaults to SQLite, so the only thing you
+must fill in is `GOOGLE_MAPS_API_KEY` — and only for Milestone 2 onwards.
+
+That key needs **both** of these enabled in Google Cloud Console, on a project with
+billing on:
+
+- **Places API (New)** — the legacy "Places API" will not work; the field-mask header is
+  a New-API concept
+- **Routes API**
+
+The offline test suite needs no key at all.
 
 ### Run
 
@@ -55,8 +61,25 @@ Then open http://127.0.0.1:8000/docs.
 .venv/Scripts/python.exe -m pytest -q
 ```
 
-109 tests, no network, no API keys. `tests/scenarios/test_milestone1_acceptance.py`
-maps one-to-one onto the milestone's acceptance criteria.
+228 tests, no network, no API keys. `tests/scenarios/test_milestone1_acceptance.py`
+maps one-to-one onto Milestone 1's acceptance criteria.
+
+Contract tests against the real Google APIs are opt-in, since they cost quota:
+
+```bash
+.venv/Scripts/python.exe -m pytest -m live --override-ini addopts=
+```
+
+### Milestone 2 acceptance
+
+```bash
+.venv/Scripts/python.exe scripts/build_tokyo_trip.py
+```
+
+Searches real places in Shibuya and Asakusa, ranks them, fetches details for the
+shortlist only, resolves them into entities, computes real walking times, and persists
+ranked shortlists — every write going through the patch engine. Re-run it with
+`--trip-id <id>` to confirm resolution is idempotent: the entity count must not grow.
 
 ## How a change reaches the database
 
@@ -102,23 +125,53 @@ report honestly that no checker exists yet.
 `UPDATE trips ... WHERE id = :id AND revision = :base_revision`; zero matched rows means
 another writer won. The Python check alone would leave a race between read and write.
 
+**Caching is classified by content, not by endpoint.** Google's terms permit storing
+place ids indefinitely and lat/lng for at most 30 days, and nothing else. So
+`SqliteCache` accepts only those two classes and *raises* on anything else; names,
+ratings, hours and route durations live in an in-process cache that dies with the
+process. A policy that is merely documented erodes; one that throws holds. The main
+practical saving is request dedupe, which collapses concurrent identical calls and is
+unconditionally safe.
+
+**Place facts in `TripState.entities` are a snapshot with an expiry date.** That registry
+is the user's saved itinerary rather than a cache, but facts older than 30 days are
+treated as stale and must be re-fetched before being quoted — which is also what spec
+§30 requires, since no number should reach the user from a stale snapshot.
+
+**Field-mask tiers are explicit per call.** Google bills by the most expensive field
+requested, and `rating` / `userRatingCount` are Enterprise-tier — so "search cheap, then
+fetch details" cannot work literally: a Pro-tier search returns nothing to rank on. The
+saving comes instead from fetching `FULL` for the 3-5 shortlisted places rather than all
+20 candidates.
+
+**Transit route matrices are capped at 100 elements**, against 625 for walking and
+driving. A 12×12 transit matrix fails as one call, so `route_service` chunks per mode,
+issues the sub-matrices concurrently, and remaps chunk-local indices back to the
+caller's.
+
 ## Layout
 
 ```
 app/
   models/      TripState, brief, constraints, decisions, entities, itinerary,
-               locks, rejections, patches
-  services/    json_pointer, patch_service (the pipeline above), lock_service,
-               rejection_service, constraint_service, integrity_service
+               locks, rejections, patches, tool/place/route inputs and results
+  providers/   google_places, google_routes, shared HTTP + error taxonomy
+  services/    patch_service (the pipeline above), lock_service, rejection_service,
+               constraint_service, integrity_service, json_pointer, state_walk,
+               place_service, route_service, entity_service, ranking_service,
+               cache, toolbox
   db/          SQLAlchemy tables, repositories, session
-  api/         REST endpoints
+  api/         REST endpoints + /tools debug probes
 migrations/    Alembic (sync driver; app runs async)
-tests/         unit / integration / scenarios
+scripts/       runnable milestone demos
+tests/         unit / integration / scenarios / live
 ```
 
-Provider-specific code will live under `app/providers/` from milestone 2, kept below the
-service layer so the agent calls `search_flights()` rather than a Duffel endpoint — and
-so providers stay replaceable.
+Provider code sits below the service layer so the agent calls `search_places()` rather
+than a Google endpoint — and so providers stay replaceable. Nothing above the service
+layer ever sees a provider exception: failures become `ToolResult.error`, which is what
+lets the agent tell "nowhere here matches" from "the API is down" instead of inventing
+an answer.
 
 ## API
 
@@ -128,6 +181,7 @@ so providers stay replaceable.
 | POST GET | `/trips`, `/trips/{id}` | create returns revision 0 |
 | POST | `/trips/{id}/patch` | the only way to mutate a trip |
 | GET | `/trips/{id}/state`, `/trips/{id}/events` | debug: current state, audit trail |
+| POST | `/tools/search_places`, `/tools/place_details`, `/tools/get_routes` | read-only probes; never write to a trip |
 
 ## Storage
 
@@ -140,4 +194,5 @@ DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/travel_agent .venv/Sc
 ```
 
 `trip_events` is append-only and names what changed (`constraint_added`, `lock_added`,
-`itinerary_updated`, ...) alongside the raw operations.
+`itinerary_updated`, ...) alongside the raw operations. `tool_cache` holds the durable
+half of the cache and is safe to delete at any time.

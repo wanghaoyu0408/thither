@@ -10,6 +10,7 @@ from typing import Any
 
 from app.models.patch import PatchError
 from app.models.rejection import RejectionRecord
+from app.services.state_walk import iter_decision_dicts
 
 # (context, target_id). The context matters: an entity can already sit in the
 # registry and still be newly *scheduled*, which is a fresh recommendation. A
@@ -31,9 +32,7 @@ def referenced_targets(state: dict[str, Any]) -> set[Reference]:
             if item.get("entity_id"):
                 refs.add(("itinerary", item["entity_id"]))
 
-    for decision in (state.get("decisions") or {}).values():
-        if not isinstance(decision, dict):
-            continue
+    for decision in iter_decision_dicts(state):
         for option in decision.get("options") or []:
             if option.get("status") in ("shortlisted", "selected") and option.get("option_id"):
                 refs.add(("decision_option", option["option_id"]))

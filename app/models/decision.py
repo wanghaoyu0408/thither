@@ -106,20 +106,47 @@ class HotelOptionData(BaseModel):
     observed_at: datetime = Field(default_factory=utcnow)
 
 
+class PlaceOption(BaseModel):
+    """A shortlisted place.
+
+    Deliberately holds no facts: name, rating and hours live once in
+    `TripState.entities` (spec section 10), and the ranking lives in
+    `DecisionOption.score`. This carries only the link and the reasoning.
+    """
+
+    entity_id: str
+    # What the shortlist is for: "dinner", "cafe", "activity", "breakfast"...
+    purpose: str
+    why: str | None = None
+
+
+SINGLETON_DECISIONS = ("destination", "flights", "hotel_area", "hotel")
+
+
 class TripDecisions(BaseModel):
-    """The four decisions V1 tracks. Rental car / activities / reservations are
-    added later only if they earn their place (spec section 8)."""
+    """The four singleton decisions from spec section 8, plus keyed place
+    shortlists - restaurants and attractions are chosen many times per trip, so
+    they need a dict rather than a field."""
 
     destination: Decision[DestinationOption] | None = None
     flights: Decision[FlightOptionData] | None = None
     hotel_area: Decision[HotelAreaOption] | None = None
     hotel: Decision[HotelOptionData] | None = None
 
+    # Keyed by purpose slug, e.g. "dinner_day1", "shibuya_cafes".
+    place_shortlists: dict[str, Decision[PlaceOption]] = {}
+
     def iter_decisions(self) -> list[tuple[str, Decision]]:
-        """(field_name, decision) for every decision that exists."""
+        """(name, decision) for every decision that exists, shortlists included.
+
+        Anything omitted here silently stops being integrity-checked, so the
+        shortlists must be walked too.
+        """
         out: list[tuple[str, Decision]] = []
-        for name in ("destination", "flights", "hotel_area", "hotel"):
+        for name in SINGLETON_DECISIONS:
             value = getattr(self, name)
             if value is not None:
                 out.append((name, value))
+        for key, decision in self.place_shortlists.items():
+            out.append((f"place_shortlists.{key}", decision))
         return out

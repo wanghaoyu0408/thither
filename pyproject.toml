@@ -37,6 +37,11 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 filterwarnings = ["error::DeprecationWarning:app.*"]
+markers = [
+    "live: hits real provider APIs; needs GOOGLE_MAPS_API_KEY and costs quota",
+]
+# Live tests are opt-in: run them with `-m live --override-ini addopts=`.
+addopts = "-m 'not live'"
 
 [tool.ruff]
 line-length = 100

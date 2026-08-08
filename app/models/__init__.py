@@ -8,6 +8,7 @@ from app.models.decision import (
     FlightOptionData,
     HotelAreaOption,
     HotelOptionData,
+    PlaceOption,
     TripDecisions,
 )
 from app.models.entity import PlaceEntity, TripEntity
@@ -21,7 +22,15 @@ from app.models.patch import (
     PatchWarning,
     TripPatch,
 )
+from app.models.place import (
+    GetPlaceDetailsInput,
+    PlaceFieldSet,
+    PlaceSummary,
+    SearchPlacesInput,
+)
 from app.models.rejection import RejectionRecord
+from app.models.route import GetRoutesInput, LocationRef, RouteLeg, TravelMode
+from app.models.tool import ToolError, ToolResult
 from app.models.traveler import (
     ActivityPreferences,
     FlightPreferences,
@@ -61,6 +70,8 @@ __all__ = [
     "FlightOptionData",
     "FlightPreferences",
     "FoodPreferences",
+    "GetPlaceDetailsInput",
+    "GetRoutesInput",
     "HotelAreaOption",
     "HotelOptionData",
     "HotelPreferences",
@@ -68,6 +79,7 @@ __all__ = [
     "ItineraryDay",
     "ItineraryItem",
     "LatLng",
+    "LocationRef",
     "LockRecord",
     "Money",
     "OpenQuestion",
@@ -79,8 +91,16 @@ __all__ = [
     "PatchResult",
     "PatchWarning",
     "PlaceEntity",
+    "PlaceFieldSet",
+    "PlaceOption",
+    "PlaceSummary",
     "RejectionRecord",
+    "RouteLeg",
+    "SearchPlacesInput",
     "TimeFlexibility",
+    "ToolError",
+    "ToolResult",
+    "TravelMode",
     "TravelerProfile",
     "TripBrief",
     "TripConstraint",

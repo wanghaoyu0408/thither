@@ -11,6 +11,7 @@ from typing import Any
 
 from app.models.lock import LockRecord
 from app.models.patch import PatchError
+from app.services.state_walk import iter_decision_dicts
 
 # (target_kind, target_id)
 LockKey = tuple[str, str]
@@ -20,9 +21,8 @@ def collect_lock_targets(state: dict[str, Any]) -> dict[LockKey, Any]:
     """Index every lockable object in a serialized TripState by (kind, id)."""
     targets: dict[LockKey, Any] = {}
 
-    for decision in (state.get("decisions") or {}).values():
-        if isinstance(decision, dict) and decision.get("decision_id"):
-            targets[("decision", decision["decision_id"])] = decision
+    for decision in iter_decision_dicts(state):
+        targets[("decision", decision["decision_id"])] = decision
 
     for day in (state.get("itinerary") or {}).get("days") or []:
         targets[("itinerary_day", str(day.get("date")))] = day
