@@ -99,5 +99,8 @@ class PlaceSummary(BaseModel):
 
     business_status: str | None = None
 
+    # IANA zone id from the Places timeZone field.
+    timezone: str | None = None
+
     def is_operational(self) -> bool:
         return self.business_status in (None, "OPERATIONAL")

@@ -18,6 +18,7 @@ from app.services.constraint_service import check_hard_constraints
 from app.services.integrity_service import check_integrity
 from app.services.lock_service import check_locks, check_locks_removed
 from app.services.rejection_service import check_rejections
+from app.services.scope_service import check_scope
 
 # Identity and bookkeeping the agent must never write.
 PROTECTED_PATHS = ("/trip_id", "/revision", "/schema_version", "/metadata/created_at")
@@ -135,12 +136,19 @@ def apply_patch(state: TripState, patch: TripPatch) -> PatchResult:
     if lock_errors:
         return _failure(state.revision, lock_errors, warnings)
 
-    # 7. Rejection memory.
+    # 7. Scope, if the patch declared one. Checked before the softer gates so a
+    #    replan that wandered outside its day is reported as exactly that.
+    if patch.scope is not None:
+        scope_errors = check_scope(before, after, patch.scope)
+        if scope_errors:
+            return _failure(state.revision, scope_errors, warnings)
+
+    # 8. Rejection memory.
     rejection_errors = check_rejections(before, after, state.rejections, patch.allow_rejected)
     if rejection_errors:
         return _failure(state.revision, rejection_errors, warnings)
 
-    # 8. Hard constraints. `not_checkable` is reported, never assumed to pass.
+    # 9. Hard constraints. `not_checkable` is reported, never assumed to pass.
     violations: list[PatchError] = []
     for check in check_hard_constraints(candidate):
         if check.status == "violated":
@@ -162,7 +170,7 @@ def apply_patch(state: TripState, patch: TripPatch) -> PatchResult:
     if violations:
         return _failure(state.revision, violations, warnings)
 
-    # 9. Referential integrity.
+    # 10. Referential integrity.
     problems = check_integrity(candidate)
     if problems:
         return _failure(
@@ -177,7 +185,7 @@ def apply_patch(state: TripState, patch: TripPatch) -> PatchResult:
             warnings,
         )
 
-    # 10. Commit.
+    # 11. Commit.
     candidate.revision = state.revision + 1
     candidate.metadata.updated_at = utcnow()
 

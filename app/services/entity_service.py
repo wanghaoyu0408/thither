@@ -59,6 +59,7 @@ def resolve_place(
         rating_count=keep(summary.rating_count, known.rating_count if known else None),
         price_level=keep(summary.price_level, known.price_level if known else None),
         opening_hours=keep(summary.opening_hours, known.opening_hours if known else None),
+        timezone=keep(summary.timezone, known.timezone if known else None),
         website_url=keep(summary.website_url, known.website_url if known else None),
         maps_url=keep(summary.maps_url, known.maps_url if known else None),
         facts_updated_at=now or utcnow(),

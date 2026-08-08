@@ -11,7 +11,7 @@ to Postgres is a DATABASE_URL change with no code change.
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -53,6 +53,35 @@ class TripRow(Base):
     updated_at: Mapped[datetime] = mapped_column(
         TimestampType, default=utcnow, onupdate=utcnow, nullable=False
     )
+
+
+class TripMessageRow(Base):
+    """Conversation transcript.
+
+    Kept for audit and continuity only. TripState remains the source of truth -
+    replaying this table must never be necessary to know what the trip is
+    (spec section 2).
+    """
+
+    __tablename__ = "trip_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    trip_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("trips.id", ondelete="CASCADE"), nullable=False
+    )
+    message_id: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # Revision the turn started from, so a reply can be traced to a trip version.
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    run_log: Mapped[Any | None] = mapped_column("run_log_jsonb", JSONType, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(TimestampType, default=utcnow, nullable=False)
+
+    __table_args__ = (Index("ix_trip_messages_trip_id_id", "trip_id", "id"),)
 
 
 class ToolCacheRow(Base):

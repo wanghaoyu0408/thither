@@ -11,6 +11,9 @@ dependencies = [
     "sqlalchemy>=2.0.36",
     "aiosqlite>=0.20",
     "alembic>=1.14",
+    "openai>=1.60",
+    # Windows ships no timezone database; zoneinfo needs this.
+    "tzdata",
 ]
 
 [project.optional-dependencies]

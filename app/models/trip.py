@@ -70,6 +70,12 @@ class TripBrief(BaseModel):
 
     origin: OriginSpec = OriginSpec()
     destination: DestinationSpec = DestinationSpec()
+
+    # IANA zone at the destination, e.g. "Asia/Tokyo". Itinerary datetimes are
+    # naive wall-clock in this zone - which is how opening hours are published
+    # and how people think about a trip. Taken from the Places timeZone field.
+    timezone: str | None = None
+
     dates: TripDates = TripDates()
     party: PartySpec = PartySpec()
     budget: BudgetSpec = BudgetSpec()

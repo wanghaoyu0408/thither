@@ -7,7 +7,7 @@ recommended what it did, and replans *part* of a trip when you ask.
 It does not book anything, does not touch payments, and does not treat LLM-generated
 facts as authoritative.
 
-## Status: Milestones 1-2 complete
+## Status: Milestones 1-3 complete
 
 The architectural claim this project rests on is that **`TripState` is the source of
 truth and the LLM may never overwrite it freely**. Every mutation goes through a
@@ -17,7 +17,7 @@ validated `TripPatch` with revision control, lock enforcement and rejection memo
 |---|---|---|
 | 1 | TripState, patch engine, locks, rejections, persistence, REST | done |
 | 2 | Google Places + Routes behind replaceable providers | done |
-| 3 | Itinerary generation, validator, local replanning | not started |
+| 3 | Itinerary generation, validator, scoped local replanning, agent | done |
 | 4 | Web research (Xiaohongshu / Reddit / blogs via web search) | not started |
 | 5 | Flights (Duffel) | not started |
 | 6 | Hotels (neighborhood first, then Amadeus inventory) | not started |
@@ -45,6 +45,9 @@ billing on:
   a New-API concept
 - **Routes API**
 
+From Milestone 3 the conversation endpoint also needs `OPENAI_API_KEY`, and
+`OPENAI_MODEL` if you want something other than the default.
+
 The offline test suite needs no key at all.
 
 ### Run
@@ -61,8 +64,8 @@ Then open http://127.0.0.1:8000/docs.
 .venv/Scripts/python.exe -m pytest -q
 ```
 
-228 tests, no network, no API keys. `tests/scenarios/test_milestone1_acceptance.py`
-maps one-to-one onto Milestone 1's acceptance criteria.
+302 tests, no network, no API keys. The `tests/scenarios/` files map one-to-one onto each
+milestone's acceptance criteria.
 
 Contract tests against the real Google APIs are opt-in, since they cost quota:
 
@@ -80,6 +83,18 @@ Searches real places in Shibuya and Asakusa, ranks them, fetches details for the
 shortlist only, resolves them into entities, computes real walking times, and persists
 ranked shortlists — every write going through the patch engine. Re-run it with
 `--trip-id <id>` to confirm resolution is idempotent: the entity count must not grow.
+
+### Milestone 3 acceptance
+
+```bash
+.venv/Scripts/python.exe scripts/plan_tokyo_trip.py
+```
+
+Runs the two-turn conversation — *"Plan 5 days in Tokyo."* then *"Day 3 is too busy. Make
+it easier."* — and prints a per-day before/after diff so "only Day 3 changed" is visible
+rather than asserted. The same criterion is also proved without an LLM in
+`tests/scenarios/test_milestone3_acceptance.py`, so a model having an off day cannot make
+the milestone look broken.
 
 ## How a change reaches the database
 
@@ -149,19 +164,43 @@ driving. A 12×12 transit matrix fails as one call, so `route_service` chunks pe
 issues the sub-matrices concurrently, and remaps chunk-local indices back to the
 caller's.
 
+**"Only Day 3 changed" is enforced, not hoped for.** `TripPatch.scope` names a day and
+the server canonically diffs everything outside it; a patch that reaches further is
+rejected with `SCOPE_VIOLATION`. Like locks, it addresses the day by date rather than by
+path, because `/itinerary/days/2` stops meaning day 3 the moment an earlier day is
+removed. Entities may be *added* under scope — a replan sometimes needs a place the trip
+has never seen — but not rewritten, so refreshing a venue's opening hours is split off
+into its own unscoped patch rather than weakening the rule.
+
+**The model plans nothing by hand.** It picks areas, themes and what to sacrifice; the
+clustering, scheduling, routing, validation and patching are ordinary code (spec §26,
+§44). `generate_itinerary` fetches the opening hours and walking times for what it is
+about to schedule, rather than relying on the model to remember — an itinerary that is
+checked beats one that merely reports itself unverified.
+
+**Opening hours are read from `periods`, never from `openNow`.** That flag is a snapshot
+from whenever the place was fetched; ours says `false` about an afternoon in August and
+would mark half the shortlist shut for a trip in October. The parser handles the cases
+real Tokyo data contains: several periods a day (the lunch/dinner split), periods
+crossing midnight, 24-hour venues with no `close` at all — and treats missing hours as
+*unknown*, which is not *closed*.
+
 ## Layout
 
 ```
 app/
   models/      TripState, brief, constraints, decisions, entities, itinerary,
-               locks, rejections, patches, tool/place/route inputs and results
-  providers/   google_places, google_routes, shared HTTP + error taxonomy
-  services/    patch_service (the pipeline above), lock_service, rejection_service,
-               constraint_service, integrity_service, json_pointer, state_walk,
-               place_service, route_service, entity_service, ranking_service,
+               locks, rejections, patches, tool/place/route/chat shapes
+  providers/   google_places, google_routes, openai_llm, shared HTTP + errors
+  services/    patch_service (the pipeline above), lock_service, scope_service,
+               rejection_service, constraint_service, integrity_service,
+               json_pointer, state_walk, place_service, route_service,
+               entity_service, ranking_service, clustering, opening_hours,
+               itinerary_service, validation_service, proposal_store,
                cache, toolbox
+  agent/       runner (the loop), prompts, tool_registry, context
   db/          SQLAlchemy tables, repositories, session
-  api/         REST endpoints + /tools debug probes
+  api/         REST endpoints, /tools debug probes, chat
 migrations/    Alembic (sync driver; app runs async)
 scripts/       runnable milestone demos
 tests/         unit / integration / scenarios / live
@@ -182,6 +221,7 @@ an answer.
 | POST | `/trips/{id}/patch` | the only way to mutate a trip |
 | GET | `/trips/{id}/state`, `/trips/{id}/events` | debug: current state, audit trail |
 | POST | `/tools/search_places`, `/tools/place_details`, `/tools/get_routes` | read-only probes; never write to a trip |
+| POST GET | `/trips/{id}/messages` | talk to the agent; transcript kept for audit only |
 
 ## Storage
 

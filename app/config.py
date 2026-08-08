@@ -27,8 +27,16 @@ class Settings(BaseSettings):
     # see app/services/cache.py.
     cache_enabled: bool = True
 
-    # Placeholders for later milestones.
+    # LLM. Required from Milestone 3.
     openai_api_key: str | None = None
+    openai_model: str = "gpt-5"
+    # Hard stop on the agent loop, so a confused model cannot spend forever.
+    agent_max_iterations: int = 12
+    # Ceiling on fresh Places searches per planning run; the entity registry is
+    # consulted first.
+    planning_search_budget: int = 8
+
+    # Placeholders for later milestones.
     duffel_access_token: str | None = None
     amadeus_client_id: str | None = None
     amadeus_client_secret: str | None = None

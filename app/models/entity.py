@@ -32,7 +32,13 @@ class PlaceEntity(BaseModel):
     rating_count: int | None = None
     price_level: int | None = None
 
+    # Google's regularOpeningHours. Read via app/services/opening_hours.py -
+    # never trust the `openNow` key inside it, which is a snapshot from
+    # whenever this was fetched.
     opening_hours: dict[str, Any] | None = None
+
+    # IANA zone, e.g. "Asia/Tokyo".
+    timezone: str | None = None
 
     website_url: str | None = None
     maps_url: str | None = None

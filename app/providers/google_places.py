@@ -32,6 +32,8 @@ _FIELDS_BY_TIER: dict[PlaceFieldSet, tuple[str, ...]] = {
         "primaryType",
         "googleMapsUri",
         "businessStatus",
+        # Needed to interpret opening hours as local wall-clock time.
+        "timeZone",
     ),
     PlaceFieldSet.RANKING: ("rating", "userRatingCount", "priceLevel"),
     PlaceFieldSet.FULL: ("regularOpeningHours", "websiteUri"),
@@ -94,6 +96,7 @@ def normalize_place(raw: dict[str, Any]) -> PlaceSummary:
         website_url=raw.get("websiteUri"),
         maps_url=raw.get("googleMapsUri"),
         business_status=raw.get("businessStatus"),
+        timezone=(raw.get("timeZone") or {}).get("id"),
     )
 
 
