@@ -11,11 +11,14 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.config import Settings, get_settings
 from app.providers.base import build_client
+from app.providers.duffel import DuffelProvider
 from app.providers.google_places import GooglePlacesProvider
 from app.providers.google_routes import GoogleRoutesProvider
 from app.providers.openai_research import OpenAIResearchProvider
+from app.services.airport_service import AirportService
 from app.services.cache import InProcessCache, LayeredCache, RequestDeduper, SqliteCache
 from app.services.discovery_service import DiscoveryService
+from app.services.flight_service import FlightService
 from app.services.place_service import PlaceService
 from app.services.research_service import ResearchService
 from app.services.route_service import RouteService
@@ -72,6 +75,17 @@ class Toolbox:
             )
 
         self.discovery = DiscoveryService(self.places, self.research)
+        self.airports = AirportService(self.places, self.routes)
+
+        # Flights need their own credential. Without one the agent says flights
+        # cannot be searched rather than inventing fares.
+        self.flights: FlightService | None = None
+        if self._settings.duffel_access_token:
+            self.flights = FlightService(
+                DuffelProvider(self._settings.duffel_access_token, self._client),
+                self._cache,
+                self._deduper,
+            )
 
     async def aclose(self) -> None:
         await self._client.aclose()

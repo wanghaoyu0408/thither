@@ -14,12 +14,16 @@ from datetime import date as date_type
 from typing import Any
 
 from app.config import Settings
+from app.models.flight import SearchAirportsInput, SearchFlightsInput
 from app.models.itinerary_plan import ItineraryProposal, PlanParams, ReplanParams
 from app.models.place import GetPlaceDetailsInput, PlaceFieldSet, SearchPlacesInput
 from app.models.research import ResearchWebInput
 from app.models.route import GetRoutesInput, LocationRef
+from app.models.traveler import FlightPreferences
 from app.models.trip import TripState
 from app.services.entity_service import resolve_places
+from app.services.flight_ranking import cheapest_of, explain_choice, rank_flights
+from app.services.flight_service import SANDBOX_DISCLAIMER
 from app.services.itinerary_service import build_itinerary, replan_day
 from app.services.proposal_store import ProposalStore
 from app.services.toolbox import Toolbox
@@ -154,6 +158,59 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "type": "function",
+        "name": "search_airports",
+        "description": (
+            "Airports near a place, with the real driving time to each from the Routes API. "
+            "Use this before searching flights when the traveller could plausibly use more "
+            "than one airport - the drive time is what makes comparing them meaningful."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "location": {"type": "string", "description": "e.g. 'San Francisco Bay Area'."},
+                "max_ground_travel_minutes": {"type": ["integer", "null"], "minimum": 1},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 10},
+            },
+            "required": ["location"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "search_flights",
+        "description": (
+            "Priced flight options. Pass several origins to compare airports in one call. "
+            "Results are ranked on price, stops, duration, timing and airport drive time, "
+            "and come with a structured trade-off between the best and the cheapest. "
+            "Check live_mode: false means the provider's test environment, and those fares "
+            "are not real."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "origins": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "IATA codes, e.g. ['SFO','SJC','OAK'].",
+                },
+                "destinations": {"type": "array", "items": {"type": "string"}},
+                "departure_date": {"type": "string", "description": "ISO date."},
+                "return_date": {"type": ["string", "null"], "description": "ISO date."},
+                "adults": {"type": "integer", "minimum": 1, "maximum": 9},
+                "children": {"type": "integer", "minimum": 0, "maximum": 9},
+                "cabin": {
+                    "type": "string",
+                    "enum": ["economy", "premium_economy", "business"],
+                },
+                "max_stops": {"type": ["integer", "null"], "minimum": 0, "maximum": 3},
+                "max_price_per_person": {"type": ["number", "null"]},
+            },
+            "required": ["origins", "destinations", "departure_date"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
         "name": "generate_itinerary",
         "description": (
             "Lay out the whole trip from the places already stored: clusters them "
@@ -258,6 +315,11 @@ class ToolContext:
     travel: TravelLookup = field(default_factory=TravelLookup)
     searches_used: int = 0
     pending_entity_ops: list = field(default_factory=list)
+    # Airports found this turn, so flight ranking can use real drive times.
+    airports: list = field(default_factory=list)
+    # offer_ref -> option, so a chosen flight can be stored without the model
+    # re-serializing it.
+    flight_options: dict = field(default_factory=dict)
     # evidence_id -> EvidenceRecord discovered this turn, written alongside the
     # places it backs so an option's evidence_refs always resolve.
     pending_evidence: dict = field(default_factory=dict)
@@ -531,6 +593,131 @@ async def _discover_restaurants(context: ToolContext, args: dict[str, Any]) -> d
     }
 
 
+async def _search_airports(context: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    if context.toolbox.airports is None:
+        return {"error": "airport search is not configured"}
+
+    result = await context.toolbox.airports.search_airports(
+        SearchAirportsInput(
+            location=args["location"],
+            max_ground_travel_minutes=args.get("max_ground_travel_minutes"),
+            limit=min(int(args.get("limit", 6)), 10),
+        )
+    )
+    if not result.ok:
+        return {"error": result.error.message, "code": result.error.code}
+
+    context.airports = list(result.results)
+    return {
+        "airports": [
+            {
+                "iata": airport.iata,
+                "name": airport.name,
+                "city": airport.city,
+                "distance_km": airport.distance_km,
+                "drive_minutes": airport.ground_travel_minutes,
+                "drive_source": airport.ground_travel_source,
+            }
+            for airport in result.results
+        ],
+        "warnings": result.warnings,
+        "note": "Drive times come from the Routes API. Never estimate one yourself.",
+    }
+
+
+async def _search_flights(context: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    if context.toolbox.flights is None:
+        return {
+            "error": "flight search is not configured (no DUFFEL_ACCESS_TOKEN)",
+            "hint": "say that flights cannot be searched rather than guessing at fares",
+        }
+
+    try:
+        spec = SearchFlightsInput(
+            origins=args["origins"],
+            destinations=args["destinations"],
+            departure_date=date_type.fromisoformat(args["departure_date"]),
+            return_date=(
+                date_type.fromisoformat(args["return_date"]) if args.get("return_date") else None
+            ),
+            adults=int(args.get("adults", context.state.brief.party.adults or 1)),
+            children=int(args.get("children", context.state.brief.party.children or 0)),
+            cabin=args.get("cabin", "economy"),
+            max_stops=args.get("max_stops"),
+            max_price_per_person=args.get("max_price_per_person"),
+        )
+    except (KeyError, ValueError) as exc:
+        return {"error": f"invalid flight search: {exc}"}
+
+    result = await context.toolbox.flights.search_flights(spec)
+    if not result.ok:
+        return {"error": result.error.message, "code": result.error.code}
+    if result.found_nothing:
+        return {
+            "offers": [],
+            "note": "no flights matched; the search itself worked",
+            "warnings": result.warnings,
+        }
+
+    profile = context.state.travelers[0] if context.state.travelers else None
+    preferences = FlightPreferences()
+    ranked = rank_flights(
+        result.results, preferences=preferences, airports=context.airports, limit=6
+    )
+    context.flight_options = {item.option.offer_ref: item.option for item in ranked}
+
+    trade_off = None
+    cheapest = cheapest_of(ranked)
+    if ranked and cheapest and cheapest.option.offer_ref != ranked[0].option.offer_ref:
+        trade_off = explain_choice(ranked[0], cheapest, airports=context.airports)
+
+    sandbox = [item for item in ranked if not item.option.live_mode]
+
+    payload: dict[str, Any] = {
+        "offers": [
+            {
+                "offer_ref": item.option.offer_ref,
+                "live_mode": item.option.live_mode,
+                "origin": item.option.origin,
+                "destination": item.option.destination,
+                "price_per_person": (item.option.price_per_person or item.option.price).amount,
+                "currency": item.currency,
+                "stops": item.option.stops,
+                "duration_minutes": item.option.duration_minutes,
+                "airlines": item.option.airlines,
+                "departure_at": item.option.departure_at.isoformat()
+                if item.option.departure_at
+                else None,
+                "score": item.score.total,
+                "dimensions": item.score.dimensions,
+                "pros": item.pros,
+                "cons": item.cons,
+                "search_url": item.option.search_url,
+            }
+            for item in ranked
+        ],
+        "warnings": result.warnings,
+        "profile_used": profile.name if profile else None,
+    }
+
+    if trade_off is not None:
+        payload["trade_off"] = {
+            "recommended": trade_off.recommended_ref,
+            "cheapest": trade_off.alternative_ref,
+            "statements": trade_off.statements,
+            "note": (
+                "Every figure here came from the provider or the Routes API. Use these "
+                "words; do not compute your own."
+            ),
+        }
+
+    if sandbox:
+        payload["live_mode"] = False
+        payload["disclaimer"] = SANDBOX_DISCLAIMER
+
+    return payload
+
+
 MAX_AUTO_DETAILS = 24
 
 
@@ -736,6 +923,8 @@ async def _apply_trip_patch(context: ToolContext, args: dict[str, Any]) -> dict[
 HANDLERS = {
     "research_web": _research_web,
     "discover_restaurants": _discover_restaurants,
+    "search_airports": _search_airports,
+    "search_flights": _search_flights,
     "search_places": _search_places,
     "get_place_details": _get_place_details,
     "get_routes": _get_routes,

@@ -343,6 +343,43 @@ def _check_locked_items(day: ItineraryDay, state: TripState) -> list[ValidationI
     return issues
 
 
+def _check_sandbox_flights(state: TripState) -> list[ValidationIssue]:
+    """Flag flight options that came from a provider's test environment.
+
+    The prompt tells the model not to present sandbox fares as real. This is
+    what makes that hold: the flag persists on the stored option, so a trip
+    carrying test data says so however it is read, and whoever reads it next.
+    """
+    decision = state.decisions.flights
+    if decision is None:
+        return []
+
+    sandbox = [
+        option
+        for option in decision.options
+        if option.data is not None and getattr(option.data, "live_mode", True) is False
+    ]
+    if not sandbox:
+        return []
+
+    selected = decision.selected_option_id
+    is_selected = any(option.option_id == selected for option in sandbox)
+
+    return [
+        ValidationIssue(
+            severity="warning" if is_selected else "info",
+            type="sandbox_flight_data",
+            item_ids=[option.option_id for option in sandbox],
+            message=(
+                f"{len(sandbox)} flight option(s) came from the provider's test environment. "
+                "These prices and schedules are not real"
+                + (" and one of them is currently selected." if is_selected else ".")
+            ),
+            suggested_fix="re-run the search with a live provider token before relying on these",
+        )
+    ]
+
+
 def _check_trip_wide(state: TripState) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
 
@@ -386,6 +423,8 @@ def _check_trip_wide(state: TripState) -> list[ValidationIssue]:
                         suggested_fix="swap a high-cost item for something cheaper",
                     )
                 )
+
+    issues.extend(_check_sandbox_flights(state))
 
     if state.itinerary.days:
         issues.append(

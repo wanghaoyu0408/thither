@@ -4,6 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from app.models.common import Cabin, LatLng, Money, new_id, utcnow
+from app.models.flight import BaggageAllowance, FlightSlice
 
 OptionStatus = Literal["candidate", "shortlisted", "selected", "rejected"]
 DecisionStatus = Literal["researching", "shortlisted", "selected", "locked"]
@@ -74,22 +75,66 @@ class HotelAreaOption(BaseModel):
 
 
 class FlightOptionData(BaseModel):
-    """Expanded in M5 with normalized Duffel segments."""
+    """A priced itinerary from a flight provider.
+
+    `live_mode` is required and has no default on purpose. A sandbox fare shown
+    as a real one would be the exact confident wrongness this project exists to
+    avoid, so every construction site has to state which it is, and the answer
+    persists into TripState rather than living only in the session that fetched
+    it.
+    """
 
     provider: str
     offer_ref: str
+
+    # False for provider sandbox data. Never present such an offer as a real
+    # flight, a real price, or something the user could book.
+    live_mode: bool
+
     price: Money
+    price_per_person: Money | None = None
+
     origin: str
     destination: str
+
+    slices: list[FlightSlice] = []
+
     departure_at: datetime | None = None
     arrival_at: datetime | None = None
     duration_minutes: int | None = None
     stops: int | None = None
+
     airlines: list[str] = []
     cabin: Cabin = "economy"
-    booking_url: str | None = None
+
+    baggage: BaggageAllowance | None = None
+    refundable: bool | None = None
+    changeable: bool | None = None
+
+    # Where to go and look. Duffel is an API, not a shop, so this is a search
+    # link and is named as one - calling it a booking URL would promise
+    # something the system deliberately does not do.
+    search_url: str | None = None
+
     observed_at: datetime = Field(default_factory=utcnow)
     expires_at: datetime | None = None
+
+    @property
+    def is_nonstop(self) -> bool:
+        return self.stops == 0
+
+    @property
+    def connection_airports(self) -> list[str]:
+        return [airport for slice_ in self.slices for airport in slice_.connection_airports]
+
+    def is_expired(self, now: datetime | None = None) -> bool:
+        if self.expires_at is None:
+            return False
+        reference = now or utcnow()
+        expires = self.expires_at
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=reference.tzinfo)
+        return expires <= reference
 
 
 class HotelOptionData(BaseModel):

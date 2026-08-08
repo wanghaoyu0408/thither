@@ -7,7 +7,7 @@ recommended what it did, and replans *part* of a trip when you ask.
 It does not book anything, does not touch payments, and does not treat LLM-generated
 facts as authoritative.
 
-## Status: Milestones 1-4 complete
+## Status: Milestones 1-5 complete
 
 The architectural claim this project rests on is that **`TripState` is the source of
 truth and the LLM may never overwrite it freely**. Every mutation goes through a
@@ -19,7 +19,7 @@ validated `TripPatch` with revision control, lock enforcement and rejection memo
 | 2 | Google Places + Routes behind replaceable providers | done |
 | 3 | Itinerary generation, validator, scoped local replanning, agent | done |
 | 4 | Web research: Xiaohongshu / Reddit / blogs, resolved against Google | done |
-| 5 | Flights (Duffel) | not started |
+| 5 | Flights (Duffel), airport comparison, ranking with trade-offs | done — see caveat |
 | 6 | Hotels (neighborhood first, then Amadeus inventory) | not started |
 | 7 | Multi-traveler preferences, group scoring, fairness | not started |
 
@@ -64,7 +64,7 @@ Then open http://127.0.0.1:8000/docs.
 .venv/Scripts/python.exe -m pytest -q
 ```
 
-364 tests, no network, no API keys. The `tests/scenarios/` files map one-to-one onto each
+431 tests, no network, no API keys. The `tests/scenarios/` files map one-to-one onto each
 milestone's acceptance criteria.
 
 Contract tests against the real Google APIs are opt-in, since they cost quota:
@@ -106,6 +106,41 @@ Runs the spec §20 pipeline twice — once with every source, once with Xiaohong
 entirely — and prints each recommendation's Google facts beside its community sources,
 plus which mentions could not be matched to a real place. Each tier reports what it did,
 so "no Xiaohongshu links" is distinguishable from "Xiaohongshu found nothing".
+
+### Milestone 5 acceptance, and its caveat
+
+```bash
+.venv/Scripts/python.exe scripts/compare_airports.py
+```
+
+Real driving times from the Bay Area to SFO, OAK and SJC, then a flight search, then the
+trade-off explained in figures that all came from a tool:
+
+```
+Recommended SFO, cheapest was OAK:
+   - 42 USD more per person
+   - 3h55m shorter
+   - nonstop instead of one stop at LAX
+```
+
+**The caveat, stated rather than buried.** Everything above — airport comparison with real
+drive times, ranking, the trade-off explanation — is verified. The Duffel *search* path is
+not, and this is why:
+
+- With a `duffel_test_` token the API is reachable, but Duffel's own docs say test mode
+  "won't see realistic flight schedules or prices", so it can only prove the contract, not
+  the recommendation quality.
+- With the live token currently configured, offer requests return
+  `403 insufficient_permissions`: the token needs the **`air.offer_requests.create`**
+  scope, which is granted per-token in the Duffel dashboard.
+
+So the ranking and explanation are demonstrated on fixture fares, and the live flight tests
+skip with that remedy named rather than passing vacuously. Real SFO/SJC/OAK fares are one
+dashboard setting away.
+
+Searching never costs anything at Duffel — only ticketing does — and this codebase has no
+path to ticket: `DuffelProvider` exposes exactly one public method, `search_offers`, and a
+test asserts the module contains nothing named for orders, payment, seats or cancellation.
 
 ## How a change reaches the database
 
@@ -188,6 +223,24 @@ clustering, scheduling, routing, validation and patching are ordinary code (spec
 §44). `generate_itinerary` fetches the opening hours and walking times for what it is
 about to schedule, rather than relying on the model to remember — an itinerary that is
 checked beats one that merely reports itself unverified.
+
+**Sandbox flight data is labelled everywhere it goes.** `FlightOptionData.live_mode` has
+no default, so no construction site can forget to say which it is. It persists into
+`TripState`, the tool result carries a disclaimer, and the validator raises a warning when
+a trip holds sandbox options — a warning that becomes louder if one is selected. A prompt
+rule alone would be a hope; the stored flag and the validator are what make it hold.
+
+**Explicit preferences are not outbid by small savings.** An airline the traveller asked
+to avoid is filtered out rather than discounted, and "avoid red-eyes" is its own dimension
+rather than a fraction of a schedule weight. Price is scored against the cheapest fare
+proportionally, so a $10 gap no longer scores like a $500 one — the first version
+normalized across the candidate range, which made any saving look total.
+
+**Airport convenience is a real driving time.** `search_airports` geocodes the location,
+finds airports in range, and asks the Routes API for actual drive times — the only honest
+basis for "SFO or SJC?". The dataset's own `scheduled_service` flag is not trustworthy
+(it is set on Buchanan Field and San Carlos, which no airline serves), so major airports
+are preferred and secondary ones appear only when there is no major one in range.
 
 **Facts and opinions are stored in different places.** `PlaceEntity` holds only what
 Google asserts. What people said lives in `TripState.evidence`, referenced by
