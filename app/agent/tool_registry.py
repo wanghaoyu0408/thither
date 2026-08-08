@@ -15,15 +15,24 @@ from typing import Any
 
 from app.config import Settings
 from app.models.flight import SearchAirportsInput, SearchFlightsInput
+from app.models.hotel import SearchHotelsInput
 from app.models.itinerary_plan import ItineraryProposal, PlanParams, ReplanParams
 from app.models.place import GetPlaceDetailsInput, PlaceFieldSet, SearchPlacesInput
 from app.models.research import ResearchWebInput
 from app.models.route import GetRoutesInput, LocationRef
-from app.models.traveler import FlightPreferences
+from app.models.traveler import FlightPreferences, HotelPreferences
 from app.models.trip import TripState
 from app.services.entity_service import resolve_places
 from app.services.flight_ranking import cheapest_of, explain_choice, rank_flights
 from app.services.flight_service import SANDBOX_DISCLAIMER
+from app.services.hotel_area_service import build_area_decision
+from app.services.hotel_ranking import describe_prices, describe_ratings, explain_hotel_choice
+from app.services.hotel_service import (
+    SANDBOX_DISCLAIMER as HOTEL_SANDBOX_DISCLAIMER,
+)
+from app.services.hotel_service import (
+    build_hotel_decision,
+)
 from app.services.itinerary_service import build_itinerary, replan_day
 from app.services.proposal_store import ProposalStore
 from app.services.toolbox import Toolbox
@@ -211,6 +220,79 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "type": "function",
+        "name": "recommend_hotel_areas",
+        "description": (
+            "Rank neighbourhoods to stay in, by REAL travel time from each to the places this "
+            "trip actually visits. Call this BEFORE search_hotels - choosing an area is its "
+            "own decision and comes first. Needs some places to be stored already, because "
+            "that is what an area's convenience is measured against. Returns mean and "
+            "worst-case travel minutes per area; present those figures, do not invent your own."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "suggested_areas": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Neighbourhoods worth considering, e.g. ['Shinjuku','Ginza']. They are "
+                        "geocoded and ranked alongside areas derived from the trip itself."
+                    ),
+                },
+                "mode": {"type": "string", "enum": ["walking", "transit", "driving"]},
+                "limit": {"type": "integer", "minimum": 2, "maximum": 6},
+                "select_top": {
+                    "type": "boolean",
+                    "description": (
+                        "Select the top area outright. Only when the traveller has already "
+                        "said to just pick one; otherwise present the ranking and let them "
+                        "choose."
+                    ),
+                },
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "search_hotels",
+        "description": (
+            "Priced hotels inside the chosen neighbourhood. Requires an area: pass area_name, "
+            "or select one with recommend_hotel_areas first. Returns each hotel's ratings "
+            "SEPARATELY - a star category and a guest rating are different measurements and "
+            "must never be merged or compared with each other. Prices are per booking site, "
+            "so name the site when quoting one. Check live_mode."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "check_in": {"type": "string", "description": "ISO date."},
+                "check_out": {"type": "string", "description": "ISO date."},
+                "area_name": {
+                    "type": ["string", "null"],
+                    "description": "Neighbourhood to search. Defaults to the trip's chosen area.",
+                },
+                "adults": {"type": "integer", "minimum": 1, "maximum": 16},
+                "rooms": {"type": "integer", "minimum": 1, "maximum": 8},
+                "max_nightly_price": {"type": ["number", "null"]},
+                "min_rating": {"type": ["number", "null"], "minimum": 0, "maximum": 5},
+                "min_star_category": {"type": ["number", "null"], "minimum": 0, "maximum": 5},
+                "bypass_area_decision": {
+                    "type": "boolean",
+                    "description": (
+                        "Skip the neighbourhood step. Only when the traveller named a specific "
+                        "hotel or told you to search the whole city. Requires bypass_reason."
+                    ),
+                },
+                "bypass_reason": {"type": ["string", "null"]},
+            },
+            "required": ["check_in", "check_out"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
         "name": "generate_itinerary",
         "description": (
             "Lay out the whole trip from the places already stored: clusters them "
@@ -277,7 +359,13 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "parameters": {
             "type": "object",
             "properties": {
-                "proposal_id": {"type": "string"},
+                "proposal_id": {
+                    "type": ["string", "null"],
+                    "description": (
+                        "From generate_itinerary or replan_day. Omit to commit only the "
+                        "decisions and places gathered this turn."
+                    ),
+                },
                 "reason": {
                     "type": "string",
                     "description": "Why, in the user's terms. Goes into the audit trail.",
@@ -288,7 +376,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "description": "lock_ids the user explicitly agreed to release.",
                 },
             },
-            "required": ["proposal_id", "reason"],
+            "required": ["reason"],
             "additionalProperties": False,
         },
     },
@@ -323,6 +411,9 @@ class ToolContext:
     # evidence_id -> EvidenceRecord discovered this turn, written alongside the
     # places it backs so an option's evidence_refs always resolve.
     pending_evidence: dict = field(default_factory=dict)
+    # decision name -> serialized Decision built this turn, e.g. "hotel_area".
+    # Held rather than written: every mutation goes through the patch engine.
+    pending_decisions: dict = field(default_factory=dict)
 
     def budget_left(self) -> int:
         return max(0, self.settings.planning_search_budget - self.searches_used)
@@ -718,6 +809,146 @@ async def _search_flights(context: ToolContext, args: dict[str, Any]) -> dict[st
     return payload
 
 
+async def _recommend_hotel_areas(context: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    working = _working_state(context)
+
+    result = await context.toolbox.hotel_areas.recommend_areas(
+        working,
+        suggested_areas=args.get("suggested_areas") or None,
+        mode=args.get("mode", "transit"),
+        limit=min(int(args.get("limit", 4)), 6),
+    )
+    if not result.ok:
+        return {"error": result.error.message, "code": result.error.code}
+    if result.found_nothing:
+        return {"areas": [], "warnings": result.warnings, "note": "no candidate area was found"}
+
+    select_top = bool(args.get("select_top"))
+    decision = build_area_decision(result.results, select_best=select_top)
+    context.pending_decisions["hotel_area"] = decision.model_dump(mode="json")
+
+    return {
+        "areas": [
+            {
+                "area_name": area.candidate.area_name,
+                "origin": area.candidate.origin,
+                "mode": area.mode,
+                "mean_minutes_to_anchors": area.mean_minutes,
+                "worst_minutes_to_anchors": area.worst_minutes,
+                "anchors_reachable": f"{area.reachable}/{area.anchor_count}",
+                "score": area.score.total,
+                "dimensions": area.score.dimensions,
+                "pros": area.pros,
+                "cons": area.cons,
+                "sources": area.signal.source_urls if area.signal else [],
+            }
+            for area in result.results
+        ],
+        "selected": decision.selected_option_id is not None,
+        "warnings": result.warnings,
+        "note": (
+            "Travel minutes came from the Routes API. Present the ranking with those figures "
+            "and let the traveller choose, then call apply_trip_patch to store the decision. "
+            "Only after an area is chosen does search_hotels make sense."
+        ),
+    }
+
+
+async def _search_hotels(context: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    if context.toolbox.hotels is None:
+        return {
+            "error": "hotel search is not configured (no SERPAPI_API_KEY)",
+            "hint": (
+                "recommend_hotel_areas still works - it needs only Google. Say that hotel "
+                "prices cannot be searched rather than guessing at them."
+            ),
+        }
+
+    working = _working_state(context)
+    party = working.brief.party
+
+    try:
+        spec = SearchHotelsInput(
+            city=working.brief.destination.city,
+            area_name=args.get("area_name"),
+            check_in=date_type.fromisoformat(args["check_in"]),
+            check_out=date_type.fromisoformat(args["check_out"]),
+            adults=int(args.get("adults", party.adults or 2)),
+            children=int(party.children or 0),
+            rooms=int(args.get("rooms", party.rooms or 1)),
+            max_nightly_price=args.get("max_nightly_price") or working.brief.budget.hotel_per_night,
+            min_rating=args.get("min_rating"),
+            min_star_category=args.get("min_star_category"),
+            currency=working.brief.budget.currency,
+            bypass_area_decision=bool(args.get("bypass_area_decision")),
+            bypass_reason=args.get("bypass_reason"),
+        )
+    except (KeyError, ValueError) as exc:
+        return {"error": f"invalid hotel search: {exc}"}
+
+    result = await context.toolbox.hotels.search_hotels(spec, state=working)
+    if not result.ok:
+        return {"error": result.error.message, "code": result.error.code}
+    if result.found_nothing:
+        return {
+            "hotels": [],
+            "note": "no hotels matched; the search itself worked",
+            "warnings": result.warnings,
+        }
+
+    shortlist = await context.toolbox.hotels.shortlist(
+        result.results, state=working, preferences=HotelPreferences(), size=5
+    )
+    context.pending_entity_ops.extend(shortlist.entities)
+
+    decision = build_hotel_decision(shortlist.ranked)
+    context.pending_decisions["hotel"] = decision.model_dump(mode="json")
+
+    payload: dict[str, Any] = {
+        "hotels": [
+            {
+                "name": item.option.name,
+                "entity_id": item.option.entity_id,
+                "area_name": item.option.area_name,
+                "live_mode": item.option.live_mode,
+                "nightly_price": item.nightly,
+                "currency": item.currency,
+                # Two lists, never one number. A star category and a guest
+                # rating are different claims and are rendered as such.
+                "ratings": describe_ratings(item.option),
+                "prices_by_site": describe_prices(item.option),
+                "mean_minutes_to_anchors": item.option.mean_route_minutes(),
+                "score": item.score.total,
+                "dimensions": item.score.dimensions,
+                "pros": item.pros,
+                "cons": item.cons,
+                "search_url": item.option.search_url,
+            }
+            for item in shortlist.ranked
+        ],
+        "warnings": [*result.warnings, *shortlist.warnings],
+        "note": (
+            "Ratings are listed separately on purpose. Never average them, and never compare "
+            "a star category against a guest score - they measure different things. Quote a "
+            "price with the site that offered it."
+        ),
+    }
+
+    if shortlist.ranked and len(shortlist.ranked) > 1:
+        trade_off = explain_hotel_choice(shortlist.ranked[0], shortlist.ranked[1])
+        payload["trade_off"] = {
+            "recommended": trade_off.recommended_ref,
+            "alternative": trade_off.alternative_ref,
+            "statements": trade_off.statements,
+        }
+
+    if not context.toolbox.hotels.live_mode:
+        payload["live_mode"] = False
+        payload["disclaimer"] = HOTEL_SANDBOX_DISCLAIMER
+
+    return payload
+
+
 MAX_AUTO_DETAILS = 24
 
 
@@ -860,11 +1091,35 @@ async def _validate_itinerary(context: ToolContext, args: dict[str, Any]) -> dic
 
 
 async def _apply_trip_patch(context: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
-    proposal = context.proposals.get(args.get("proposal_id", ""))
+    proposal_id = args.get("proposal_id") or ""
+    proposal = context.proposals.get(proposal_id)
+
+    # Decisions are the one thing worth committing without an itinerary
+    # proposal: recommending neighbourhoods produces a Decision and no days.
+    decision_ops = [
+        {
+            "op": "add" if getattr(context.state.decisions, name, None) is None else "set",
+            "path": f"/decisions/{name}",
+            "value": value,
+        }
+        for name, value in context.pending_decisions.items()
+    ]
+
     if proposal is None:
+        if not decision_ops:
+            return {
+                "error": "no such proposal; call generate_itinerary or replan_day first",
+                "applied": False,
+            }
         return {
-            "error": "no such proposal; call generate_itinerary or replan_day first",
-            "applied": False,
+            "__patches__": [
+                {
+                    "operations": decision_ops,
+                    "scope": None,
+                    "reason": args.get("reason", "agent update"),
+                    "unlock_targets": args.get("unlock_targets", []),
+                }
+            ]
         }
 
     reason = args.get("reason", "agent update")
@@ -898,19 +1153,20 @@ async def _apply_trip_patch(context: ToolContext, args: dict[str, Any]) -> dict[
     # operation, and splitting it keeps the scope guarantee absolute rather than
     # negotiable.
     rewrites_existing = any(op["op"] == "set" for op in entity_ops)
-    if proposal.scope is not None and rewrites_existing:
+    if proposal.scope is not None and (rewrites_existing or decision_ops):
         plans.append(
             {
-                "operations": entity_ops,
+                "operations": entity_ops + decision_ops,
                 "scope": None,
                 "reason": f"refresh place facts before: {reason}",
             }
         )
         entity_ops = []
+        decision_ops = []
 
     plans.append(
         {
-            "operations": entity_ops + itinerary_ops,
+            "operations": entity_ops + decision_ops + itinerary_ops,
             "scope": proposal.scope.model_dump(mode="json") if proposal.scope else None,
             "reason": reason,
             "unlock_targets": args.get("unlock_targets", []),
@@ -925,6 +1181,8 @@ HANDLERS = {
     "discover_restaurants": _discover_restaurants,
     "search_airports": _search_airports,
     "search_flights": _search_flights,
+    "recommend_hotel_areas": _recommend_hotel_areas,
+    "search_hotels": _search_hotels,
     "search_places": _search_places,
     "get_place_details": _get_place_details,
     "get_routes": _get_routes,

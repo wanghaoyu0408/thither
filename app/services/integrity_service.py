@@ -5,9 +5,14 @@ the itinerary addresses places by id, and a dangling reference would make
 either silently stop working.
 """
 
-from app.models.decision import PlaceOption
+from app.models.decision import HotelOptionData, PlaceOption
 from app.models.trip import TripState
+from app.services.geo import haversine_km
 from app.services.lock_service import collect_lock_targets
+
+# How far a hotel may sit from the middle of the chosen neighbourhood and still
+# be in it. Generous: an area centre is a point standing in for a district.
+AREA_RADIUS_KM = 3.0
 
 
 def _duplicates(values: list[str]) -> list[str]:
@@ -18,6 +23,75 @@ def _duplicates(values: list[str]) -> list[str]:
             dupes.add(value)
         seen.add(value)
     return sorted(dupes)
+
+
+def _check_hotel_area(state: TripState) -> list[str]:
+    """A chosen hotel must sit in the chosen neighbourhood (spec section 25).
+
+    The ordering the spec insists on - area first, then hotels - is enforced
+    here rather than asked for in a prompt, because a prompt-only rule holds
+    only as long as the model remembers it. Skipping the area step stays
+    possible through `bypass_area_decision`, which records why on the option;
+    what is not possible is skipping it silently.
+    """
+    decision = state.decisions.hotel
+    if decision is None or not decision.selected_option_id:
+        return []
+
+    hotel = next(
+        (
+            option.data
+            for option in decision.options
+            if option.option_id == decision.selected_option_id
+        ),
+        None,
+    )
+    if not isinstance(hotel, HotelOptionData):
+        return []
+
+    if hotel.area_bypass_reason:
+        # A deliberate, recorded skip. Nothing to check against.
+        return []
+
+    area_decision = state.decisions.hotel_area
+    area = None
+    if area_decision is not None and area_decision.selected_option_id:
+        area = next(
+            (
+                option.data
+                for option in area_decision.options
+                if option.option_id == area_decision.selected_option_id
+            ),
+            None,
+        )
+
+    if area is None:
+        return [
+            f"hotel {hotel.name!r} is selected but no hotel_area is: choose a neighbourhood "
+            "first, or record a bypass reason on the hotel"
+        ]
+
+    if hotel.area_name and hotel.area_name == area.area_name:
+        return []
+
+    # Names can differ legitimately - the provider's idea of a district is not
+    # ours - so coordinates get the final say when both sides have them.
+    if area.center is not None and hotel.lat is not None and hotel.lng is not None:
+        distance = haversine_km(hotel.lat, hotel.lng, area.center.lat, area.center.lng)
+        if distance <= AREA_RADIUS_KM:
+            return []
+        return [
+            f"hotel {hotel.name!r} is {distance:.1f} km from the selected area "
+            f"{area.area_name!r}, beyond the {AREA_RADIUS_KM:g} km that area covers"
+        ]
+
+    if hotel.area_name:
+        return [
+            f"hotel {hotel.name!r} is in {hotel.area_name!r} but the selected area is "
+            f"{area.area_name!r}"
+        ]
+
+    return []
 
 
 def check_integrity(state: TripState) -> list[str]:
@@ -76,6 +150,8 @@ def check_integrity(state: TripState) -> list[str]:
                         f"decision {name!r} option {option.option_id!r} cites unknown "
                         f"evidence {evidence_id!r}"
                     )
+
+    problems.extend(_check_hotel_area(state))
 
     # Constraints scoped to a traveler must name a traveler on this trip.
     traveler_ids = [traveler.traveler_id for traveler in state.travelers]

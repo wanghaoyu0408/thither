@@ -343,41 +343,58 @@ def _check_locked_items(day: ItineraryDay, state: TripState) -> list[ValidationI
     return issues
 
 
-def _check_sandbox_flights(state: TripState) -> list[ValidationIssue]:
-    """Flag flight options that came from a provider's test environment.
+# What each decision's options are called, and what is unreal about them when
+# they come from a test environment.
+_SANDBOX_NOUNS: dict[str, tuple[str, str]] = {
+    "flights": ("flight", "prices and schedules"),
+    "hotel": ("hotel", "prices and availability"),
+}
 
-    The prompt tells the model not to present sandbox fares as real. This is
-    what makes that hold: the flag persists on the stored option, so a trip
+
+def _check_sandbox_data(state: TripState) -> list[ValidationIssue]:
+    """Flag any priced option that came from a provider's test environment.
+
+    Written once and walked across every decision rather than per provider. The
+    prompt tells the model not to present sandbox data as real; this is what
+    makes that hold, because the flag persists on the stored option and a trip
     carrying test data says so however it is read, and whoever reads it next.
     """
-    decision = state.decisions.flights
-    if decision is None:
-        return []
+    issues: list[ValidationIssue] = []
 
-    sandbox = [
-        option
-        for option in decision.options
-        if option.data is not None and getattr(option.data, "live_mode", True) is False
-    ]
-    if not sandbox:
-        return []
+    for name, decision in state.decisions.iter_decisions():
+        noun, unreal = _SANDBOX_NOUNS.get(name, ("provider", "prices and details"))
 
-    selected = decision.selected_option_id
-    is_selected = any(option.option_id == selected for option in sandbox)
+        sandbox = [
+            option
+            for option in decision.options
+            # `is False`, not falsy: an option whose data has no live_mode at
+            # all is not making a claim about being real, and defaulting it to
+            # sandbox would cry wolf on every place shortlist.
+            if option.data is not None and getattr(option.data, "live_mode", True) is False
+        ]
+        if not sandbox:
+            continue
 
-    return [
-        ValidationIssue(
-            severity="warning" if is_selected else "info",
-            type="sandbox_flight_data",
-            item_ids=[option.option_id for option in sandbox],
-            message=(
-                f"{len(sandbox)} flight option(s) came from the provider's test environment. "
-                "These prices and schedules are not real"
-                + (" and one of them is currently selected." if is_selected else ".")
-            ),
-            suggested_fix="re-run the search with a live provider token before relying on these",
+        selected = decision.selected_option_id
+        is_selected = any(option.option_id == selected for option in sandbox)
+
+        issues.append(
+            ValidationIssue(
+                severity="warning" if is_selected else "info",
+                type=f"sandbox_{noun}_data",
+                item_ids=[option.option_id for option in sandbox],
+                message=(
+                    f"{len(sandbox)} {noun} option(s) came from the provider's test "
+                    f"environment. These {unreal} are not real"
+                    + (" and one of them is currently selected." if is_selected else ".")
+                ),
+                suggested_fix=(
+                    "re-run the search with a live provider token before relying on these"
+                ),
+            )
         )
-    ]
+
+    return issues
 
 
 def _check_trip_wide(state: TripState) -> list[ValidationIssue]:
@@ -424,7 +441,7 @@ def _check_trip_wide(state: TripState) -> list[ValidationIssue]:
                     )
                 )
 
-    issues.extend(_check_sandbox_flights(state))
+    issues.extend(_check_sandbox_data(state))
 
     if state.itinerary.days:
         issues.append(

@@ -36,10 +36,19 @@ class Settings(BaseSettings):
     # consulted first.
     planning_search_budget: int = 8
 
-    # Placeholders for later milestones.
+    # Flights. Required from Milestone 5.
     duffel_access_token: str | None = None
-    amadeus_client_id: str | None = None
-    amadeus_client_secret: str | None = None
+
+    # Hotel prices, via Google Hotels. Required from Milestone 6.
+    #
+    # The spec named Amadeus here. Amadeus Self-Service was decommissioned on
+    # 17 July 2026 and Amadeus Enterprise is out of scope for a prototype, so
+    # its settings are gone rather than left lying around to be half-configured.
+    # Only the HotelProvider interface survived the swap, which was the point of
+    # having one.
+    serpapi_api_key: str | None = None
+
+    # Placeholder for a later milestone.
     weather_api_key: str | None = None
 
     @property

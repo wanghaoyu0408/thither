@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 from app.models.common import Cabin, LatLng, Money, new_id, utcnow
 from app.models.flight import BaggageAllowance, FlightSlice
+from app.models.hotel import HotelPriceQuote, HotelRating
 
 OptionStatus = Literal["candidate", "shortlisted", "selected", "rejected"]
 DecisionStatus = Literal["researching", "shortlisted", "selected", "locked"]
@@ -138,17 +139,84 @@ class FlightOptionData(BaseModel):
 
 
 class HotelOptionData(BaseModel):
-    """Expanded in M6 with normalized Amadeus inventory."""
+    """A priced hotel from a hotel provider.
 
-    provider: str | None = None
+    `ratings` is a list rather than the single `rating` + `rating_source` pair
+    this started as. One float is how a five-star category ends up compared
+    against a 4.3-from-2,300-reviews as though they measured the same thing
+    (spec section 16); a list of typed, sourced ratings makes that impossible to
+    do by accident.
+
+    `quotes` is a list for the same reason: Google Hotels lists one property at
+    several vendors at different rates, so "the price" does not exist.
+    """
+
+    provider: str
+    offer_ref: str | None = None
+
+    # False for a provider's test environment. Same flag flights carry, and no
+    # default for the same reason: forgetting to say must not be possible.
+    live_mode: bool
+
     name: str
     entity_id: str | None = None
+
+    lat: float | None = None
+    lng: float | None = None
+
+    area_name: str | None = None
+    # Recorded when the neighbourhood step was deliberately skipped, so the
+    # trip keeps the trace of that decision.
+    area_bypass_reason: str | None = None
+
     nightly_price: Money | None = None
     total_price: Money | None = None
-    rating: float | None = None
-    rating_source: str | None = None
-    area_name: str | None = None
+    quotes: list[HotelPriceQuote] = []
+
+    ratings: list[HotelRating] = []
+
+    room_description: str | None = None
+    board_type: str | None = None
+    amenities: list[str] = []
+
+    refundable: bool | None = None
+    free_cancellation_until: datetime | None = None
+
+    # Real travel minutes to the trip's anchor places, keyed by entity_id.
+    # Never a straight-line estimate (spec section 21).
+    route_minutes: dict[str, float] = {}
+    # How those minutes were travelled. Carried because Google has no transit
+    # data in some countries, so a figure asked for as transit may have been
+    # measured by car - and thirty minutes' drive is not thirty minutes' train.
+    route_mode: str | None = None
+    distance_to_area_km: float | None = None
+
+    # Somewhere to look. No provider under this interface can book.
+    search_url: str | None = None
+
     observed_at: datetime = Field(default_factory=utcnow)
+    expires_at: datetime | None = None
+
+    def rating_of(self, kind: str) -> HotelRating | None:
+        return next((rating for rating in self.ratings if rating.type == kind), None)
+
+    @property
+    def user_rating(self) -> HotelRating | None:
+        return self.rating_of("user_rating")
+
+    @property
+    def star_category(self) -> HotelRating | None:
+        return self.rating_of("star_category")
+
+    @property
+    def cheapest_quote(self) -> HotelPriceQuote | None:
+        priced = [quote for quote in self.quotes if quote.nightly is not None]
+        return min(priced, key=lambda quote: quote.nightly.amount) if priced else None
+
+    def mean_route_minutes(self) -> float | None:
+        if not self.route_minutes:
+            return None
+        return sum(self.route_minutes.values()) / len(self.route_minutes)
 
 
 class PlaceOption(BaseModel):

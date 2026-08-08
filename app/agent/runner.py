@@ -227,6 +227,7 @@ class AgentRunner:
         context.state = result.state
         context.pending_entity_ops.clear()
         context.pending_evidence.clear()
+        context.pending_decisions.clear()
         run.revision_after = result.revision
 
         return {

@@ -8,6 +8,13 @@ The matrix endpoint streams a JSON array of elements, each carrying its own
 placed by index rather than by arrival order. Elements whose `status` is
 non-empty, or that carry `condition: ROUTE_NOT_FOUND`, are unreachable pairs
 rather than failures of the call.
+
+**Transit coverage is regional.** Both endpoints answer TRANSIT queries in the
+US and the UK and return no route at all in Japan - Google does not license
+Japanese rail data for its routing APIs. That is a data gap, not an error: the
+call succeeds and every pair comes back `ROUTE_NOT_FOUND`. Callers that need a
+comparison rather than a fact handle it by falling back to another mode and
+saying which one they used; see `hotel_area_service.measure_travel`.
 """
 
 from datetime import datetime
@@ -137,9 +144,12 @@ class GoogleRoutesProvider:
     ) -> RouteLeg:
         google_mode = GOOGLE_TRAVEL_MODE[mode]
 
+        # Note the shape: computeRoutes takes a Waypoint directly, while
+        # computeRouteMatrix wraps each one in {"waypoint": ...}. Sending the
+        # matrix shape here is rejected with "Unknown name 'waypoint'".
         body: dict[str, Any] = {
-            "origin": {"waypoint": waypoint(origin)},
-            "destination": {"waypoint": waypoint(destination)},
+            "origin": waypoint(origin),
+            "destination": waypoint(destination),
             "travelMode": google_mode,
         }
         if departure_at is not None:

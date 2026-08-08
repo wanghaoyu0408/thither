@@ -20,7 +20,7 @@ validated `TripPatch` with revision control, lock enforcement and rejection memo
 | 3 | Itinerary generation, validator, scoped local replanning, agent | done |
 | 4 | Web research: Xiaohongshu / Reddit / blogs, resolved against Google | done |
 | 5 | Flights (Duffel), airport comparison, ranking with trade-offs | done |
-| 6 | Hotels (neighborhood first, then Amadeus inventory) | not started |
+| 6 | Hotels: neighbourhood decided first, then priced inventory | done (prices need a key) |
 | 7 | Multi-traveler preferences, group scoring, fairness | not started |
 
 ## Setup
@@ -64,7 +64,7 @@ Then open http://127.0.0.1:8000/docs.
 .venv/Scripts/python.exe -m pytest -q
 ```
 
-431 tests, no network, no API keys. The `tests/scenarios/` files map one-to-one onto each
+500 tests, no network, no API keys. The `tests/scenarios/` files map one-to-one onto each
 milestone's acceptance criteria.
 
 Contract tests against the real Google APIs are opt-in, since they cost quota:
@@ -140,6 +140,68 @@ no path to ticket: `DuffelProvider` exposes exactly one public method, `search_o
 a test asserts the module contains nothing named for orders, payment, seats or
 cancellation. A live token needs the `air.offer_requests.create` scope; without it the live
 tests skip naming that remedy rather than passing vacuously.
+
+### Milestone 6 acceptance, and which half is live
+
+```bash
+.venv/Scripts/python.exe scripts/choose_hotel_area.py
+```
+
+Spec §25 does not ask for a hotel search; it dictates an order. *Destination → anchor POIs
+→ candidate neighbourhoods → rank them on real travel time → recommend an area → **then**
+search hotels in it.* The area half needs only Google, so it is verified live against real
+Tokyo geography:
+
+```
+times are driving minutes
+
+area                         mean   worst   reach   score
+Ueno                          12m     18m   5/5     0.818
+Asakusa                       12m     21m   5/5     0.804
+Shibuya                       25m     30m   5/5     0.584
+Shinjuku                      29m     33m   5/5     0.542
+```
+
+Every trip anchor is in east Tokyo, so Ueno wins and Shinjuku loses — by measured minutes,
+not by reputation.
+
+**The ordering is enforced server-side.** `search_hotels` refuses without a resolved area
+and names `recommend_hotel_areas`; integrity fails a selected hotel that sits outside the
+selected area. Skipping the step stays possible through `bypass_area_decision`, which
+requires a reason and stores it on the option — "book the Park Hyatt" still works, it just
+leaves a trace.
+
+**Amadeus is gone.** Self-Service was decommissioned on 17 July 2026, so the spec's chosen
+hotel provider no longer exists. Replacing it cost one class, because nothing above
+`HotelProvider` knew its name — which is the argument for §3's structure made concrete.
+`SerpApiGoogleHotelsProvider` is the initial live price source; Booking.com Demand API is
+documented as the next one. No provider under that interface has, or will gain, a booking
+method.
+
+**Two ratings are never one number.** A star category and a guest score measure different
+things, so `HotelOptionData.ratings` is a list of typed, sourced `HotelRating`s rather than
+the single float it started as. A five-star with no reviews is not highly rated — it is
+unreviewed, and scores nothing at all on guest rating. Prices work the same way: Google
+Hotels lists one property at several sites, so each quote keeps its vendor.
+
+**What has no data is said, not scored.** Spec §23 lists quietness as a hotel dimension and
+no provider publishes it, so it is not in the ranking and a traveller who cares is told so.
+Same for room size.
+
+Two things the live run turned up that no offline test could:
+
+- **Google has no transit routing data for Japan.** Both Routes endpoints answer transit
+  queries in the US and the UK and return no route at all in Tokyo. So a mode with no
+  coverage is retried once in a fallback mode and the substitution is declared — the
+  minutes above say "driving" because that is what was measured. A driving minute must
+  never be read as a train minute.
+- **`compute_route` had never worked.** It wrapped waypoints the way only the matrix
+  endpoint accepts, so every call would have been rejected. Dead code until now; fixed and
+  covered.
+
+Hotel prices need `SERPAPI_API_KEY`. Without it the script prints the area decision and
+stops, saying so. The SerpApi contract tests skip with the same remedy named, so nobody
+reads the milestone as more verified than it is.
 
 ## How a change reaches the database
 

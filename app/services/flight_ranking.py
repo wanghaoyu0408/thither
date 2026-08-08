@@ -17,16 +17,24 @@ from dataclasses import dataclass, field
 from app.models.decision import DecisionScore, FlightOptionData
 from app.models.flight import AirportOption
 from app.models.traveler import FlightPreferences
+from app.services.scoring import PRICE_TOLERANCE, combine, price_score
+
+__all__ = [
+    "PRICE_TOLERANCE",
+    "RankedFlight",
+    "TradeOff",
+    "cheapest_of",
+    "explain_choice",
+    "flies_avoided_airline",
+    "rank_flights",
+    "score_flight",
+]
 
 # Beyond this, a longer flight is simply "long"; further hours stop changing the
 # decision much.
 DURATION_CEILING_MINUTES = 24 * 60
 # A drive this long makes an airport genuinely inconvenient.
 GROUND_CEILING_MINUTES = 120.0
-
-# A fare this far above the cheapest scores half. Roughly the point where "a bit
-# more" becomes "a different budget".
-PRICE_TOLERANCE = 0.30
 
 RED_EYE_HOURS = range(0, 6)
 
@@ -50,23 +58,8 @@ class RankedFlight:
 
 
 def _price_score(option: FlightOptionData, cheapest: float, dearest: float) -> float | None:
-    """How much dearer than the cheapest, proportionally.
-
-    Not normalized across the candidate range, which was the first version and
-    was wrong: spreading 0-1 over whatever spread happens to be present makes a
-    ten-dollar gap score exactly like a five-hundred-dollar one, so a trivial
-    saving could outweigh anything else the traveller asked for. Measuring the
-    excess against the cheapest fare keeps a small difference small.
-    """
-    price = (option.price_per_person or option.price).amount
-    if cheapest <= 0:
-        return 1.0
-    excess = max(0.0, (price - cheapest) / cheapest)
-    # Decays smoothly and never reaches zero. A linear version with a floor was
-    # the second wrong answer here: everything past the tolerance collapsed to
-    # 0.0, so a 916 and a 1072 fare scored identically and the tie fell to
-    # whichever offer id sorted first - which recommended the dearer one.
-    return round(1.0 / (1.0 + excess / PRICE_TOLERANCE), 4)
+    """Delegates to the shared rule; hotels price the same way."""
+    return price_score((option.price_per_person or option.price).amount, cheapest)
 
 
 def _duration_score(option: FlightOptionData, shortest: int | None) -> float | None:
@@ -175,23 +168,9 @@ def score_flight(
         "red_eye": (_red_eye_score(option, preferences), 0.6),
     }
 
-    dimensions = {
-        name: round(value, 3) for name, (value, _weight) in components.items() if value is not None
-    }
-    available = sum(weight for value, weight in components.values() if value is not None)
-    total = (
-        sum(value * weight for value, weight in components.values() if value is not None)
-        / available
-        if available
-        else 0.0
-    )
-
-    missing = sorted(name for name, (value, _w) in components.items() if value is None)
-    notes = f"no data for: {', '.join(missing)}" if missing else None
-
     return RankedFlight(
         option=option,
-        score=DecisionScore(total=round(total, 4), dimensions=dimensions, notes=notes),
+        score=combine(components),
         pros=_pros(option, ground),
         cons=_cons(option, ground, preferences),
     )

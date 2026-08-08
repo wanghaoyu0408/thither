@@ -15,10 +15,13 @@ from app.providers.duffel import DuffelProvider
 from app.providers.google_places import GooglePlacesProvider
 from app.providers.google_routes import GoogleRoutesProvider
 from app.providers.openai_research import OpenAIResearchProvider
+from app.providers.serpapi_hotels import SerpApiGoogleHotelsProvider
 from app.services.airport_service import AirportService
 from app.services.cache import InProcessCache, LayeredCache, RequestDeduper, SqliteCache
 from app.services.discovery_service import DiscoveryService
 from app.services.flight_service import FlightService
+from app.services.hotel_area_service import HotelAreaService
+from app.services.hotel_service import HotelService
 from app.services.place_service import PlaceService
 from app.services.research_service import ResearchService
 from app.services.route_service import RouteService
@@ -83,6 +86,22 @@ class Toolbox:
         if self._settings.duffel_access_token:
             self.flights = FlightService(
                 DuffelProvider(self._settings.duffel_access_token, self._client),
+                self._cache,
+                self._deduper,
+            )
+
+        # Choosing a neighbourhood needs only Google, so it works whether or not
+        # a hotel price provider is configured - and it is the half of spec
+        # section 25 that has to happen first anyway.
+        self.hotel_areas = HotelAreaService(self.places, self.routes, self.research)
+
+        # Hotel prices need their own credential, same rule as flights.
+        self.hotels: HotelService | None = None
+        if self._settings.serpapi_api_key:
+            self.hotels = HotelService(
+                SerpApiGoogleHotelsProvider(self._settings.serpapi_api_key, self._client),
+                self.places,
+                self.routes,
                 self._cache,
                 self._deduper,
             )

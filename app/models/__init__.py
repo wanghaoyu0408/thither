@@ -20,6 +20,14 @@ from app.models.evidence import (
     SourceType,
     authority_for,
 )
+from app.models.hotel import (
+    HotelAreaCandidate,
+    HotelPriceQuote,
+    HotelRating,
+    RatingSource,
+    RatingType,
+    SearchHotelsInput,
+)
 from app.models.itinerary import DaySummary, ItineraryDay, ItineraryItem, TripItinerary
 from app.models.lock import LockRecord
 from app.models.patch import (
@@ -91,9 +99,12 @@ __all__ = [
     "FoodPreferences",
     "GetPlaceDetailsInput",
     "GetRoutesInput",
+    "HotelAreaCandidate",
     "HotelAreaOption",
     "HotelOptionData",
     "HotelPreferences",
+    "HotelPriceQuote",
+    "HotelRating",
     "Importance",
     "ItineraryDay",
     "ItineraryItem",
@@ -114,11 +125,14 @@ __all__ = [
     "PlaceFieldSet",
     "PlaceOption",
     "PlaceSummary",
+    "RatingSource",
+    "RatingType",
     "RejectionRecord",
     "ResearchPurpose",
     "ResearchResult",
     "ResearchWebInput",
     "RouteLeg",
+    "SearchHotelsInput",
     "SearchPlacesInput",
     "Sentiment",
     "SourceType",
