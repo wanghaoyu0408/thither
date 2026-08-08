@@ -39,13 +39,22 @@ WIDE_HOURS = {
 }
 
 
-def make_place(index: int, kind: str, *, lat: float, lng: float) -> PlaceEntity:
+def make_place(
+    index: int,
+    kind: str,
+    *,
+    lat: float,
+    lng: float,
+    name: str | None = None,
+    address: str | None = None,
+) -> PlaceEntity:
     categories = {"meal": ["restaurant"], "cafe": ["cafe"], "activity": ["museum"]}[kind]
     return PlaceEntity(
         entity_id=f"ent_{kind}_{index:02d}",
         provider_refs={"google_place_id": f"ChIJ_{kind}_{index:02d}"},
-        name=f"{kind.title()} {index}",
+        name=name or f"{kind.title()} {index}",
         categories=categories,
+        address=address,
         lat=lat,
         lng=lng,
         rating=4.0 + (index % 9) / 10,
@@ -470,6 +479,131 @@ def test_scope_naming_a_day_that_does_not_exist_is_rejected():
 
     assert result.applied is False
     assert "not in the itinerary" in result.errors[0].message
+
+
+# --- regressions from the first live acceptance run --------------------------
+
+
+def test_replanning_never_moves_an_item_into_hours_it_is_shut():
+    """The builder checked opening hours when re-timing; the replanner did not.
+
+    A relaxed day is worse than a busy one if it books a venue that is closed.
+    """
+    state = busy_day_state()
+    day = state.itinerary.days[2]
+
+    # Everything on day 3 only opens in the evening.
+    evening_only = {
+        "periods": [
+            {
+                "open": {"day": d, "hour": 18, "minute": 0},
+                "close": {"day": d, "hour": 23, "minute": 0},
+            }
+            for d in range(7)
+        ]
+    }
+    for item in day.items:
+        state.entities[item.entity_id].opening_hours = evening_only
+
+    proposal = replan_day(state, DAY_THREE, params=ReplanParams(intensity="relaxed"))
+
+    from app.services.opening_hours import OpenState, covers_visit
+
+    for item in proposal.days[0].items:
+        entity = state.entities[item.entity_id]
+        start = datetime.fromisoformat(item.start_at)
+        end = datetime.fromisoformat(item.end_at)
+        assert covers_visit(entity.opening_hours, start, end) is not OpenState.CLOSED, (
+            f"{entity.name} was re-timed to {start:%H:%M}, when it is shut"
+        )
+
+
+def test_replanning_fills_the_eating_slots_before_the_sightseeing_ones():
+    """Re-timing used to zip items onto slots in order, ignoring what they are.
+
+    A restaurant at 11:00 is not wrong in itself - an early lunch is fine - so
+    what is asserted is that every eating slot gets used before a restaurant is
+    pushed into a sightseeing one.
+    """
+    state = busy_day_state()
+    proposal = replan_day(state, DAY_THREE, params=ReplanParams(intensity="relaxed"))
+
+    # The relaxed template's eating slots are 13:00 (meal), 15:30 (cafe), 19:00 (meal).
+    eating_hours = {13, 15, 19}
+    restaurants = [item for item in proposal.days[0].items if item.type == "restaurant"]
+    placed_to_eat = [
+        item for item in restaurants if datetime.fromisoformat(item.start_at).hour in eating_hours
+    ]
+
+    assert len(placed_to_eat) == min(len(restaurants), len(eating_hours))
+
+
+def test_an_item_with_nowhere_open_to_go_is_dropped_and_reported():
+    """Parking an item on a closed slot by inertia is still booking it closed."""
+    state = busy_day_state()
+    evening_only = {
+        "periods": [
+            {
+                "open": {"day": d, "hour": 18, "minute": 0},
+                "close": {"day": d, "hour": 23, "minute": 0},
+            }
+            for d in range(7)
+        ]
+    }
+    for item in state.itinerary.days[2].items:
+        state.entities[item.entity_id].opening_hours = evening_only
+
+    proposal = replan_day(state, DAY_THREE, params=ReplanParams(intensity="relaxed"))
+
+    assert any("no free slot on this day when they are open" in w for w in proposal.warnings)
+
+
+def test_a_day_is_named_after_where_its_places_actually_are():
+    """Themes used to be zipped against day position.
+
+    Clusters come out ordered west-to-east, which has nothing to do with the
+    order the areas were suggested in - so a Shibuya day was labelled Asakusa.
+    """
+    state = planning_state()
+    for index, entity in enumerate(state.entities.values()):
+        # First cluster is Shibuya, second is Asakusa; the rest are unlabelled.
+        cluster = index // 5
+        entity.address = (
+            ["Shibuya City, Tokyo", "Taito City, Asakusa, Tokyo"][cluster]
+            if cluster < 2
+            else "Somewhere Else, Tokyo"
+        )
+
+    proposal = build_itinerary(state, params=PlanParams(days=5, areas=["Asakusa", "Shibuya"]))
+
+    for day in proposal.days:
+        if not day.theme:
+            continue
+        for item in day.items:
+            address = state.entities[item.entity_id].address or ""
+            assert day.theme.lower() in address.lower(), (
+                f"{day.date} is labelled {day.theme!r} but holds a place at {address!r}"
+            )
+
+
+def test_a_place_named_after_another_district_does_not_mislabel_the_day():
+    """ "Shinjuku-tei" in Ginza is in Ginza. Matching the name got this wrong."""
+    state = planning_state()
+    state.entities = {}
+    for index in range(4):
+        entity = make_place(
+            index,
+            ["meal", "meal", "cafe", "activity"][index],
+            lat=35.671 + index * 0.001,
+            lng=139.765 + index * 0.001,
+            name="Tempura SHINJUKU-TEI Ginza",
+            address="Ginza, Chuo City, Tokyo",
+        )
+        state.entities[entity.entity_id] = entity
+
+    proposal = build_itinerary(state, params=PlanParams(days=1, areas=["Shinjuku", "Ginza"]))
+
+    assert proposal.days[0].theme == "Ginza"
 
 
 # --- validator ---------------------------------------------------------------

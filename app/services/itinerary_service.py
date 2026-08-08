@@ -363,6 +363,18 @@ def _drop_order(item: ItineraryItem, locked: set[str]) -> tuple:
     )
 
 
+def _open_where_it_is(item: ItineraryItem, state: TripState) -> bool:
+    """Is the item already at a time its venue is open?
+
+    Unknown counts as yes: plenty of places publish no hours, and refusing to
+    keep them would quietly empty the itinerary.
+    """
+    entity = state.entities.get(item.entity_id) if item.entity_id else None
+    if entity is None or item.start_at is None:
+        return True
+    return covers_visit(entity.opening_hours, item.start_at, item.end_at) is not OpenState.CLOSED
+
+
 def _slot_for(
     item: ItineraryItem,
     state: TripState,
@@ -462,12 +474,18 @@ def replan_day(
     retimed: list[ItineraryItem] = list(fixed)
     available = [slot for slot in _TEMPLATES[pace] if slot.window(target_date) not in taken]
 
+    unplaceable: list[str] = []
     for item in movable:
         slot = _slot_for(item, state, available, target_date)
         if slot is None:
-            # No slot suits it and is open - better to leave the item where the
-            # user last saw it than to move it somewhere shut.
-            retimed.append(item)
+            # No open slot is free. Keeping the item is only defensible if it is
+            # already at a time the venue is open - leaving it parked on a
+            # closed slot would be the same confident wrongness the builder
+            # refuses to produce, just arrived at by inertia.
+            if _open_where_it_is(item, state):
+                retimed.append(item)
+            else:
+                unplaceable.append(item.title)
             continue
         available.remove(slot)
         start, end = slot.window(target_date)
@@ -488,6 +506,11 @@ def replan_day(
     if warnings_locked:
         warnings.append(
             f"refused to drop locked items {warnings_locked}; unlock them first if that is intended"
+        )
+    if unplaceable:
+        warnings.append(
+            f"dropped {', '.join(unplaceable)}: no free slot on this day when they are open. "
+            "Search for an alternative, or move them to another day."
         )
 
     return ItineraryProposal(
