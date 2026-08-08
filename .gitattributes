@@ -1,0 +1,5 @@
+# Keep the repository LF-only; Git still checks out CRLF on Windows where needed.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.db binary
