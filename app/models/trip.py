@@ -7,6 +7,7 @@ from app.models.common import Pace, new_id, utcnow
 from app.models.constraint import TripConstraint
 from app.models.decision import TripDecisions
 from app.models.entity import TripEntity
+from app.models.evidence import EvidenceRecord
 from app.models.itinerary import TripItinerary
 from app.models.lock import LockRecord
 from app.models.rejection import RejectionRecord
@@ -147,7 +148,14 @@ class TripState(BaseModel):
     decisions: TripDecisions = TripDecisions()
 
     # entity_id -> entity. Itinerary items reference these by id.
+    # Facts only: what Google asserts about a place. Community opinion lives in
+    # `evidence`, so the two can never be mistaken for each other.
     entities: dict[str, TripEntity] = {}
+
+    # evidence_id -> record. What people said, and where they said it, kept for
+    # as long as the recommendation it justifies. DecisionOption.evidence_refs
+    # points in here.
+    evidence: dict[str, EvidenceRecord] = {}
 
     itinerary: TripItinerary = TripItinerary()
 

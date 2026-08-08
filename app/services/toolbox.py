@@ -13,8 +13,11 @@ from app.config import Settings, get_settings
 from app.providers.base import build_client
 from app.providers.google_places import GooglePlacesProvider
 from app.providers.google_routes import GoogleRoutesProvider
+from app.providers.openai_research import OpenAIResearchProvider
 from app.services.cache import InProcessCache, LayeredCache, RequestDeduper, SqliteCache
+from app.services.discovery_service import DiscoveryService
 from app.services.place_service import PlaceService
+from app.services.research_service import ResearchService
 from app.services.route_service import RouteService
 
 
@@ -57,6 +60,18 @@ class Toolbox:
             self._cache,
             self._deduper,
         )
+
+        # Research needs an LLM key. Without one the discovery pipeline still
+        # runs - on Google data alone, and saying so (spec section 36).
+        self.research: ResearchService | None = None
+        if self._settings.openai_api_key:
+            self.research = ResearchService(
+                OpenAIResearchProvider(self._settings.openai_api_key, self._settings.openai_model),
+                self._cache,
+                self._deduper,
+            )
+
+        self.discovery = DiscoveryService(self.places, self.research)
 
     async def aclose(self) -> None:
         await self._client.aclose()

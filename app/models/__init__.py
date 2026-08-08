@@ -12,6 +12,14 @@ from app.models.decision import (
     TripDecisions,
 )
 from app.models.entity import PlaceEntity, TripEntity
+from app.models.evidence import (
+    Authority,
+    CommunitySignal,
+    EvidenceRecord,
+    Sentiment,
+    SourceType,
+    authority_for,
+)
 from app.models.itinerary import DaySummary, ItineraryDay, ItineraryItem, TripItinerary
 from app.models.lock import LockRecord
 from app.models.patch import (
@@ -29,6 +37,13 @@ from app.models.place import (
     SearchPlacesInput,
 )
 from app.models.rejection import RejectionRecord
+from app.models.research import (
+    Citation,
+    MentionedEntity,
+    ResearchPurpose,
+    ResearchResult,
+    ResearchWebInput,
+)
 from app.models.route import GetRoutesInput, LocationRef, RouteLeg, TravelMode
 from app.models.tool import ToolError, ToolResult
 from app.models.traveler import (
@@ -59,14 +74,18 @@ __all__ = [
     "ActivityPreferences",
     "ApplyTripPatchInput",
     "Assumption",
+    "Authority",
     "BudgetSpec",
+    "Citation",
     "ClockTime",
+    "CommunitySignal",
     "DaySummary",
     "Decision",
     "DecisionOption",
     "DecisionScore",
     "DestinationOption",
     "DestinationSpec",
+    "EvidenceRecord",
     "FlightOptionData",
     "FlightPreferences",
     "FoodPreferences",
@@ -81,6 +100,7 @@ __all__ = [
     "LatLng",
     "LocationRef",
     "LockRecord",
+    "MentionedEntity",
     "Money",
     "OpenQuestion",
     "OriginSpec",
@@ -95,8 +115,13 @@ __all__ = [
     "PlaceOption",
     "PlaceSummary",
     "RejectionRecord",
+    "ResearchPurpose",
+    "ResearchResult",
+    "ResearchWebInput",
     "RouteLeg",
     "SearchPlacesInput",
+    "Sentiment",
+    "SourceType",
     "TimeFlexibility",
     "ToolError",
     "ToolResult",
@@ -115,6 +140,7 @@ __all__ = [
     "TripTraveler",
     "ValidationIssue",
     "ValidationState",
+    "authority_for",
     "new_id",
     "utcnow",
 ]

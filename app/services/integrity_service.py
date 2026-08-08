@@ -29,6 +29,14 @@ def check_integrity(state: TripState) -> list[str]:
         if entity.entity_id != key:
             problems.append(f"entities[{key!r}] holds entity_id {entity.entity_id!r}")
 
+    # Evidence must point at places the trip knows, or it backs nothing.
+    for evidence_id, record in state.evidence.items():
+        if record.evidence_id != evidence_id:
+            problems.append(f"evidence[{evidence_id!r}] holds evidence_id {record.evidence_id!r}")
+        for entity_id in record.entity_ids:
+            if entity_id not in state.entities:
+                problems.append(f"evidence {evidence_id!r} references unknown entity {entity_id!r}")
+
     # Every itinerary reference must resolve to a stored entity.
     item_ids: list[str] = []
     for _day, item in state.itinerary.iter_items():
@@ -59,6 +67,15 @@ def check_integrity(state: TripState) -> list[str]:
                     f"decision {name!r} option {option.option_id!r} references unknown "
                     f"entity {option.data.entity_id!r}"
                 )
+
+            # A recommendation whose justification has gone missing is worse
+            # than one with none: it looks evidenced and is not.
+            for evidence_id in option.evidence_refs:
+                if evidence_id not in state.evidence:
+                    problems.append(
+                        f"decision {name!r} option {option.option_id!r} cites unknown "
+                        f"evidence {evidence_id!r}"
+                    )
 
     # Constraints scoped to a traveler must name a traveler on this trip.
     traveler_ids = [traveler.traveler_id for traveler in state.travelers]

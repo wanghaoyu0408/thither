@@ -40,6 +40,10 @@ class ContentClass(StrEnum):
     PLACE_ID = "place_id"
     LAT_LNG = "lat_lng"
     VOLATILE = "volatile"
+    # Our own summaries of public pages, plus their URLs and titles. Not Google
+    # Maps Content, so the terms constraining place data do not reach it - but
+    # page text is still never stored, only what we wrote about it.
+    RESEARCH = "research"
 
 
 # Hard ceilings. A caller may ask for less, never for more.
@@ -47,9 +51,10 @@ MAX_TTL: dict[ContentClass, timedelta | None] = {
     ContentClass.PLACE_ID: None,  # no expiry
     ContentClass.LAT_LNG: timedelta(days=30),
     ContentClass.VOLATILE: timedelta(hours=1),
+    ContentClass.RESEARCH: timedelta(days=14),
 }
 
-PERSISTABLE = frozenset({ContentClass.PLACE_ID, ContentClass.LAT_LNG})
+PERSISTABLE = frozenset({ContentClass.PLACE_ID, ContentClass.LAT_LNG, ContentClass.RESEARCH})
 
 
 class CachePolicyError(RuntimeError):
@@ -79,6 +84,7 @@ class CachePolicy:
 PLACE_ID_POLICY = CachePolicy(ContentClass.PLACE_ID)
 LAT_LNG_POLICY = CachePolicy(ContentClass.LAT_LNG)
 VOLATILE_POLICY = CachePolicy(ContentClass.VOLATILE)
+RESEARCH_POLICY = CachePolicy(ContentClass.RESEARCH)
 
 
 def naive_utc(value: datetime) -> datetime:
@@ -188,7 +194,8 @@ class SqliteCache:
         if not policy.persistable:
             raise CachePolicyError(
                 f"{policy.content_class.value!r} content must not be written to durable "
-                "storage; only place ids (indefinitely) and lat/lng (<=30 days) may persist"
+                "storage; only place ids (indefinitely), lat/lng (<=30 days) and our own "
+                "research summaries (<=14 days) may persist"
             )
 
 

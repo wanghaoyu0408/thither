@@ -16,6 +16,7 @@ from typing import Any
 from app.config import Settings
 from app.models.itinerary_plan import ItineraryProposal, PlanParams, ReplanParams
 from app.models.place import GetPlaceDetailsInput, PlaceFieldSet, SearchPlacesInput
+from app.models.research import ResearchWebInput
 from app.models.route import GetRoutesInput, LocationRef
 from app.models.trip import TripState
 from app.services.entity_service import resolve_places
@@ -92,6 +93,62 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "mode": {"type": "string", "enum": ["walking", "transit", "driving"]},
             },
             "required": ["origin_entity_ids", "destination_entity_ids"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "research_web",
+        "description": (
+            "What people actually say about places - Xiaohongshu, Reddit, blogs and "
+            "publications. Use this for taste, reputation and local knowledge. It is NOT a "
+            "source of opening hours, addresses, prices or travel times; those come from "
+            "Google. Reports which sources returned nothing."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "e.g. 'best izakaya locals actually go to'.",
+                },
+                "near": {"type": "string", "description": "e.g. 'Shibuya, Tokyo'."},
+                "purpose": {
+                    "type": "string",
+                    "enum": [
+                        "restaurant_discovery",
+                        "activity_discovery",
+                        "hotel_research",
+                        "neighborhood_research",
+                        "destination_research",
+                        "general",
+                    ],
+                },
+                "recency_days": {"type": ["integer", "null"]},
+            },
+            "required": ["query", "near"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "discover_restaurants",
+        "description": (
+            "The full recommendation pipeline: Google candidates plus community research, "
+            "resolved against real places, ranked, and returned with the sources behind "
+            "each one. Prefer this over calling search_places and research_web separately. "
+            "Still works when Xiaohongshu or all research is unavailable, on Google data "
+            "alone, and says which happened."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "e.g. 'izakaya', 'ramen'."},
+                "near": {"type": "string", "description": "e.g. 'Asakusa, Tokyo'."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 8},
+                "min_rating": {"type": ["number", "null"], "minimum": 0, "maximum": 5},
+            },
+            "required": ["query", "near"],
             "additionalProperties": False,
         },
     },
@@ -201,6 +258,9 @@ class ToolContext:
     travel: TravelLookup = field(default_factory=TravelLookup)
     searches_used: int = 0
     pending_entity_ops: list = field(default_factory=list)
+    # evidence_id -> EvidenceRecord discovered this turn, written alongside the
+    # places it backs so an option's evidence_refs always resolve.
+    pending_evidence: dict = field(default_factory=dict)
 
     def budget_left(self) -> int:
         return max(0, self.settings.planning_search_budget - self.searches_used)
@@ -359,6 +419,116 @@ def _working_state(context: ToolContext) -> TripState:
     for entity in context.pending_entity_ops:
         working.entities[entity.entity_id] = entity
     return working
+
+
+async def _research_web(context: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    if context.toolbox.research is None:
+        return {
+            "error": "web research is not configured (no OPENAI_API_KEY)",
+            "hint": "plan from Google data and say that community signal is unavailable",
+        }
+    if context.budget_left() <= 0:
+        return {"error": "search budget exhausted for this turn"}
+    context.searches_used += 1
+
+    result = await context.toolbox.research.research_web(
+        ResearchWebInput(
+            query=args["query"],
+            near=args.get("near"),
+            purpose=args.get("purpose", "general"),
+            recency_days=args.get("recency_days"),
+        )
+    )
+    if not result.ok:
+        return {"error": result.error.message, "code": result.error.code}
+
+    return {
+        "sources": [
+            {
+                "url": row.url,
+                "title": row.title,
+                "source_type": row.source_type,
+                "tier": row.tier,
+                "summary": row.summary,
+                "mentions": [
+                    {
+                        "name": mention.name,
+                        "kind": mention.kind,
+                        "sentiment": mention.sentiment,
+                        "themes": mention.themes,
+                    }
+                    for mention in row.mentioned_entities
+                ],
+            }
+            for row in result.results
+        ],
+        "warnings": result.warnings,
+        "note": (
+            "Discovery and taste only. Do not quote hours, addresses, prices or travel "
+            "times from these - verify with Google first."
+        ),
+    }
+
+
+async def _discover_restaurants(context: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    if context.budget_left() <= 0:
+        return {"error": "search budget exhausted for this turn"}
+    context.searches_used += 1
+
+    known = {**context.state.entities, **{e.entity_id: e for e in context.pending_entity_ops}}
+    outcome = await context.toolbox.discovery.discover(
+        query=args["query"],
+        near=args["near"],
+        existing_entities=known,
+        limit=min(int(args.get("limit", 5)), 8),
+        min_rating=args.get("min_rating", 4.0),
+    )
+
+    context.pending_entity_ops.extend(outcome.entities.values())
+    context.pending_evidence.update(outcome.evidence)
+
+    return {
+        "recommendations": [
+            {
+                "entity_id": rec.entity_id,
+                "name": rec.ranked.place.name,
+                "rating": rec.ranked.place.rating,
+                "rating_count": rec.ranked.place.rating_count,
+                "price_level": rec.ranked.place.price_level,
+                "score": rec.ranked.score.total,
+                "dimensions": rec.ranked.score.dimensions,
+                "pros": rec.ranked.pros,
+                "cons": rec.ranked.cons,
+                "evidence_refs": rec.evidence_ids,
+                "community": (
+                    {
+                        "sources": rec.signal.source_count,
+                        "sentiment": rec.signal.sentiment,
+                        "themes": rec.signal.themes,
+                    }
+                    if rec.signal
+                    else None
+                ),
+            }
+            for rec in outcome.recommendations
+        ],
+        "evidence": [
+            {
+                "evidence_id": record.evidence_id,
+                "url": record.url,
+                "title": record.title,
+                "source_type": record.source_type,
+                "source_authority": record.source_authority,
+            }
+            for record in outcome.evidence.values()
+        ],
+        "unresolved_mentions": [
+            {"name": mention.name, "why": mention.resolution_note}
+            for mention in outcome.unresolved_mentions
+        ],
+        "google_only": outcome.google_only,
+        "warnings": outcome.warnings,
+    }
 
 
 MAX_AUTO_DETAILS = 24
@@ -522,6 +692,15 @@ async def _apply_trip_patch(context: ToolContext, args: dict[str, Any]) -> dict[
         }
         for entity in context.pending_entity_ops
     ]
+    # Evidence lands with the places it backs, so evidence_refs never dangle.
+    entity_ops += [
+        {
+            "op": "add" if evidence_id not in context.state.evidence else "set",
+            "path": f"/evidence/{evidence_id}",
+            "value": record.model_dump(mode="json"),
+        }
+        for evidence_id, record in context.pending_evidence.items()
+    ]
     itinerary_ops = [op.model_dump(mode="json") for op in proposal.operations]
 
     plans: list[dict[str, Any]] = []
@@ -555,6 +734,8 @@ async def _apply_trip_patch(context: ToolContext, args: dict[str, Any]) -> dict[
 
 
 HANDLERS = {
+    "research_web": _research_web,
+    "discover_restaurants": _discover_restaurants,
     "search_places": _search_places,
     "get_place_details": _get_place_details,
     "get_routes": _get_routes,

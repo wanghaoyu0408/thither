@@ -7,7 +7,7 @@ recommended what it did, and replans *part* of a trip when you ask.
 It does not book anything, does not touch payments, and does not treat LLM-generated
 facts as authoritative.
 
-## Status: Milestones 1-3 complete
+## Status: Milestones 1-4 complete
 
 The architectural claim this project rests on is that **`TripState` is the source of
 truth and the LLM may never overwrite it freely**. Every mutation goes through a
@@ -18,7 +18,7 @@ validated `TripPatch` with revision control, lock enforcement and rejection memo
 | 1 | TripState, patch engine, locks, rejections, persistence, REST | done |
 | 2 | Google Places + Routes behind replaceable providers | done |
 | 3 | Itinerary generation, validator, scoped local replanning, agent | done |
-| 4 | Web research (Xiaohongshu / Reddit / blogs via web search) | not started |
+| 4 | Web research: Xiaohongshu / Reddit / blogs, resolved against Google | done |
 | 5 | Flights (Duffel) | not started |
 | 6 | Hotels (neighborhood first, then Amadeus inventory) | not started |
 | 7 | Multi-traveler preferences, group scoring, fairness | not started |
@@ -64,7 +64,7 @@ Then open http://127.0.0.1:8000/docs.
 .venv/Scripts/python.exe -m pytest -q
 ```
 
-302 tests, no network, no API keys. The `tests/scenarios/` files map one-to-one onto each
+364 tests, no network, no API keys. The `tests/scenarios/` files map one-to-one onto each
 milestone's acceptance criteria.
 
 Contract tests against the real Google APIs are opt-in, since they cost quota:
@@ -95,6 +95,17 @@ it easier."* — and prints a per-day before/after diff so "only Day 3 changed" 
 rather than asserted. The same criterion is also proved without an LLM in
 `tests/scenarios/test_milestone3_acceptance.py`, so a model having an off day cannot make
 the milestone look broken.
+
+### Milestone 4 acceptance
+
+```bash
+.venv/Scripts/python.exe scripts/discover_restaurants.py
+```
+
+Runs the spec §20 pipeline twice — once with every source, once with Xiaohongshu removed
+entirely — and prints each recommendation's Google facts beside its community sources,
+plus which mentions could not be matched to a real place. Each tier reports what it did,
+so "no Xiaohongshu links" is distinguishable from "Xiaohongshu found nothing".
 
 ## How a change reaches the database
 
@@ -178,6 +189,26 @@ clustering, scheduling, routing, validation and patching are ordinary code (spec
 about to schedule, rather than relying on the model to remember — an itinerary that is
 checked beats one that merely reports itself unverified.
 
+**Facts and opinions are stored in different places.** `PlaceEntity` holds only what
+Google asserts. What people said lives in `TripState.evidence`, referenced by
+`DecisionOption.evidence_refs`. Keeping them apart is structural, not stylistic: it is
+what stops "someone on Reddit liked it" being handled like "it opens at 11:30".
+
+**Source URLs come only from citation annotations, never from model prose.** A model asked
+for a source will write a plausible URL that does not exist. The research provider runs
+two passes — a `web_search` call whose `url_citation` annotations are the only source of
+URLs, then a structured pass that refers to those citations *by index*. An index that does
+not resolve is dropped rather than guessed.
+
+**Community signal reorders; it never rescues.** Hard filters run before signal is
+consulted, so a place that is permanently closed or below the rating floor cannot be
+saved by being fashionable. A place nobody mentioned is not penalised for it — the
+dimension is simply absent, the same way a missing price level is.
+
+**Xiaohongshu is never load-bearing** (spec §36). The community tier and the open-web tier
+are separate searches, and each tier's outcome — found, empty, failed, or not run — is
+recorded rather than inferred from the absence of links.
+
 **Opening hours are read from `periods`, never from `openNow`.** That flag is a snapshot
 from whenever the place was fetched; ours says `false` about an afternoon in August and
 would mark half the shortlist shut for a trip in October. The parser handles the cases
@@ -235,4 +266,6 @@ DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/travel_agent .venv/Sc
 
 `trip_events` is append-only and names what changed (`constraint_added`, `lock_added`,
 `itinerary_updated`, ...) alongside the raw operations. `tool_cache` holds the durable
-half of the cache and is safe to delete at any time.
+half of the cache and is safe to delete at any time — including the research entries,
+because anything that actually backed a recommendation was promoted into
+`TripState.evidence` when it did so, carrying its original `observed_at`.

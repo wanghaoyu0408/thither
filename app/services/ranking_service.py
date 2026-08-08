@@ -16,6 +16,7 @@ import math
 from dataclasses import dataclass, field
 
 from app.models.decision import DecisionScore
+from app.models.evidence import CommunitySignal
 from app.models.place import PlaceSummary
 from app.services.geo import haversine_km
 
@@ -30,6 +31,9 @@ class RankingWeights:
     confidence: float = 0.25
     proximity: float = 0.20
     price_fit: float = 0.10
+    # What the community said. Modest on purpose: it reorders places Google has
+    # already vouched for, and can never rescue one that failed a hard filter.
+    community: float = 0.15
 
 
 @dataclass
@@ -64,12 +68,39 @@ def _price_fit_score(place: PlaceSummary, target: int | None) -> float | None:
     return max(0.0, 1.0 - abs(place.price_level - target) / 4.0)
 
 
+def _community_score(signal: CommunitySignal | None) -> float | None:
+    """How much the community liked it, from counts rather than a judgement call.
+
+    Independent sources count for more than repeat mentions of the same one, and
+    negative sentiment pulls down rather than merely failing to lift.
+    """
+    if signal is None or signal.mention_count == 0:
+        return None
+
+    breadth = min(1.0, signal.source_count / 3.0)
+    depth = min(1.0, math.log10(signal.mention_count + 1) / math.log10(6))
+    base = 0.6 * breadth + 0.4 * depth
+
+    if signal.sentiment == "negative":
+        base *= 0.2
+    elif signal.sentiment == "mixed":
+        base *= 0.7
+    elif signal.sentiment == "unclear":
+        base *= 0.8
+
+    if signal.has_editorial_backing:
+        base = min(1.0, base * 1.15)
+
+    return round(base, 4)
+
+
 def score_place(
     place: PlaceSummary,
     *,
     origin: tuple[float, float] | None = None,
     target_price_level: int | None = None,
     weights: RankingWeights | None = None,
+    signal: CommunitySignal | None = None,
 ) -> RankedPlace:
     weights = weights or RankingWeights()
 
@@ -78,6 +109,7 @@ def score_place(
         "confidence": (_confidence_score(place), weights.confidence),
         "proximity": (_proximity_score(place, origin), weights.proximity),
         "price_fit": (_price_fit_score(place, target_price_level), weights.price_fit),
+        "community": (_community_score(signal), weights.community),
     }
 
     dimensions = {
@@ -108,6 +140,16 @@ def score_place(
         km = haversine_km(origin[0], origin[1], place.lat, place.lng)
         (pros if km <= 1.0 else cons).append(f"{km:.1f} km from the area centre (straight line)")
 
+    if signal is not None and signal.mention_count:
+        sources = ", ".join(signal.source_types)
+        phrase = (
+            f"mentioned by {signal.source_count} source(s) ({sources}), "
+            f"sentiment {signal.sentiment}"
+        )
+        (cons if signal.sentiment == "negative" else pros).append(phrase)
+        if signal.themes:
+            pros.append("community notes: " + "; ".join(signal.themes[:3]))
+
     return RankedPlace(
         place=place,
         score=DecisionScore(total=round(total, 4), dimensions=dimensions, notes=notes),
@@ -125,8 +167,14 @@ def rank_places(
     min_rating: float | None = None,
     min_rating_count: int | None = None,
     limit: int | None = None,
+    signals: dict[str, CommunitySignal] | None = None,
 ) -> list[RankedPlace]:
-    """Hard-filter, then score, then sort. Filters disqualify; they never discount."""
+    """Hard-filter, then score, then sort. Filters disqualify; they never discount.
+
+    Note the order: filtering happens before community signal is looked at, so
+    being fashionable cannot rescue a place that is shut permanently or below the
+    rating floor. Buzz reorders what Google has already vouched for.
+    """
     survivors = [
         place
         for place in places
@@ -138,8 +186,15 @@ def rank_places(
         )
     ]
 
+    by_place_id = signals or {}
     ranked = [
-        score_place(place, origin=origin, target_price_level=target_price_level, weights=weights)
+        score_place(
+            place,
+            origin=origin,
+            target_price_level=target_price_level,
+            weights=weights,
+            signal=by_place_id.get(place.place_id),
+        )
         for place in survivors
     ]
     # place_id breaks ties so the order is stable across runs.

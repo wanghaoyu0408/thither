@@ -113,8 +113,10 @@ def _check_siblings(before: dict[str, Any], after: dict[str, Any]) -> list[Patch
         if key in _ALWAYS_MUTABLE or key == "itinerary":
             continue
 
-        if key == "entities":
-            errors.extend(_check_entities(before.get(key) or {}, after.get(key) or {}))
+        # Registries a scoped patch may grow but not rewrite. Both obey the same
+        # rule, so both go through the same check rather than a copy of it.
+        if key in ("entities", "evidence"):
+            errors.extend(_check_additive(key, before.get(key) or {}, after.get(key) or {}))
             continue
 
         if _canonical(before.get(key)) != _canonical(after.get(key)):
@@ -128,29 +130,36 @@ def _check_siblings(before: dict[str, Any], after: dict[str, Any]) -> list[Patch
     return errors
 
 
-def _check_entities(before: dict[str, Any], after: dict[str, Any]) -> list[PatchError]:
-    """New places are fine; rewriting or dropping known ones is not."""
+def _check_additive(
+    registry: str, before: dict[str, Any], after: dict[str, Any]
+) -> list[PatchError]:
+    """New records are fine; rewriting or dropping known ones is not.
+
+    A replan may legitimately turn up a place - or a source backing it - the
+    trip has never seen. Quietly rewriting one it already had is a different
+    thing, and stays out of bounds.
+    """
     errors: list[PatchError] = []
 
-    for entity_id in sorted(set(before) - set(after)):
+    for key in sorted(set(before) - set(after)):
         errors.append(
             PatchError(
                 code="SCOPE_VIOLATION",
-                message=f"entity {entity_id!r} was removed under a day-scoped patch",
-                path=f"/entities/{entity_id}",
+                message=f"{registry} {key!r} was removed under a day-scoped patch",
+                path=f"/{registry}/{key}",
             )
         )
 
-    for entity_id in sorted(set(before) & set(after)):
-        if _canonical(before[entity_id]) != _canonical(after[entity_id]):
+    for key in sorted(set(before) & set(after)):
+        if _canonical(before[key]) != _canonical(after[key]):
             errors.append(
                 PatchError(
                     code="SCOPE_VIOLATION",
                     message=(
-                        f"entity {entity_id!r} was modified under a day-scoped patch; "
-                        "scoped patches may add entities but not change them"
+                        f"{registry} {key!r} was modified under a day-scoped patch; "
+                        f"scoped patches may add {registry} but not change them"
                     ),
-                    path=f"/entities/{entity_id}",
+                    path=f"/{registry}/{key}",
                 )
             )
 
