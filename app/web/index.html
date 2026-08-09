@@ -15,8 +15,12 @@
   --error: #a3352b; --error-soft: #fbeceb;
   --warn: #8a5a12; --warn-soft: #fbf3e4;
   --info: #3d5878; --info-soft: #eaeff5;
-  --r: 10px;
+  --r: 10px; --r-sm: 7px;
   --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+
+  /* Pane sizes. Written back by the drag handles and restored from
+     localStorage on load, so the shape of the window is the user's, not ours. */
+  --left: 250px; --right: 360px; --chat: 260px; --gw: 5px;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -30,15 +34,23 @@
   }
 }
 * { box-sizing: border-box; }
+/* `display` in a class rule beats the UA's `[hidden] { display: none }`, so
+   anything given a display below would ignore its own hidden attribute. */
+[hidden] { display: none !important; }
 html, body { height: 100%; }
 body {
   margin: 0; background: var(--bg); color: var(--ink);
-  font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans",
-        "Hiragino Sans", "Microsoft YaHei", sans-serif;
+  /* 1.6 rather than 1.55, and the CJK families named ahead of the fallback:
+     this app is used in Chinese, where the tighter leading crowds. */
+  font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans",
+        "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; background: none; border: none; padding: 0; }
+/* Inputs had a focus ring and buttons had nothing, so keyboard focus simply
+   vanished halfway across the page. */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 h1,h2,h3,h4 { margin: 0; font-weight: 600; }
 p { margin: 0; }
 
@@ -60,13 +72,42 @@ header {
 .chip.mono { font: 11px var(--mono); }
 button.chip:hover { border-color: var(--line-2); }
 
-main { flex: 1; display: grid; grid-template-columns: 216px 1fr 348px; min-height: 0; }
-@media (max-width: 1180px) { main { grid-template-columns: 200px 1fr; } aside.right { display: none; } }
-@media (max-width: 820px)  { main { grid-template-columns: 1fr; } aside.left { display: none; } }
+/* Five tracks: panel, grip, workspace, grip, panel. The grips are real grid
+   items rather than overlays, so nothing has to guess where the border is. */
+main {
+  flex: 1; min-height: 0; display: grid;
+  grid-template-columns: var(--left) var(--gw) 1fr var(--gw) var(--right);
+}
+@media (max-width: 1180px) {
+  main { grid-template-columns: var(--left) var(--gw) 1fr; }
+  aside.right, .grip[data-grip="right"] { display: none; }
+}
+@media (max-width: 820px) {
+  main { grid-template-columns: 1fr; }
+  aside.left, .grip[data-grip="left"] { display: none; }
+}
 aside, section.work { min-height: 0; display: flex; flex-direction: column; }
-aside.left  { border-right: 1px solid var(--line); background: var(--panel); }
-aside.right { border-left: 1px solid var(--line); background: var(--panel); }
-.scroll { overflow-y: auto; flex: 1; padding: 14px; }
+aside.left  { background: var(--panel); }
+aside.right { background: var(--panel); }
+.scroll { overflow-y: auto; flex: 1; padding: 10px 12px 16px; }
+
+.grip { background: var(--line); touch-action: none; position: relative; }
+.grip.v { cursor: col-resize; }
+.grip.h { cursor: row-resize; height: var(--gw); flex: none; }
+/* A 5px target is thin to hit, so the hit area is widened past the paint. */
+.grip::after {
+  content: ""; position: absolute; inset: -3px;
+}
+.grip:hover, .grip:focus-visible, .grip.dragging { background: var(--accent); outline: none; }
+/* Otherwise a drag across the workspace selects half the itinerary. */
+body.dragging { user-select: none; cursor: col-resize; }
+
+.side-top {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 12px 6px; flex: none;
+}
+.side-top .eyebrow { margin: 0; }
+form.new { flex: none; padding: 0 12px 12px; }
 
 .eyebrow {
   font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em;
@@ -76,45 +117,71 @@ aside.right { border-left: 1px solid var(--line); background: var(--panel); }
 
 /* --- trips ---------------------------------------------------------------- */
 .trip {
-  display: block; width: 100%; text-align: left; border-radius: var(--r);
-  padding: 9px 10px; margin-bottom: 2px; color: var(--ink);
-  border: 1px solid transparent;
+  display: block; width: 100%; text-align: left; border-radius: var(--r-sm);
+  padding: 7px 10px; margin-bottom: 1px; color: var(--ink);
+  border-left: 3px solid transparent; line-height: 1.35;
 }
 .trip:hover { background: var(--panel-2); }
-.trip.on { background: var(--accent-soft); }
-.trip b { display: block; font-weight: 550; font-size: 13.5px; }
-.trip small { color: var(--ink-3); font-size: 11.5px; }
+/* A rule rather than a filled block: with a list this long, twenty filled
+   rectangles is noise and one marked edge is an answer. */
+.trip.on { background: var(--accent-soft); border-left-color: var(--accent); }
+.trip b {
+  display: block; font-weight: 550; font-size: 13.5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.trip small {
+  display: block; color: var(--ink-3); font-size: 11.5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 
 form.new { display: grid; gap: 7px; }
 input, select {
-  width: 100%; padding: 7px 9px; border-radius: 8px;
+  width: 100%; padding: 7px 9px; border-radius: var(--r-sm);
   border: 1px solid var(--line); background: var(--panel-2); color: var(--ink);
 }
 input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 .btn {
-  padding: 8px 12px; border-radius: 8px; background: var(--accent);
+  padding: 8px 12px; border-radius: var(--r-sm); background: var(--accent);
   color: var(--bg); font-weight: 550; font-size: 13.5px; text-align: center;
 }
 @media (prefers-color-scheme: dark) { .btn { color: #10221d; } }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .btn.ghost { background: transparent; border: 1px solid var(--line); color: var(--ink-2); }
-.btn.sm { padding: 5px 9px; font-size: 12px; border-radius: 7px; }
+.btn.ghost:hover:not(:disabled) { border-color: var(--line-2); color: var(--ink); }
+.btn.sm { padding: 5px 9px; font-size: 12px; }
 
 /* --- workspace ------------------------------------------------------------ */
 section.work { background: var(--bg); }
 .tabs {
-  display: flex; gap: 2px; padding: 8px 20px 0; border-bottom: 1px solid var(--line);
-  background: var(--panel); flex: none;
+  display: flex; gap: 4px; padding: 8px 20px; border-bottom: 1px solid var(--line);
+  background: var(--panel); flex: none; align-items: center;
 }
+/* A filled pill, because grey-on-grey with a hairline underline reads as
+   disabled rather than as the tab you are on. */
 .tab {
-  padding: 8px 13px; font-size: 13.5px; color: var(--ink-3);
-  border-bottom: 2px solid transparent; margin-bottom: -1px;
+  padding: 6px 12px; font-size: 13.5px; color: var(--ink-3);
+  border-radius: 999px;
 }
-.tab:hover { color: var(--ink); }
-.tab.on { color: var(--ink); border-bottom-color: var(--accent); font-weight: 550; }
+.tab:hover { color: var(--ink); background: var(--panel-2); }
+.tab.on { color: var(--accent); background: var(--accent-soft); font-weight: 550; }
+/* A trip waiting on you says so on the tab as well as in the bar. */
+.tab.nudge::after {
+  content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 6px;
+  border-radius: 50%; background: var(--warn); vertical-align: middle;
+}
 .work-scroll { overflow-y: auto; flex: 1; padding: 22px 24px 28px; }
 .sheet { max-width: 780px; margin: 0 auto; }
+
+/* Said wherever you are standing, because the thing it is asking for lives on
+   one tab and the reason you notice is usually on another. */
+.notice {
+  flex: none; display: flex; align-items: center; gap: 12px;
+  padding: 9px 24px; font-size: 13px; color: var(--warn);
+  background: var(--warn-soft); border-bottom: 1px solid var(--line);
+}
+.notice span { flex: 1; }
+.notice .btn { background: var(--warn); color: var(--warn-soft); }
 
 /* --- overview: editable facts --------------------------------------------- */
 .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
@@ -219,7 +286,7 @@ section.work { background: var(--bg); }
 .q .free { margin-top: 8px; }
 .q .free input, .q .dates input {
   width: 100%; font: inherit; font-size: 13px; padding: 6px 8px;
-  border: 1px solid var(--line); border-radius: 7px;
+  border: 1px solid var(--line); border-radius: var(--r-sm);
   background: var(--panel-2); color: var(--ink);
 }
 .q .dates { display: flex; gap: 8px; }
@@ -242,8 +309,13 @@ section.work { background: var(--bg); }
   border-radius: var(--r); padding: 11px 13px; font-size: 12.5px; margin-bottom: 14px;
 }
 .gaps li { margin-left: 15px; }
-.go { display: flex; gap: 8px; margin-top: 18px; align-items: center; }
+.go { display: flex; gap: 8px; margin-top: 18px; align-items: center; flex-wrap: wrap; }
 .go .btn { font-size: 13px; }
+/* Beside the disabled button, not in a box somewhere above it. */
+.waiting { font-size: 12px; color: var(--warn); flex: 1 1 200px; }
+
+.asks { margin-bottom: 22px; }
+.asks .go { margin-top: 10px; }
 
 /* --- decisions ------------------------------------------------------------ */
 .dec { margin-bottom: 22px; }
@@ -321,7 +393,7 @@ section.work { background: var(--bg); }
   display: flex; align-items: center; justify-content: center; padding: 24px; z-index: 40;
 }
 .modal {
-  background: var(--panel); border-radius: 14px; max-width: 560px; width: 100%;
+  background: var(--panel); border-radius: var(--r); max-width: 560px; width: 100%;
   max-height: 82vh; overflow-y: auto; padding: 20px 22px;
   border: 1px solid var(--line);
 }
@@ -341,9 +413,13 @@ section.work { background: var(--bg); }
 }
 
 /* --- chat ----------------------------------------------------------------- */
-.composer { flex: none; border-top: 1px solid var(--line); background: var(--panel); padding: 10px 20px 14px; }
+.composer { flex: none; background: var(--panel); padding: 10px 20px 14px; }
 .composer .inner { max-width: 780px; margin: 0 auto; }
-.transcript { max-height: 30vh; overflow-y: auto; margin-bottom: 10px; }
+.chat {
+  flex: none; height: var(--chat); overflow-y: auto;
+  background: var(--panel); padding: 14px 20px 4px;
+}
+.chat .inner, .chat > * { max-width: 780px; margin-left: auto; margin-right: auto; }
 .msg { margin-bottom: 12px; font-size: 13.5px; }
 .msg .who { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.07em;
   color: var(--ink-3); font-weight: 600; margin-bottom: 3px; }
@@ -413,24 +489,29 @@ details.debug li { font: 11.5px/1.7 var(--mono); color: var(--ink-3); }
 
   <main>
     <aside class="left">
-      <div class="scroll">
+      <div class="side-top">
         <p class="eyebrow">Trips</p>
-        <div id="tripList"><p class="empty">None yet.</p></div>
-        <div class="block">
-          <p class="eyebrow">New trip</p>
-          <form class="new" id="newTrip">
-            <input name="title" placeholder="Title" required>
-            <input name="city" placeholder="Destination city" required>
-            <div class="row2"><input name="start" type="date" required><input name="end" type="date" required></div>
-            <div class="row2">
-              <input name="adults" type="number" min="1" max="16" value="2" title="Adults">
-              <input name="rooms" type="number" min="1" max="8" value="1" title="Rooms">
-            </div>
-            <button class="btn" type="submit">Create</button>
-          </form>
+        <button class="chip" id="newTripToggle" title="Create a trip">+ New</button>
+      </div>
+      <!-- Above the list, not below it. Behind nineteen trips it was 1362px
+           down a 656px scroll, which is the same as not being there. -->
+      <form class="new" id="newTrip" hidden>
+        <input name="title" placeholder="Title" required>
+        <input name="city" placeholder="Destination city" required>
+        <div class="row2"><input name="start" type="date" required><input name="end" type="date" required></div>
+        <div class="row2">
+          <input name="adults" type="number" min="1" max="16" value="2" title="Adults">
+          <input name="rooms" type="number" min="1" max="8" value="1" title="Rooms">
         </div>
+        <button class="btn" type="submit">Create</button>
+      </form>
+      <div class="scroll">
+        <div id="tripList"><p class="empty">None yet.</p></div>
       </div>
     </aside>
+
+    <div class="grip v" data-grip="left" role="separator" aria-orientation="vertical"
+         aria-label="Resize the trip list" tabindex="0" title="Drag to resize · double-click to reset"></div>
 
     <section class="work">
       <div class="tabs" id="tabs" hidden>
@@ -440,6 +521,7 @@ details.debug li { font: 11.5px/1.7 var(--mono); color: var(--ink-3); }
         <button class="tab" data-view="decisions">Decisions</button>
         <button class="tab" data-view="research">Research</button>
       </div>
+      <div class="notice" id="notice" hidden></div>
       <div class="work-scroll"><div class="sheet" id="work">
         <div class="welcome">
           <h2>A trip you can see, not just read about</h2>
@@ -449,9 +531,15 @@ details.debug li { font: 11.5px/1.7 var(--mono); color: var(--ink-3); }
           <p style="margin-top:14px"><code>Plan 5 days in Tokyo, we care about food</code></p>
         </div>
       </div></div>
+      <!-- The conversation gets its own scroll and its own height. It used to
+           live inside the composer, which is `flex: none`, so six messages took
+           320px of a 671px column and left the trip itself 304px. -->
+      <div class="grip h" data-grip="chat" id="chatGrip" hidden role="separator"
+           aria-orientation="horizontal" aria-label="Resize the conversation"
+           tabindex="0" title="Drag to resize · double-click to reset"></div>
+      <div class="chat" id="transcript" hidden></div>
       <div class="composer">
         <div class="inner">
-          <div class="transcript" id="transcript" hidden></div>
           <div class="ask">
             <textarea id="input" rows="1" placeholder="Tell the agent what to change…" disabled></textarea>
             <button class="btn" id="send" disabled>Send</button>
@@ -460,6 +548,9 @@ details.debug li { font: 11.5px/1.7 var(--mono); color: var(--ink-3); }
         </div>
       </div>
     </section>
+
+    <div class="grip v" data-grip="right" role="separator" aria-orientation="vertical"
+         aria-label="Resize the side panel" tabindex="0" title="Drag to resize · double-click to reset"></div>
 
     <aside class="right"><div class="scroll">
       <div class="mapwrap" id="mapwrap" hidden>
@@ -480,6 +571,87 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
 
 const S = { tripId: null, trip: null, over: null, view: "itinerary", busy: false,
             lastDiff: null, mapDay: null, decisions: null, intake: null };
+
+/* --- resizable panes ------------------------------------------------------
+   Three handles, one mechanism. Each writes a custom property on :root and
+   remembers it, because a window shape you have to set up again on every
+   reload is not really adjustable. */
+const PANES = {
+  left:  { prop: "--left",  def: 250, min: 200, max: () => Math.min(560, innerWidth - 480),
+           measure: (e, main) => e.clientX - main.getBoundingClientRect().left },
+  right: { prop: "--right", def: 360, min: 280, max: () => Math.min(640, innerWidth - 520),
+           measure: (e, main) => main.getBoundingClientRect().right - e.clientX },
+  chat:  { prop: "--chat",  def: 260, min: 96,  max: () => Math.round(innerHeight * 0.6),
+           measure: (e) => $("transcript").getBoundingClientRect().bottom - e.clientY },
+};
+const LAYOUT_KEY = "ta.layout";
+
+function setPane(key, px) {
+  const pane = PANES[key];
+  const value = Math.round(Math.max(pane.min, Math.min(pane.max(), px)));
+  document.documentElement.style.setProperty(pane.prop, `${value}px`);
+  return value;
+}
+
+function saveLayout() {
+  const style = document.documentElement.style;
+  const kept = {};
+  for (const [key, pane] of Object.entries(PANES)) {
+    const value = style.getPropertyValue(pane.prop);
+    if (value) kept[key] = parseInt(value, 10);
+  }
+  try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(kept)); } catch {}
+}
+
+function restoreLayout() {
+  let kept = {};
+  try { kept = JSON.parse(localStorage.getItem(LAYOUT_KEY) || "{}"); } catch {}
+  for (const [key, value] of Object.entries(kept)) {
+    if (PANES[key] && Number.isFinite(value)) setPane(key, value);
+  }
+}
+
+function wireGrips() {
+  const main = document.querySelector("main");
+  document.querySelectorAll(".grip").forEach((grip) => {
+    const key = grip.dataset.grip;
+    grip.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      // Capture is a nicety; the listeners go on the window so the drag keeps
+      // working when the cursor leaves a five-pixel strip, which it does
+      // immediately.
+      try { grip.setPointerCapture(event.pointerId); } catch {}
+      grip.classList.add("dragging");
+      document.body.classList.add("dragging");
+      const move = (e) => setPane(key, PANES[key].measure(e, main));
+      const up = () => {
+        grip.classList.remove("dragging");
+        document.body.classList.remove("dragging");
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        saveLayout();
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+    });
+    // Back to the default, for when a drag has gone somewhere silly.
+    grip.addEventListener("dblclick", () => {
+      document.documentElement.style.removeProperty(PANES[key].prop);
+      saveLayout();
+    });
+    // Usable without a mouse, which also makes it usable with a trackpad you
+    // are fighting with.
+    grip.addEventListener("keydown", (event) => {
+      const step = { ArrowLeft: -16, ArrowRight: 16, ArrowUp: -16, ArrowDown: 16 }[event.key];
+      if (step === undefined) return;
+      event.preventDefault();
+      const current = parseInt(
+        getComputedStyle(document.documentElement).getPropertyValue(PANES[key].prop), 10);
+      setPane(key, current + (key === "right" || key === "chat" ? -step : step));
+      saveLayout();
+    });
+  });
+}
 
 async function api(path, opts) {
   const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
@@ -528,6 +700,8 @@ $("newTrip").onsubmit = async (e) => {
       },
     })});
     e.target.reset();
+    e.target.hidden = true;
+    $("newTripToggle").textContent = "+ New";
     await loadTrips();
     await selectTrip(trip.trip_id);
   } catch (err) { toast("Could not create: " + err.message); }
@@ -608,8 +782,36 @@ async function loadIntake() {
   catch (err) { toast(err.message); return; }
   // The tab is only there while it has something to say. Once the brief is
   // confirmed it stays available but stops being where the trip starts.
-  $("intakeTab").hidden = false;
-  $("intakeTab").textContent = S.intake.research_allowed ? "Brief" : "Start here";
+  const tab = $("intakeTab");
+  tab.hidden = false;
+  // Named for what it wants. The agent says 请确认行程概要 and the traveller has
+  // to be able to find that word on the screen; "Brief" was not it.
+  //
+  // Only while confirmation is actually holding something up, though. A trip
+  // that predates intake researches perfectly well unconfirmed, and badgering
+  // it to confirm a brief nothing is waiting on is just noise.
+  const blocked = !S.intake.research_allowed;
+  tab.textContent = !blocked ? "Brief"
+    : S.intake.ready_to_confirm ? "Confirm brief" : "Start here";
+  tab.classList.toggle("nudge", blocked && S.intake.ready_to_confirm);
+  paintNotice();
+}
+
+/** One line above the workspace whenever planning has not been allowed to
+ *  start, wherever in the app you happen to be standing. */
+function paintNotice() {
+  const bar = $("notice");
+  const view = S.intake;
+  if (!view || view.research_allowed || S.view === "intake") {
+    bar.hidden = true;
+    return;
+  }
+  bar.hidden = false;
+  bar.innerHTML = `<span>${view.ready_to_confirm
+    ? "Planning has not started — the brief is waiting for you to confirm it."
+    : "Planning has not started — the brief still needs a couple of things."}</span>
+    <button class="btn sm" id="noticeBtn">Review brief</button>`;
+  $("noticeBtn").onclick = () => { S.view = "intake"; render(); };
 }
 
 function paintHeader() {
@@ -668,6 +870,7 @@ function render() {
   else if (S.view === "decisions") out.push(decisionsHtml());
   else out.push(researchHtml());
   $("work").innerHTML = out.join("");
+  paintNotice();
   wireWorkspace();
   renderRail();
   paintMap();   // async on purpose: the workspace must not wait on Google.
@@ -1062,15 +1265,21 @@ function intakeHtml() {
       ${briefCardHtml(view, { confirmed: true })}</div>`;
   }
 
+  // Questions go *above* the brief, never instead of it. They used to replace
+  // it, so a trip with anything outstanding had no confirm button in the page
+  // at all - while the agent went on asking to have the brief confirmed.
   const questions = view.questions.map(questionHtml).join("");
   return `<div class="intake">
-    <h2>${questions ? "A couple of things first" : "Does this look right?"}</h2>
-    <p class="lede">${questions
-      ? "Only what actually changes the plan — everything else can wait."
-      : "Nothing is searched until you say so."}</p>
-    ${questions ? questions + `<div class="go">
-        <button class="btn" id="answerBtn">Save answers</button>
-      </div>` : briefCardHtml(view, { confirmed: false })}
+    <h2>Does this look right?</h2>
+    <p class="lede">Nothing is searched until you say so.</p>
+    ${questions ? `<div class="asks">
+      <p class="eyebrow">Still asking</p>
+      ${questions}
+      <div class="go"><button class="btn ghost sm" id="answerBtn">Save answers</button>
+        <span class="empty" style="font-size:12px">Or just tell the agent in the chat.</span>
+      </div>
+    </div>` : ""}
+    ${briefCardHtml(view, { confirmed: false })}
   </div>`;
 }
 
@@ -1107,9 +1316,7 @@ function briefCardHtml(view, { confirmed }) {
   const sec = (title, body) => body ? `<div class="brief-sec">
     <p class="eyebrow">${title}</p>${body}</div>` : "";
 
-  return `${view.gaps.length ? `<div class="gaps">Still needed before planning:
-      <ul>${view.gaps.map((g) => `<li>${esc(g.why)}</li>`).join("")}</ul></div>` : ""}
-    <div class="brief-card">
+  return `<div class="brief-card">
       <h3>${esc(view.headline)}</h3>
       ${view.travelers
         ? `<p class="who">${esc(view.travelers)}</p>`
@@ -1124,7 +1331,11 @@ function briefCardHtml(view, { confirmed }) {
     ${confirmed ? "" : `<div class="go">
       <button class="btn" id="confirmBtn" ${view.ready_to_confirm ? "" : "disabled"}>Start planning</button>
       <button class="btn ghost sm" id="editBriefBtn">Edit</button>
-      <span class="empty" style="font-size:12px">Nothing is searched until you do.</span>
+      ${view.gaps.length
+        // A disabled control with no stated reason is the same failure in a
+        // smaller box, so what it is waiting for sits right beside it.
+        ? `<span class="waiting">Waiting on: ${view.gaps.map((g) => esc(g.why)).join("; ")}</span>`
+        : '<span class="empty" style="font-size:12px">Nothing is searched until you do.</span>'}
     </div>`}`;
 }
 
@@ -1783,11 +1994,19 @@ async function showWhy(path) {
 
 /* --- chat ----------------------------------------------------------------- */
 
+/** The conversation and its handle appear and disappear together. */
+function showChat(on) {
+  $("transcript").hidden = !on;
+  $("chatGrip").hidden = !on;
+}
+
 async function loadMessages() {
   const messages = await api(`/trips/${S.tripId}/messages?limit=60`);
   const box = $("transcript");
-  box.hidden = !messages.length;
-  box.innerHTML = messages.slice(-8).map((m) =>
+  showChat(messages.length > 0);
+  // All of them. The old eight-message cap was there because the transcript
+  // was squeezed into the composer; it has its own scroll now.
+  box.innerHTML = messages.map((m) =>
     `<div class="msg ${m.role}"><div class="who">${m.role === "user" ? "You" : "Agent"}</div>
      <div class="body">${esc(m.content)}</div></div>`).join("");
   box.scrollTop = box.scrollHeight;
@@ -1797,7 +2016,7 @@ async function send(text) {
   if (S.busy || !text.trim()) return;
   S.busy = true; $("input").disabled = true; $("send").disabled = true;
 
-  const box = $("transcript"); box.hidden = false;
+  const box = $("transcript"); showChat(true);
   box.insertAdjacentHTML("beforeend",
     `<div class="msg user"><div class="who">You</div><div class="body">${esc(text)}</div></div>`);
   const started = Date.now();
@@ -1870,6 +2089,15 @@ function autosize() {
 }
 $("input").addEventListener("input", autosize);
 
+$("newTripToggle").onclick = () => {
+  const form = $("newTrip");
+  form.hidden = !form.hidden;
+  $("newTripToggle").textContent = form.hidden ? "+ New" : "Cancel";
+  if (!form.hidden) form.querySelector("input").focus();
+};
+
+restoreLayout();
+wireGrips();
 loadTrips().catch((err) =>
   $("tripList").innerHTML = `<p class="empty">Cannot reach the server: ${esc(err.message)}</p>`);
 </script>

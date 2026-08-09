@@ -22,6 +22,7 @@ from app.agent.tool_registry import (
 )
 from app.config import Settings
 from app.db.repository import TripRepository
+from app.models.intake import ClarificationQuestion
 from app.models.trip import TripState
 from app.services import intake_service
 from app.services.intake_service import missing_blocking, resolve_date, today_at
@@ -258,3 +259,88 @@ async def test_a_country_is_allowed_beside_a_place_already_known():
     await _update_trip_brief(context, {"destination_country": "United States"})
 
     assert brief_after(context, "/brief/destination/country") == "United States"
+
+
+# --- 5. a spent question does not hold the trip shut --------------------------
+
+
+def one_gap_left() -> TripState:
+    """A trip waiting on lodging scope, and a question asking for it."""
+    state = trip(destination_city="Los Angeles")
+    state.brief.dates.start = date(2026, 9, 1)
+    state.brief.dates.end = date(2026, 9, 3)
+    state.brief.scope.flights = "not_needed"
+    state.intake.questions.append(
+        ClarificationQuestion(
+            question="住宿需要我帮你找酒店，还是你们已经安排好了？",
+            kind="single_choice",
+            requirement_id="scope.lodging",
+            fills="/brief/scope/lodging",
+        )
+    )
+    return state
+
+
+async def test_a_question_answered_in_the_chat_stops_holding_the_brief_shut():
+    """The bug this whole change exists for.
+
+    The traveller said "找酒店" in the conversation, the agent recorded the
+    scope, and the gap closed - but the question stayed unanswered forever,
+    keeping `ready_to_confirm` false and the confirm button out of the DOM. The
+    trip could not be confirmed and so could never be researched.
+    """
+    state = one_gap_left()
+    question = state.intake.questions[0]
+    assert intake_service.outstanding_questions(state) == [question]
+    assert intake_service.ready_to_confirm(state) is False
+
+    context = context_for(state)
+    reply = await _update_trip_brief(context, {"scope": {"lodging": "plan"}})
+
+    # The tool flips the trip to awaiting_confirmation, which it decides with
+    # the same readiness test the endpoint and the button use. Before the fix
+    # the outstanding question vetoed this and nothing ever moved.
+    operations = reply["__patches__"][0]["operations"]
+    assert {
+        "op": "set",
+        "path": "/intake/status",
+        "value": "awaiting_confirmation",
+    } in operations
+
+    state.brief.scope.lodging = "plan"
+    assert intake_service.outstanding_questions(state) == []
+    assert intake_service.ready_to_confirm(state) is True
+    # Spent, not answered. Nobody typed anything into it, and writing an
+    # `answered_at` would claim they had.
+    assert question.answered is False
+    assert question in state.intake.unanswered
+
+
+@pytest.mark.parametrize("lodging", ["unknown", "plan"])
+async def test_ready_to_confirm_predicts_what_confirm_actually_does(client, session, lodging):
+    """A readiness flag that does not predict the thing it gates is worse than
+    no flag: it used to be stricter than the endpoint, so the browser disabled a
+    button the server would have honoured."""
+    state = one_gap_left()
+    state.brief.scope.lodging = lodging
+    expected = intake_service.ready_to_confirm(state)
+
+    stored = await TripRepository(session).create(state)
+    response = await client.post(f"/trips/{stored.trip_id}/intake/confirm")
+
+    assert (response.status_code == 200) is expected
+    assert (response.json().get("trip", {}).get("intake", {}).get("status") == "confirmed") is (
+        expected
+    )
+
+
+async def test_the_model_is_not_shown_a_question_it_no_longer_needs_to_ask():
+    """`questions_awaiting_answer` is what stops the agent re-asking. A spent
+    question left in there is an instruction to ask it again, every turn."""
+    state = one_gap_left()
+    assert summarize(state)["intake"]["questions_awaiting_answer"] == [
+        state.intake.questions[0].question
+    ]
+
+    state.brief.scope.lodging = "plan"
+    assert summarize(state)["intake"]["questions_awaiting_answer"] == []

@@ -6,6 +6,7 @@ one: no provider is touched before the traveller confirms, asserted by giving
 the agent a provider that explodes rather than by reading a message and hoping.
 """
 
+from datetime import date
 
 from app.agent.tool_registry import (
     ToolContext,
@@ -18,7 +19,7 @@ from app.config import Settings
 from app.db.repository import TripRepository
 from app.models.entity import PlaceEntity
 from app.models.intake import ClarificationQuestion
-from app.models.trip import TripState
+from app.models.trip import TripDates, TripState
 from app.services import json_pointer as jp
 from app.services.intake_service import (
     intake_view,
@@ -203,9 +204,22 @@ async def test_a_trip_that_predates_intake_still_researches(session):
     assert research_allowed(state) is True
 
     # An outstanding question does hold it, because something is genuinely
-    # waiting on the traveller.
-    state.intake.questions.append(ClarificationQuestion(question="When exactly?"))
+    # waiting on the traveller. "Outstanding" means it names a gap that is still
+    # open - which every question does, since `ask_clarifications` will not ask
+    # one that does not.
+    dates = ClarificationQuestion(question="When exactly?", requirement_id="dates")
+    state.intake.questions.append(dates)
     assert research_allowed(state) is False
+
+    # And once that gap closes by some other route - said in the chat and
+    # recorded to the brief - the question is spent and stops holding anything,
+    # even though nobody ever typed an answer into it.
+    state.brief.dates = TripDates(start=date(2026, 8, 10), end=date(2026, 8, 14))
+    assert "dates" not in {gap.requirement_id for gap in missing_blocking(state)}
+    # Spent, not answered. We never learned what they would have typed, only
+    # that it stopped mattering, and forging an answer would say otherwise.
+    assert dates.answered is False
+    assert research_allowed(state) is True
 
     # But a new trip that intake has actually touched is held.
     fresh = blank_trip()

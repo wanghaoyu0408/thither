@@ -176,6 +176,32 @@ def resolve_date(value: str, today: date) -> date | None:
     return None
 
 
+def outstanding_questions(state: TripState) -> list[ClarificationQuestion]:
+    """Unanswered questions whose gap is still open.
+
+    A question is a means to close a gap, not a fact in its own right, and
+    `ask_clarifications` will not let one be asked that does not name a gap. So
+    when the gap closes by any route - the workspace form, an inline brief edit,
+    or the traveller simply saying it in the chat and the agent recording it -
+    the question is spent.
+
+    Counting a spent question as pending is what left a real trip with no way
+    forward: the lodging question was answered in conversation, the scope was
+    written to the brief, the gap disappeared, and the question sat there
+    unanswered forever, holding confirmation shut on something nobody was still
+    waiting to hear.
+
+    Spent is not answered. Nothing here writes `answered_at` - we do not know
+    what they would have picked, only that it stopped mattering.
+    """
+    open_ids = {gap.requirement_id for gap in missing_blocking(state)}
+    return [
+        question
+        for question in state.intake.unanswered
+        if question.requirement_id in open_ids
+    ]
+
+
 def has_research(state: TripState) -> bool:
     return bool(state.entities or state.itinerary.days)
 
@@ -197,7 +223,7 @@ def research_allowed(state: TripState) -> bool:
     # a single brief fact flipped the trip to `awaiting_confirmation` and gated
     # a trip that had been planning happily for weeks - the agent blocked itself
     # by writing something down.
-    if has_research(state) and not state.intake.unanswered:
+    if has_research(state) and not outstanding_questions(state):
         return True
     return False
 
@@ -223,7 +249,15 @@ def should_shop_for(state: TripState, part: str) -> bool:
 
 
 def ready_to_confirm(state: TripState) -> bool:
-    return not missing_blocking(state) and not state.intake.unanswered
+    """Whether `POST /trips/{id}/intake/confirm` would accept it.
+
+    Exactly the endpoint's own test, and deliberately nothing more. It used to
+    also require no unanswered questions - a stricter rule than the server
+    enforced, which meant the browser disabled a button the backend was ready to
+    honour. A readiness flag that does not predict the thing it gates is worse
+    than no flag.
+    """
+    return not missing_blocking(state)
 
 
 # --- the summary a person confirms -------------------------------------------
@@ -307,7 +341,7 @@ def intake_view(state: TripState) -> IntakeView:
         priorities=list(state.brief.priorities),
         preferences=_preference_lines(state),
         gaps=gaps,
-        questions=state.intake.unanswered,
+        questions=outstanding_questions(state),
         confirmed_at=(
             state.intake.confirmed_at.isoformat() if state.intake.confirmed_at else None
         ),

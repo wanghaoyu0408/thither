@@ -54,6 +54,7 @@ from app.services.hotel_service import (
 )
 from app.services.intake_service import (
     missing_blocking,
+    ready_to_confirm,
     research_allowed,
     resolve_date,
     today_at,
@@ -1286,13 +1287,10 @@ async def _update_trip_brief(context: ToolContext, args: dict[str, Any]) -> dict
     context.pending_brief_ops.extend(operations)
 
     # Whether the brief is complete enough to show is decided here, from the
-    # state, not by the model announcing it.
+    # state, not by the model announcing it - and by the same function the
+    # confirm endpoint and the workspace button use, so all three agree.
     working = _working_state(context)
-    if (
-        not missing_blocking(working)
-        and not working.intake.unanswered
-        and working.intake.status == "collecting"
-    ):
+    if ready_to_confirm(working) and working.intake.status == "collecting":
         context.pending_intake_status = "awaiting_confirmation"
         operations = operations + [
             {"op": "set", "path": "/intake/status", "value": "awaiting_confirmation"}

@@ -11,7 +11,12 @@ from app.models.common import utcnow
 from app.models.trip import TripState, TripTraveler
 from app.services.conflict_service import detect_conflicts
 from app.services.decision_service import label_for
-from app.services.intake_service import missing_blocking, research_allowed, today_at
+from app.services.intake_service import (
+    missing_blocking,
+    outstanding_questions,
+    research_allowed,
+    today_at,
+)
 from app.services.opening_hours import describe
 
 MAX_ENTITIES = 60
@@ -158,8 +163,11 @@ def summarize(state: TripState) -> dict[str, Any]:
                 for gap in missing_blocking(state)
             ],
             "scope": state.brief.scope.model_dump(),
+            # Only the ones still waiting on something. A question whose gap has
+            # since closed would otherwise be shown here every turn, and the
+            # model would dutifully keep asking it.
             "questions_awaiting_answer": [
-                question.question for question in state.intake.unanswered
+                question.question for question in outstanding_questions(state)
             ],
         },
         "travelers": [_traveler_line(traveler) for traveler in state.travelers],
