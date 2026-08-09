@@ -104,6 +104,10 @@ class ProfileRepository:
         merged = {**row.profile, **changes}
         merged["profile_id"] = profile_id
         merged["updated_at"] = utcnow().isoformat()
+        # Bumped here rather than by the caller: a trip snapshots preferences and
+        # names the revision it took them from, so the version has to move on
+        # every stored edit whether or not anyone remembered to say so.
+        merged["revision"] = int(row.profile.get("revision", 0)) + 1
 
         profile = TravelerProfile.model_validate(merged)
         row.profile = profile.model_dump(mode="json")

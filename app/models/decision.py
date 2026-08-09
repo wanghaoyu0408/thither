@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 from app.models.common import Cabin, LatLng, Money, new_id, utcnow
 from app.models.flight import BaggageAllowance, FlightSlice
+from app.models.group import GroupScore
 from app.models.hotel import HotelPriceQuote, HotelRating
 
 OptionStatus = Literal["candidate", "shortlisted", "selected", "rejected"]
@@ -20,6 +21,10 @@ class DecisionScore(BaseModel):
 
     total: float
     dimensions: dict[str, float] = {}
+    # Share of the intended weight that had data behind it. 1.0 means every
+    # dimension was known; a low figure means the total rests on very little,
+    # which is worth knowing before quoting it.
+    coverage: float = 1.0
     notes: str | None = None
 
 
@@ -31,6 +36,11 @@ class DecisionOption[T](BaseModel):
     status: OptionStatus = "candidate"
 
     score: DecisionScore | None = None
+
+    # How the group as a whole scores this, kept beside `score` rather than
+    # replacing it: the dimensional breakdown says *why* an option is good, and
+    # this says *for whom*. Neither answers the other's question.
+    group_score: GroupScore | None = None
 
     pros: list[str] = []
     cons: list[str] = []
@@ -49,6 +59,12 @@ class Decision[T](BaseModel):
     selected_option_id: str | None = None
 
     rationale: str | None = None
+
+    # Set when the preferences this was decided on have since changed. Flagged,
+    # never rebuilt: whether a decision is worth redoing is the traveller's call,
+    # and silently rescoring a settled choice would be the "why did my trip
+    # change?" problem this project exists to avoid.
+    stale_reason: str | None = None
 
     updated_at: datetime = Field(default_factory=utcnow)
 

@@ -37,6 +37,11 @@ class PlaceEntity(BaseModel):
     # whenever this was fetched.
     opening_hours: dict[str, Any] | None = None
 
+    # Positive attestations only; None means "Google did not say", never "no".
+    # See PlaceSummary.serves_vegetarian for why the distinction is load-bearing.
+    serves_vegetarian: bool | None = None
+    accessibility: dict[str, bool] = {}
+
     # IANA zone, e.g. "Asia/Tokyo".
     timezone: str | None = None
 

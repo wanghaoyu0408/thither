@@ -7,6 +7,7 @@ either silently stop working.
 
 from app.models.decision import HotelOptionData, PlaceOption
 from app.models.trip import TripState
+from app.services.conflict_service import unresolved_blocking
 from app.services.geo import haversine_km
 from app.services.lock_service import collect_lock_targets
 
@@ -94,6 +95,31 @@ def _check_hotel_area(state: TripState) -> list[str]:
     return []
 
 
+def _check_ready_without_agreement(state: TripState) -> list[str]:
+    """A trip cannot be called ready over an unanswered blocking conflict.
+
+    The only thing a blocking conflict stops. Research, itinerary generation,
+    replanning and every search go on exactly as before - what is refused is
+    declaring the result finished while somebody's dietary requirement or
+    mobility limit is still unverified.
+
+    Enforced here rather than asked for in the prompt, because "ready" is a
+    claim the trip makes to whoever reads it next, and a claim the model can
+    forget to check is not a guarantee.
+    """
+    if state.status != "ready":
+        return []
+
+    blocking = unresolved_blocking(state)
+    if not blocking:
+        return []
+
+    return [
+        f"trip cannot be marked ready: {len(blocking)} unresolved blocking preference "
+        f"conflict(s) - " + "; ".join(conflict.summary.split(".")[0] for conflict in blocking[:2])
+    ]
+
+
 def check_integrity(state: TripState) -> list[str]:
     """Return one human-readable message per broken invariant."""
     problems: list[str] = []
@@ -152,6 +178,7 @@ def check_integrity(state: TripState) -> list[str]:
                     )
 
     problems.extend(_check_hotel_area(state))
+    problems.extend(_check_ready_without_agreement(state))
 
     # Constraints scoped to a traveler must name a traveler on this trip.
     traveler_ids = [traveler.traveler_id for traveler in state.travelers]

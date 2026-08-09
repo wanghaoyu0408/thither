@@ -8,6 +8,7 @@ from app.models.constraint import TripConstraint
 from app.models.decision import TripDecisions
 from app.models.entity import TripEntity
 from app.models.evidence import EvidenceRecord
+from app.models.group import TravelerPreferences
 from app.models.itinerary import TripItinerary
 from app.models.lock import LockRecord
 from app.models.rejection import RejectionRecord
@@ -95,8 +96,16 @@ class TripTraveler(BaseModel):
     name: str
     role: Literal["organizer", "member"] = "member"
 
-    # Trip-specific preference overrides layered on the profile (M7).
+    # Trip-specific overrides, layered *over* the profile. Dotted or nested,
+    # e.g. {"flight": {"price_importance": 0.9}}. Authoritative: what someone
+    # says about this trip beats what their profile says in general.
     profile_overrides: dict[str, Any] = {}
+
+    # The resolved snapshot planning actually reads. Never the live profile row:
+    # a trip has to stay explainable after the profile behind it has moved on.
+    # Filled by preference_service.resolve; None means nobody has resolved this
+    # traveler yet, and the rankers fall back to neutral defaults saying so.
+    preferences: TravelerPreferences | None = None
 
 
 class OpenQuestion(BaseModel):

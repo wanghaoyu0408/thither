@@ -28,6 +28,11 @@ from app.services.hotel_area_service import build_area_decision
 from app.services.hotel_ranking import describe_prices, describe_ratings, explain_hotel_choice
 from app.services.toolbox import MissingCredentials, Toolbox
 
+# Japanese hotel and vendor names come back from the providers, and Windows
+# pipes stdout as cp1252, which cannot encode them. Without this the script dies
+# on its own output the moment it is redirected anywhere.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 BANNER = "!" * 78
 
 CHECK_IN = date.today() + timedelta(days=45)

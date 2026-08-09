@@ -7,11 +7,68 @@ by id, small enough to send every turn.
 
 from typing import Any
 
-from app.models.trip import TripState
+from app.models.trip import TripState, TripTraveler
+from app.services.conflict_service import detect_conflicts
 from app.services.opening_hours import describe
 
 MAX_ENTITIES = 60
 MAX_ISSUES = 12
+MAX_CONFLICTS = 8
+
+
+def _traveler_line(traveler: TripTraveler) -> dict[str, Any]:
+    """One traveller, with enough of their taste to be discussed by name.
+
+    Until M7 this was `{traveler_id, name, role}` and nothing else, so the model
+    could not have described what anyone wanted even if asked. Only the fields
+    someone would actually argue about are included - the whole preference tree
+    every turn would crowd out the trip itself.
+    """
+    line: dict[str, Any] = {
+        "traveler_id": traveler.traveler_id,
+        "name": traveler.name,
+        "role": traveler.role,
+    }
+
+    preferences = traveler.preferences
+    if preferences is None:
+        # Said rather than defaulted. Neutral weights standing in silently is
+        # how a group trip ends up planned for nobody in particular.
+        line["preferences"] = "not resolved yet"
+        return line
+
+    line["preferences"] = {
+        "flight": {
+            "price": preferences.flight.price_importance,
+            "nonstop": preferences.flight.nonstop_importance,
+            "avoid_red_eye": preferences.flight.avoid_red_eye,
+            "avoided_airlines": preferences.flight.avoided_airlines,
+            "preferred_airlines": preferences.flight.preferred_airlines,
+        },
+        "hotel": {
+            "price": preferences.hotel.price_importance,
+            "location": preferences.hotel.location_importance,
+            "quiet": preferences.hotel.quiet_importance,
+            "min_rating": preferences.hotel.min_rating,
+        },
+        "food": {
+            "dietary_restrictions": preferences.food.dietary_restrictions,
+            "cuisines": preferences.food.cuisines[:5],
+            "adventurousness": preferences.food.adventurousness,
+        },
+        "activity": {
+            "interests": preferences.activity.interests[:5],
+            "avoided": preferences.activity.avoided[:5],
+        },
+        "pace": {
+            "intensity": preferences.pace.intensity,
+            "max_daily_walking_km": preferences.pace.max_daily_walking_km,
+            "preferred_start_time": preferences.pace.preferred_start_time,
+        },
+    }
+    if preferences.overridden_paths:
+        line["overridden_for_this_trip"] = preferences.overridden_paths
+    return line
 
 
 def _entity_line(state: TripState, entity_id: str) -> dict[str, Any]:
@@ -52,8 +109,23 @@ def summarize(state: TripState) -> dict[str, Any]:
             "priorities": state.brief.priorities,
             "pace": state.brief.pace,
         },
-        "travelers": [
-            {"traveler_id": t.traveler_id, "name": t.name, "role": t.role} for t in state.travelers
+        "travelers": [_traveler_line(traveler) for traveler in state.travelers],
+        # Put in front of the model every turn rather than left to a tool call.
+        # The acceptance for this milestone is that conflicts get *identified*,
+        # and a conflict the model has to remember to go looking for is one that
+        # sometimes goes unmentioned.
+        "preference_conflicts": [
+            {
+                "kind": conflict.kind,
+                "severity": conflict.severity,
+                "summary": conflict.summary,
+                # Per person, never merged. Quoting a group average back at
+                # people who disagree is the failure this exists to prevent.
+                "positions": conflict.positions,
+                "affects": conflict.affects[:6],
+                "resolution_options": conflict.resolution_options,
+            }
+            for conflict in detect_conflicts(state)[:MAX_CONFLICTS]
         ],
         "constraints": [
             {

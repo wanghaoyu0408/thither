@@ -14,17 +14,25 @@ from datetime import date as date_type
 from typing import Any
 
 from app.config import Settings
+from app.models.common import utcnow
 from app.models.flight import SearchAirportsInput, SearchFlightsInput
+from app.models.group import TravelerPreferences
 from app.models.hotel import SearchHotelsInput
 from app.models.itinerary_plan import ItineraryProposal, PlanParams, ReplanParams
 from app.models.place import GetPlaceDetailsInput, PlaceFieldSet, SearchPlacesInput
 from app.models.research import ResearchWebInput
 from app.models.route import GetRoutesInput, LocationRef
 from app.models.traveler import FlightPreferences, HotelPreferences
-from app.models.trip import TripState
+from app.models.trip import OpenQuestion, TripState
+from app.services.conflict_service import detect_conflicts
 from app.services.entity_service import resolve_places
 from app.services.flight_ranking import cheapest_of, explain_choice, rank_flights
 from app.services.flight_service import SANDBOX_DISCLAIMER
+from app.services.group_scoring import (
+    rank_flights_for_group,
+    rank_hotels_for_group,
+    rank_places_for_group,
+)
 from app.services.hotel_area_service import build_area_decision
 from app.services.hotel_ranking import describe_prices, describe_ratings, explain_hotel_choice
 from app.services.hotel_service import (
@@ -34,6 +42,13 @@ from app.services.hotel_service import (
     build_hotel_decision,
 )
 from app.services.itinerary_service import build_itinerary, replan_day
+from app.services.preference_service import (
+    diff_profile,
+    effective,
+    resolve,
+    stale_targets,
+    traveler_names,
+)
 from app.services.proposal_store import ProposalStore
 from app.services.toolbox import Toolbox
 from app.services.validation_service import (
@@ -293,6 +308,69 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "type": "function",
+        "name": "review_group_preferences",
+        "description": (
+            "Who wants what, and where they disagree. Call this ONCE before recommending "
+            "anything to a group of two or more; never on a solo trip, where there is "
+            "nobody to disagree with. Resolves each traveller's stored profile into the "
+            "trip (overrides win) and returns every preference conflict with each person's "
+            "position stated separately. NEVER report a group score without also reporting "
+            "its split - an option three people love and one hates has the same average as "
+            "one everybody finds mediocre, and they are not the same trip."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "resolve_missing": {
+                    "type": "boolean",
+                    "description": (
+                        "Fill in preferences for travellers who have a linked profile but no "
+                        "snapshot yet. Defaults to true; it only adds what is missing."
+                    ),
+                },
+                "raise_questions": {
+                    "type": "boolean",
+                    "description": (
+                        "Record blocking conflicts as open questions the group must answer. "
+                        "Defaults to true. The trip cannot be marked ready until they are."
+                    ),
+                },
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "refresh_traveler_preferences",
+        "description": (
+            "Check whether anyone's stored profile has changed since this trip copied it. "
+            "Called plain it reports the differences and changes NOTHING. Call it again with "
+            "confirm=true only after the user has seen the differences and agreed. Applying "
+            "marks the affected decisions stale; it never silently replans anything."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "confirm": {
+                    "type": "boolean",
+                    "description": (
+                        "Apply the differences. Only after showing them to the user and "
+                        "getting agreement."
+                    ),
+                },
+                "traveler_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Limit to these travellers. Omit for everyone.",
+                },
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
         "name": "generate_itinerary",
         "description": (
             "Lay out the whole trip from the places already stored: clusters them "
@@ -414,6 +492,15 @@ class ToolContext:
     # decision name -> serialized Decision built this turn, e.g. "hotel_area".
     # Held rather than written: every mutation goes through the patch engine.
     pending_decisions: dict = field(default_factory=dict)
+    # traveler_id -> serialized TravelerPreferences resolved this turn.
+    pending_traveler_prefs: dict = field(default_factory=dict)
+    # OpenQuestions raised by blocking conflicts. Stored rather than derived,
+    # because an answer has to survive the turn that gave it.
+    pending_questions: list = field(default_factory=list)
+    # Reads profiles so a snapshot can be made. Planning never reads them.
+    profiles: Any = None
+    # decision name -> why it is now questionable, from a confirmed refresh.
+    pending_stale: dict = field(default_factory=dict)
 
     def budget_left(self) -> int:
         return max(0, self.settings.planning_search_budget - self.searches_used)
@@ -565,12 +652,22 @@ async def _get_routes(context: ToolContext, args: dict[str, Any]) -> dict[str, A
 
 
 def _working_state(context: ToolContext) -> TripState:
-    """State as the model believes it to be, including places found this turn."""
-    if not context.pending_entity_ops:
+    """State as the model believes it to be, including what this turn staged.
+
+    Preferences resolved a moment ago have to be visible to conflict detection
+    in the same turn, or the first `review_group_preferences` on a trip would
+    report a group with no opinions.
+    """
+    if not context.pending_entity_ops and not context.pending_traveler_prefs:
         return context.state
+
     working = context.state.model_copy(deep=True)
     for entity in context.pending_entity_ops:
         working.entities[entity.entity_id] = entity
+    for traveler in working.travelers:
+        staged = context.pending_traveler_prefs.get(traveler.traveler_id)
+        if staged is not None:
+            traveler.preferences = TravelerPreferences.model_validate(staged)
     return working
 
 
@@ -640,6 +737,21 @@ async def _discover_restaurants(context: ToolContext, args: dict[str, Any]) -> d
     context.pending_entity_ops.extend(outcome.entities.values())
     context.pending_evidence.update(outcome.evidence)
 
+    # The same places, seen through each traveller's food preferences. Ranking
+    # happens once inside the pipeline; this only says who each result suits.
+    working = _working_state(context)
+    travelers, gaps = effective(working)
+    group_by_place: dict[str, Any] = {}
+    if travelers and outcome.recommendations:
+        group_by_place = {
+            item.option.place_id: item
+            for item in rank_places_for_group(
+                [rec.ranked.place for rec in outcome.recommendations],
+                travelers=travelers,
+                names=traveler_names(working),
+            )
+        }
+
     return {
         "recommendations": [
             {
@@ -662,6 +774,7 @@ async def _discover_restaurants(context: ToolContext, args: dict[str, Any]) -> d
                     if rec.signal
                     else None
                 ),
+                **_group_view(group_by_place.get(rec.ranked.place.place_id)),
             }
             for rec in outcome.recommendations
         ],
@@ -680,7 +793,7 @@ async def _discover_restaurants(context: ToolContext, args: dict[str, Any]) -> d
             for mention in outcome.unresolved_mentions
         ],
         "google_only": outcome.google_only,
-        "warnings": outcome.warnings,
+        "warnings": [*outcome.warnings, *gaps],
     }
 
 
@@ -750,11 +863,36 @@ async def _search_flights(context: ToolContext, args: dict[str, Any]) -> dict[st
             "warnings": result.warnings,
         }
 
-    profile = context.state.travelers[0] if context.state.travelers else None
-    preferences = FlightPreferences()
+    # Two scorings, answering two questions. `rank_flights` says what is good
+    # about the flight itself - price, stops, duration are facts about the
+    # aircraft, not opinions. The group pass says who it is good *for*.
     ranked = rank_flights(
-        result.results, preferences=preferences, airports=context.airports, limit=6
+        result.results, preferences=FlightPreferences(), airports=context.airports, limit=6
     )
+
+    working = _working_state(context)
+    travelers, gaps = effective(working)
+    names = traveler_names(working)
+
+    group_by_ref: dict[str, Any] = {}
+    group_warnings: list[str] = list(gaps)
+    if travelers:
+        grouped, airline_warnings = rank_flights_for_group(
+            result.results, travelers=travelers, names=names, airports=context.airports
+        )
+        group_warnings.extend(airline_warnings)
+        group_by_ref = {item.option.offer_ref: item for item in grouped}
+        # The group's order wins where there is a group to have one.
+        ranked.sort(
+            key=lambda item: (
+                -group_by_ref[item.option.offer_ref].group.total
+                if item.option.offer_ref in group_by_ref
+                else 0.0,
+                item.option.offer_ref,
+            )
+        )
+
+    profile = context.state.travelers[0] if context.state.travelers else None
     context.flight_options = {item.option.offer_ref: item.option for item in ranked}
 
     trade_off = None
@@ -784,10 +922,11 @@ async def _search_flights(context: ToolContext, args: dict[str, Any]) -> dict[st
                 "pros": item.pros,
                 "cons": item.cons,
                 "search_url": item.option.search_url,
+                **_group_view(group_by_ref.get(item.option.offer_ref)),
             }
             for item in ranked
         ],
-        "warnings": result.warnings,
+        "warnings": [*result.warnings, *group_warnings],
         "profile_used": profile.name if profile else None,
     }
 
@@ -901,6 +1040,22 @@ async def _search_hotels(context: ToolContext, args: dict[str, Any]) -> dict[str
     )
     context.pending_entity_ops.extend(shortlist.entities)
 
+    travelers, gaps = effective(working)
+    group_by_ref: dict[str, Any] = {}
+    if travelers and shortlist.ranked:
+        grouped = rank_hotels_for_group(
+            [item.option for item in shortlist.ranked],
+            travelers=travelers,
+            names=traveler_names(working),
+        )
+        group_by_ref = {(item.option.offer_ref or item.option.name): item for item in grouped}
+        shortlist.ranked.sort(
+            key=lambda item: (
+                -group_by_ref[item.option.offer_ref or item.option.name].group.total,
+                item.option.name,
+            )
+        )
+
     decision = build_hotel_decision(shortlist.ranked)
     context.pending_decisions["hotel"] = decision.model_dump(mode="json")
 
@@ -923,10 +1078,11 @@ async def _search_hotels(context: ToolContext, args: dict[str, Any]) -> dict[str
                 "pros": item.pros,
                 "cons": item.cons,
                 "search_url": item.option.search_url,
+                **_group_view(group_by_ref.get(item.option.offer_ref or item.option.name)),
             }
             for item in shortlist.ranked
         ],
-        "warnings": [*result.warnings, *shortlist.warnings],
+        "warnings": [*result.warnings, *shortlist.warnings, *gaps],
         "note": (
             "Ratings are listed separately on purpose. Never average them, and never compare "
             "a star category against a guest score - they measure different things. Quote a "
@@ -953,6 +1109,209 @@ async def _search_hotels(context: ToolContext, args: dict[str, Any]) -> dict[str
         payload["live_mode"] = False
         payload["disclaimer"] = HOTEL_SANDBOX_DISCLAIMER
 
+    return payload
+
+
+def _group_view(ranked: Any) -> dict[str, Any]:
+    """A group score as the model sees it.
+
+    `describe()` rather than the bare total, and the per-traveller scores
+    alongside it. A number the model can quote without its split is a number
+    that will be quoted without its split.
+    """
+    if ranked is None:
+        return {}
+    group = ranked.group
+    return {
+        "group_score": group.total,
+        "group_verdict": group.describe(),
+        "per_traveler": {group.name_of(tid): value for tid, value in group.per_traveler.items()},
+        "group_is_split": group.is_split,
+        "worst_served": group.name_of(group.worst_traveler_id),
+        "group_cons": ranked.cons,
+    }
+
+
+async def _load_profiles(context: ToolContext) -> tuple[dict[str, Any], list[str]]:
+    """Stored profiles for the travellers who link to one."""
+    profiles: dict[str, Any] = {}
+    problems: list[str] = []
+    if context.profiles is None:
+        return profiles, ["profiles are not available in this context"]
+
+    from app.db.repository import ProfileNotFound
+
+    for traveler in context.state.travelers:
+        if not traveler.profile_id:
+            continue
+        try:
+            profiles[traveler.traveler_id] = await context.profiles.get(traveler.profile_id)
+        except ProfileNotFound:
+            problems.append(
+                f"{traveler.name} links to profile {traveler.profile_id!r}, which no longer exists"
+            )
+    return profiles, problems
+
+
+async def _review_group_preferences(context: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    state = context.state
+
+    if len(state.travelers) < 2:
+        # A group of one has nobody to disagree with. Answering immediately
+        # keeps this milestone invisible on a solo trip rather than spending a
+        # planning round on it - which, measured live, is enough to derail one.
+        only = state.travelers[0].name if state.travelers else None
+        return {
+            "travelers": [{"name": only}] if only else [],
+            "conflicts": [],
+            "blocking_count": 0,
+            "note": (
+                f"{only} is travelling alone, so there is nothing to reconcile. "
+                if only
+                else "This trip has no travellers listed. "
+            )
+            + "Get on with planning; do not call this again for this trip.",
+        }
+
+    profiles, problems = await _load_profiles(context)
+
+    resolved_now: list[str] = []
+    if args.get("resolve_missing", True):
+        for traveler in state.travelers:
+            if traveler.preferences is not None or traveler.traveler_id not in profiles:
+                continue
+            preferences = resolve(traveler, profiles[traveler.traveler_id])
+            context.pending_traveler_prefs[traveler.traveler_id] = preferences.model_dump(
+                mode="json"
+            )
+            resolved_now.append(traveler.name)
+
+    # Conflicts are computed against what the trip *will* hold once this turn's
+    # patch lands, so a first resolve does not report an empty group.
+    working = _working_state(context)
+    conflicts = detect_conflicts(working)
+    _, gaps = effective(working)
+
+    if args.get("raise_questions", True):
+        known = {question.question for question in state.open_questions}
+        for conflict in conflicts:
+            if not conflict.blocking:
+                continue
+            text = f"[{conflict.conflict_id}] {conflict.question()}"
+            if text not in known:
+                context.pending_questions.append(
+                    OpenQuestion(question=text, blocking=True, asked_at=utcnow()).model_dump(
+                        mode="json"
+                    )
+                )
+
+    return {
+        "travelers": [
+            {
+                "traveler_id": traveler.traveler_id,
+                "name": traveler.name,
+                "profile_id": traveler.profile_id,
+                "resolved": (
+                    traveler.preferences is not None
+                    or traveler.traveler_id in context.pending_traveler_prefs
+                ),
+                "overridden_for_this_trip": (
+                    traveler.preferences.overridden_paths if traveler.preferences else []
+                ),
+            }
+            for traveler in state.travelers
+        ],
+        "resolved_this_turn": resolved_now,
+        "conflicts": [
+            {
+                "conflict_id": conflict.conflict_id,
+                "kind": conflict.kind,
+                "severity": conflict.severity,
+                "summary": conflict.summary,
+                # Per person. Do not average these.
+                "positions": conflict.positions,
+                "affects": conflict.affects[:8],
+                "resolution_options": conflict.resolution_options,
+            }
+            for conflict in conflicts
+        ],
+        "blocking_count": sum(1 for conflict in conflicts if conflict.blocking),
+        "warnings": problems + gaps,
+        "note": (
+            "Name the people who disagree and what each of them wants. Never present a "
+            "group average as if it were everyone's view, and never say a trip is ready "
+            "while a blocking conflict is unanswered. Call apply_trip_patch to store this."
+        ),
+    }
+
+
+async def _refresh_traveler_preferences(
+    context: ToolContext, args: dict[str, Any]
+) -> dict[str, Any]:
+    state = context.state
+    profiles, problems = await _load_profiles(context)
+    wanted = set(args.get("traveler_ids") or [])
+
+    diffs = [
+        diff_profile(traveler, profiles[traveler.traveler_id])
+        for traveler in state.travelers
+        if traveler.traveler_id in profiles and (not wanted or traveler.traveler_id in wanted)
+    ]
+    moving = [diff for diff in diffs if diff.has_effect]
+
+    payload: dict[str, Any] = {
+        "diffs": [
+            {
+                "traveler_id": diff.traveler_id,
+                "traveler_name": diff.traveler_name,
+                "summary": diff.describe(),
+                "changes": [
+                    {"path": change.path, "before": change.before, "after": change.after}
+                    for change in diff.changes
+                ],
+                "not_refreshed": diff.not_refreshed,
+                "affects": diff.affects,
+            }
+            for diff in diffs
+        ],
+        "warnings": problems,
+    }
+
+    if not moving:
+        payload["applied"] = False
+        payload["note"] = "nothing in anyone's profile would change this trip"
+        return payload
+
+    if not args.get("confirm"):
+        payload["applied"] = False
+        payload["note"] = (
+            "Nothing has changed. Show these differences to the user, say which decisions "
+            "they would make stale, and call again with confirm=true only if they agree."
+        )
+        return payload
+
+    for diff in moving:
+        traveler = next(t for t in state.travelers if t.traveler_id == diff.traveler_id)
+        context.pending_traveler_prefs[diff.traveler_id] = resolve(
+            traveler, profiles[diff.traveler_id]
+        ).model_dump(mode="json")
+
+    decisions, days = stale_targets(state, moving)
+    context.pending_stale = {
+        name: (
+            f"resolved preferences changed for "
+            f"{', '.join(sorted({d.traveler_name for d in moving}))}"
+        )
+        for name in decisions
+    }
+
+    payload["applied"] = True
+    payload["stale_decisions"] = decisions
+    payload["stale_days"] = [day.isoformat() for day in days]
+    payload["note"] = (
+        "Marked stale, not rebuilt. Tell the user which decisions are now questionable and "
+        "let them choose whether to redo any of them."
+    )
     return payload
 
 
@@ -1111,28 +1470,31 @@ async def _apply_trip_patch(context: ToolContext, args: dict[str, Any]) -> dict[
         }
         for name, value in context.pending_decisions.items()
     ]
+    decision_ops += _stale_ops(context)
 
-    if proposal is None:
-        if not decision_ops:
-            return {
-                "error": "no such proposal; call generate_itinerary or replan_day first",
-                "applied": False,
-            }
-        return {
-            "__patches__": [
-                {
-                    "operations": decision_ops,
-                    "scope": None,
-                    "reason": args.get("reason", "agent update"),
-                    "unlock_targets": args.get("unlock_targets", []),
-                }
-            ]
-        }
+    # Preference snapshots and the questions a blocking conflict raises. Both go
+    # in unscoped, alongside decisions: they are facts about the group, not
+    # about any one day.
+    index_of = {
+        traveler.traveler_id: position for position, traveler in enumerate(context.state.travelers)
+    }
+    decision_ops += [
+        {"op": "set", "path": f"/travelers/{index_of[traveler_id]}/preferences", "value": value}
+        for traveler_id, value in context.pending_traveler_prefs.items()
+        if traveler_id in index_of
+    ]
+    decision_ops += [
+        {"op": "add", "path": "/open_questions/-", "value": question}
+        for question in context.pending_questions
+    ]
 
     reason = args.get("reason", "agent update")
 
     # Places discovered or refreshed this turn have to land before anything
-    # references them.
+    # references them. Built *before* the no-proposal branch: they are staged
+    # work in their own right, and a version of this that computed them after
+    # threw away thirty discovered places whenever the model committed without
+    # an itinerary proposal - which it does routinely, having just gathered them.
     entity_ops = [
         {
             "op": "add" if entity.entity_id not in context.state.entities else "set",
@@ -1150,6 +1512,39 @@ async def _apply_trip_patch(context: ToolContext, args: dict[str, Any]) -> dict[
         }
         for evidence_id, record in context.pending_evidence.items()
     ]
+
+    if proposal is None:
+        # Asking for a specific proposal that is not there is an error, even
+        # with other work staged. Quietly committing the places instead and
+        # reporting success would hide that the itinerary never landed - a
+        # failure wearing a success's clothes.
+        if proposal_id:
+            return {
+                "error": (
+                    f"no such proposal {proposal_id!r}; nothing was applied. Call "
+                    f"generate_itinerary or replan_day and use the proposal_id it returns."
+                ),
+                "applied": False,
+            }
+
+        # No proposal asked for: commit whatever this turn staged.
+        staged = entity_ops + decision_ops
+        if not staged:
+            return {
+                "error": "no such proposal; call generate_itinerary or replan_day first",
+                "applied": False,
+            }
+        return {
+            "__patches__": [
+                {
+                    "operations": staged,
+                    "scope": None,
+                    "reason": reason,
+                    "unlock_targets": args.get("unlock_targets", []),
+                }
+            ]
+        }
+
     itinerary_ops = [op.model_dump(mode="json") for op in proposal.operations]
 
     plans: list[dict[str, Any]] = []
@@ -1183,8 +1578,24 @@ async def _apply_trip_patch(context: ToolContext, args: dict[str, Any]) -> dict[
     return {"__patches__": plans, "proposal_id": proposal.proposal_id}
 
 
+def _stale_ops(context: ToolContext) -> list[dict[str, Any]]:
+    """Flag decisions a confirmed preference refresh has called into question.
+
+    Flagged, never rebuilt. Whether a settled decision is worth redoing on new
+    preferences is the group's call, and silently rescoring one would be the
+    "why did my trip change?" problem this project was built to avoid.
+    """
+    ops: list[dict[str, Any]] = []
+    for name, reason in context.pending_stale.items():
+        path = "/decisions/" + name.replace(".", "/")
+        ops.append({"op": "set", "path": f"{path}/stale_reason", "value": reason})
+    return ops
+
+
 HANDLERS = {
     "research_web": _research_web,
+    "review_group_preferences": _review_group_preferences,
+    "refresh_traveler_preferences": _refresh_traveler_preferences,
     "discover_restaurants": _discover_restaurants,
     "search_airports": _search_airports,
     "search_flights": _search_flights,

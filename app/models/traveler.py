@@ -54,6 +54,11 @@ class TravelerProfile(BaseModel):
     """
 
     profile_id: str = Field(default_factory=lambda: new_id("user"))
+    # Bumped on every stored update. A trip snapshots preferences and has to be
+    # able to name which version it took them from; `updated_at` is a timestamp,
+    # not an identity, and two edits in the same second would be indistinguishable.
+    revision: int = 0
+
     name: str
 
     home_city: str | None = None

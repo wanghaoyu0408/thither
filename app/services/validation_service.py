@@ -19,6 +19,7 @@ from app.models.itinerary import ItineraryDay, ItineraryItem
 from app.models.route import TravelMode
 from app.models.trip import TripState
 from app.models.validation import ValidationIssue, ValidationState
+from app.services.conflict_service import detect_conflicts
 from app.services.geo import haversine_km
 from app.services.opening_hours import OpenState, covers_visit, describe
 
@@ -397,6 +398,46 @@ def _check_sandbox_data(state: TripState) -> list[ValidationIssue]:
     return issues
 
 
+_CONFLICT_SEVERITY: dict[str, str] = {
+    "blocking": "error",
+    "material": "warning",
+    "minor": "info",
+}
+
+
+def _check_preference_conflicts(state: TripState) -> list[ValidationIssue]:
+    """Surface group disagreements in the report the agent reads every turn.
+
+    One of three places a conflict shows up, because one is not enough: here,
+    as a blocking `OpenQuestion` the group must answer, and as an integrity rule
+    that stops the trip being called ready. A conflict the model has to remember
+    to go looking for is a conflict that sometimes goes unmentioned.
+
+    Each issue carries every traveller's position in its message. That is the
+    point of the milestone - the failure being guarded against is a single
+    averaged number standing in for people who disagree.
+    """
+    issues: list[ValidationIssue] = []
+
+    for conflict in detect_conflicts(state):
+        positions = "; ".join(
+            f"{name}: {stance}" for name, stance in sorted(conflict.positions.items())
+        )
+        issues.append(
+            ValidationIssue(
+                severity=_CONFLICT_SEVERITY[conflict.severity],
+                type="preference_conflict",
+                item_ids=conflict.affects,
+                message=f"{conflict.summary} ({positions})" if positions else conflict.summary,
+                suggested_fix=(
+                    conflict.resolution_options[0] if conflict.resolution_options else None
+                ),
+            )
+        )
+
+    return issues
+
+
 def _check_trip_wide(state: TripState) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
 
@@ -442,6 +483,7 @@ def _check_trip_wide(state: TripState) -> list[ValidationIssue]:
                 )
 
     issues.extend(_check_sandbox_data(state))
+    issues.extend(_check_preference_conflicts(state))
 
     if state.itinerary.days:
         issues.append(

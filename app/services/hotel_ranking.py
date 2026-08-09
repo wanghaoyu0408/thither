@@ -98,6 +98,25 @@ def _star_score(option: HotelOptionData) -> float | None:
     return round(rating.value / rating.scale_max, 4)
 
 
+def _minimum_score(option: HotelOptionData, preferences: HotelPreferences) -> float | None:
+    """Whether this clears the rating floor the traveller asked for.
+
+    `None` when they asked for nothing, or when the rating is not solid enough
+    to answer with. A 5.0 from three reviews is already too thin to score on
+    (`_user_rating_score` refuses it), and letting it clear a stated 4.5 floor
+    anyway would be the same number being untrustworthy and authoritative at
+    once. An unproven hotel has not failed the test - nobody has run it.
+    """
+    if preferences.min_rating is None:
+        return None
+    rating = option.user_rating
+    if rating is None:
+        return None
+    if rating.review_count is not None and rating.review_count < MIN_REVIEWS_TO_SCORE:
+        return None
+    return 1.0 if rating.value >= preferences.min_rating else 0.0
+
+
 def meets_min_rating(option: HotelOptionData, minimum: float | None) -> bool:
     """Whether the guest rating clears an explicitly stated floor.
 
@@ -124,6 +143,16 @@ def score_hotel(
     )
 
     components: dict[str, tuple[float | None, float]] = {
+        # A stated floor, expressed as a score rather than only as a filter.
+        #
+        # For one traveller `rank_hotels` filters on it, and that stays true.
+        # But a filter cannot be applied per-person inside a group: one member's
+        # four-star floor would silently delete every hotel the other three
+        # liked. Scoring it instead keeps the requirement doing something -
+        # a hotel below Dee's floor tanks *Dee's* score, which is what makes her
+        # the worst-served traveller and gets her named, rather than her stated
+        # requirement quietly counting for nothing.
+        "meets_stated_minimum": (_minimum_score(option, preferences), 0.8),
         "price": (price_dimension, preferences.price_importance),
         # The point of the milestone: how far this hotel is from what the trip
         # actually does, in minutes a routing API measured.

@@ -21,7 +21,7 @@ validated `TripPatch` with revision control, lock enforcement and rejection memo
 | 4 | Web research: Xiaohongshu / Reddit / blogs, resolved against Google | done |
 | 5 | Flights (Duffel), airport comparison, ranking with trade-offs | done |
 | 6 | Hotels: neighbourhood decided first, then priced inventory | done |
-| 7 | Multi-traveler preferences, group scoring, fairness | not started |
+| 7 | Multi-traveler preferences, group scoring, fairness | done |
 
 ## Setup
 
@@ -64,7 +64,7 @@ Then open http://127.0.0.1:8000/docs.
 .venv/Scripts/python.exe -m pytest -q
 ```
 
-515 tests, no network, no API keys. The `tests/scenarios/` files map one-to-one onto each
+559 tests, no network, no API keys. The `tests/scenarios/` files map one-to-one onto each
 milestone's acceptance criteria.
 
 Contract tests against the real Google APIs are opt-in, since they cost quota:
@@ -240,6 +240,74 @@ Four things the live runs turned up that no offline test could:
 
 Nothing here needs a key the project does not have: `SERPAPI_API_KEY` covers the hotel
 half. Without it the script prints the area decision and stops, saying so.
+
+### Milestone 7 acceptance
+
+```bash
+.venv/Scripts/python.exe scripts/plan_for_the_group.py
+```
+
+The acceptance is the only one in this project phrased as a prohibition — *identify major
+preference conflicts **instead of hiding them behind an average score*** — and the thing
+prohibited is the obvious implementation. Four friends, live Tokyo data:
+
+```
+Grids Tokyo Ueno Hotel & Hostel     153 USD/night   4.1/5 from 460 reviews
+   group: 0.55, and nobody has much to go on (0.30 apart)
+   each:  Ann 0.77  Bo 0.62  Cy 0.73  Dee 0.46
+
+A plain average would have recommended NEO ART HOTEL Akihabara (mean 0.68 against 0.64).
+It is not recommended, because it leaves Bo at 0.54.
+```
+
+**A mean cannot tell a fight from a consensus.** Three travellers at 0.9 and one at 0.1
+average to the same 0.5 as four at 0.5. So `GroupScore` keeps every person's score, names
+who is worst served, and sorts on `0.6·mean + 0.4·worst`. Its `describe()` is the only
+rendering, and a split cannot be described without saying whose.
+
+**Conflicts are derived, not stored**, in the mould of `signals_from_evidence` — so what is
+on screen can never drift from the preferences behind it. Each one records `positions` per
+person, which is the anti-averaging device: there is no form of the record in which the two
+sides have already been merged. Their ids are content hashes, because a record recomputed
+on every read needs a stable identity or an answer can never be matched to the question.
+
+**Preferences are snapshotted into the trip**, stamped with the profile revision they came
+from. Editing a profile next year cannot rewrite why last year's trip was planned that way.
+A refresh diffs first, applies only on confirmation, and marks *only the affected*
+decisions stale rather than replanning anything.
+
+**A blocking conflict stops one thing: the claim that the trip is ready.** Enforced in the
+patch pipeline, not the prompt. Research, generation and replanning all carry on.
+
+**Google attests that a place serves vegetarian food; it never attests that one does not.**
+Measured live: 8/8 Indian restaurants in Shinjuku are confirmed, but only 1/8 Shibuya
+pizzerias — and every pizzeria serves a margherita. So `False` means *not attested*, is
+normalised to `None`, and a dietary conflict raises a blocking question rather than
+filtering. Deleting most of Tokyo from a vegetarian's trip on the strength of a field that
+only ever means "nobody said" would be exactly the confident wrongness this project exists
+to avoid. Both fields ride on the FULL details call the planner already makes for the
+shortlist, so they cost nothing extra.
+
+Defects the live runs exposed, most of them older than this milestone:
+
+- **An option could win on ignorance.** A hotel with three reviews has no usable guest
+  rating, no star category and no measured travel time, so price was its only dimension —
+  and being cheapest made it a flawless 1.00 that beat a hotel we knew five things about.
+  `combine()` now reports `coverage` and pulls a thinly-evidenced score toward neutral. You
+  cannot recommend what nobody has looked at.
+- **A rating could be untrustworthy and authoritative at once.** 5.0-from-3-reviews was too
+  thin to score on, yet still cleared a traveller's stated 4.5 floor.
+- **A preference could influence nothing.** `min_rating` was a filter for one traveller and
+  absent from the group path; and the taste-to-weights mapping scaled every dimension by
+  one factor, which under renormalisation is exactly a no-op.
+- **`apply_trip_patch` discarded staged places** when called without a proposal — which the
+  agent does routinely, having just discovered thirty of them. It then described a plan it
+  had not saved. Fixed, and a missing-but-named `proposal_id` is still an error rather than
+  a partial write reported as success.
+- **Nothing told the model a proposal changes nothing until applied.** It generated twice
+  and stopped. The prompt now says so, and `review_group_preferences` returns immediately
+  for a solo trip rather than spending a planning round proving one person agrees with
+  themselves.
 
 ## How a change reaches the database
 

@@ -20,6 +20,13 @@ from app.models.evidence import (
     SourceType,
     authority_for,
 )
+from app.models.group import (
+    ConflictKind,
+    ConflictSeverity,
+    GroupScore,
+    PreferenceConflict,
+    TravelerPreferences,
+)
 from app.models.hotel import (
     HotelAreaCandidate,
     HotelPriceQuote,
@@ -87,6 +94,8 @@ __all__ = [
     "Citation",
     "ClockTime",
     "CommunitySignal",
+    "ConflictKind",
+    "ConflictSeverity",
     "DaySummary",
     "Decision",
     "DecisionOption",
@@ -99,6 +108,7 @@ __all__ = [
     "FoodPreferences",
     "GetPlaceDetailsInput",
     "GetRoutesInput",
+    "GroupScore",
     "HotelAreaCandidate",
     "HotelAreaOption",
     "HotelOptionData",
@@ -125,6 +135,7 @@ __all__ = [
     "PlaceFieldSet",
     "PlaceOption",
     "PlaceSummary",
+    "PreferenceConflict",
     "RatingSource",
     "RatingType",
     "RejectionRecord",
@@ -140,6 +151,7 @@ __all__ = [
     "ToolError",
     "ToolResult",
     "TravelMode",
+    "TravelerPreferences",
     "TravelerProfile",
     "TripBrief",
     "TripConstraint",

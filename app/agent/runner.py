@@ -17,7 +17,7 @@ from app.agent.context import summarize
 from app.agent.prompts import build_instructions
 from app.agent.tool_registry import TOOL_SCHEMAS, ToolContext, dispatch, serialize
 from app.config import Settings, get_settings
-from app.db.repository import TripRepository
+from app.db.repository import ProfileRepository, TripRepository
 from app.models.patch import PatchResult, TripPatch
 from app.models.trip import TripState
 from app.providers.openai_llm import LLMClient
@@ -93,6 +93,9 @@ class AgentRunner:
         self._llm = llm
         self._toolbox = toolbox
         self._repo = TripRepository(session)
+        # Profiles live in their own table. Reading them is how a snapshot gets
+        # made in the first place; planning still only ever reads the snapshot.
+        self._profiles = ProfileRepository(session)
         self._settings = settings or get_settings()
         self._proposals = proposals or ProposalStore()
 
@@ -113,6 +116,7 @@ class AgentRunner:
             toolbox=self._toolbox,
             proposals=self._proposals,
             settings=self._settings,
+            profiles=self._profiles,
         )
 
         conversation: list[Any] = list(history or [])
@@ -241,6 +245,8 @@ class AgentRunner:
         context.pending_entity_ops.clear()
         context.pending_evidence.clear()
         context.pending_decisions.clear()
+        context.pending_traveler_prefs.clear()
+        context.pending_questions.clear()
         run.revision_after = result.revision
 
         return {

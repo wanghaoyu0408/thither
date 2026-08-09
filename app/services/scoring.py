@@ -30,24 +30,67 @@ def price_score(price: float, cheapest: float, *, tolerance: float = PRICE_TOLER
     return round(1.0 / (1.0 + excess / tolerance), 4)
 
 
+# Below this share of the intended weight, a score is being computed from too
+# little to stand on its own and is pulled back toward neutral. Half the
+# evidence is the point at which "we know some things about this" stops being
+# true.
+COVERAGE_FLOOR = 0.5
+
+# What an unknown is worth. Not zero, which would make missing data a bad
+# review; not one, which would reward hiding.
+NEUTRAL = 0.5
+
+
+def damp_for_coverage(total: float, coverage: float) -> float:
+    """Pull a score toward neutral in proportion to what was not known.
+
+    One implementation, used both for a single score and for a group's shared
+    verdict. Above the floor it does nothing; at zero coverage the result is
+    entirely the prior. An option can still win on thin evidence, but it has to
+    be genuinely better rather than merely unexamined.
+    """
+    if coverage <= 0.0 or coverage >= COVERAGE_FLOOR:
+        return total
+    trust = coverage / COVERAGE_FLOOR
+    return trust * total + (1.0 - trust) * NEUTRAL
+
+
 def combine(components: dict[str, tuple[float | None, float]]) -> DecisionScore:
     """Weighted mean over the dimensions that have data.
 
     `None` means "not known", and is dropped from both the numerator and the
     denominator rather than scored as zero - an unknown must not quietly become
-    a bad review. What was missing is named in the notes, so a score built on
-    half the dimensions says so instead of looking equally confident.
+    a bad review.
+
+    But renormalizing alone lets an option win on ignorance. A hotel with three
+    reviews has no usable guest rating, no star category and no measured travel
+    time, so its *only* dimension is price - and being the cheapest then makes
+    it a flawless 1.00 that beats a hotel we know five things about. That is not
+    a better hotel, it is a hotel nobody has looked at.
+
+    So a score covering less than `COVERAGE_FLOOR` of its intended weight is
+    pulled toward neutral in proportion to what is missing. An option can still
+    win on thin evidence, but it has to be genuinely better rather than merely
+    unexamined, and `coverage` says how much was known either way.
     """
     dimensions = {
         name: round(value, 3) for name, (value, _weight) in components.items() if value is not None
     }
     available = sum(weight for value, weight in components.values() if value is not None)
+    intended = sum(weight for _value, weight in components.values())
     weighted = sum(value * weight for value, weight in components.values() if value is not None)
-    total = weighted / available if available else 0.0
+
+    coverage = available / intended if intended else 0.0
+    total = damp_for_coverage(weighted / available if available else 0.0, coverage)
 
     missing = sorted(name for name, (value, _weight) in components.items() if value is None)
+    notes = f"no data for: {', '.join(missing)}" if missing else None
+    if coverage < COVERAGE_FLOOR and missing:
+        notes = f"{notes}; scored on {coverage:.0%} of the usual evidence"
+
     return DecisionScore(
         total=round(total, 4),
         dimensions=dimensions,
-        notes=f"no data for: {', '.join(missing)}" if missing else None,
+        coverage=round(coverage, 3),
+        notes=notes,
     )

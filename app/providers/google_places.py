@@ -36,7 +36,16 @@ _FIELDS_BY_TIER: dict[PlaceFieldSet, tuple[str, ...]] = {
         "timeZone",
     ),
     PlaceFieldSet.RANKING: ("rating", "userRatingCount", "priceLevel"),
-    PlaceFieldSet.FULL: ("regularOpeningHours", "websiteUri"),
+    # servesVegetarianFood and accessibilityOptions bill in the same SKU as
+    # regularOpeningHours, so adding them here costs nothing extra - and FULL is
+    # already fetched for the shortlist only, which is where dietary fit
+    # actually needs answering.
+    PlaceFieldSet.FULL: (
+        "regularOpeningHours",
+        "websiteUri",
+        "servesVegetarianFood",
+        "accessibilityOptions",
+    ),
 }
 
 _TIER_ORDER = (
@@ -76,6 +85,29 @@ def details_field_mask(field_set: PlaceFieldSet) -> str:
     return ",".join(fields_for(field_set))
 
 
+def _attested(value: Any) -> bool | None:
+    """Google's booleans are one-directional; only `True` is a claim.
+
+    `servesVegetarianFood: false` is returned for every pizzeria in Shibuya, and
+    every pizzeria serves a margherita. The field means "attested" or "not
+    attested" - never "confirmed absent" - so the false case is folded into
+    None, where the rest of this codebase already knows how to treat an unknown.
+    """
+    return True if value is True else None
+
+
+def _accessibility(raw: dict[str, Any]) -> dict[str, bool]:
+    """Only the accessibility keys Google positively attested.
+
+    Same asymmetry: an all-false object turns up beside half-true ones on
+    comparable venues, so a false here is silence rather than a denial.
+    """
+    options = raw.get("accessibilityOptions")
+    if not isinstance(options, dict):
+        return {}
+    return {key: True for key, value in options.items() if value is True}
+
+
 def normalize_place(raw: dict[str, Any]) -> PlaceSummary:
     """Google's shape -> ours. Absent fields stay None rather than becoming 0."""
     location = raw.get("location") or {}
@@ -93,6 +125,8 @@ def normalize_place(raw: dict[str, Any]) -> PlaceSummary:
         rating_count=raw.get("userRatingCount"),
         price_level=_PRICE_LEVELS.get(raw.get("priceLevel", "")),
         opening_hours=opening,
+        serves_vegetarian=_attested(raw.get("servesVegetarianFood")),
+        accessibility=_accessibility(raw),
         website_url=raw.get("websiteUri"),
         maps_url=raw.get("googleMapsUri"),
         business_status=raw.get("businessStatus"),
