@@ -190,8 +190,16 @@ def research_allowed(state: TripState) -> bool:
     """
     if state.intake.status == "confirmed":
         return True
-    untouched_by_intake = state.intake.status == "collecting" and not state.intake.questions
-    return untouched_by_intake and has_research(state)
+    # A trip that already holds places or days had its brief settled the old
+    # way. Only an outstanding question holds it now.
+    #
+    # This used to also require `status == "collecting"`, which meant recording
+    # a single brief fact flipped the trip to `awaiting_confirmation` and gated
+    # a trip that had been planning happily for weeks - the agent blocked itself
+    # by writing something down.
+    if has_research(state) and not state.intake.unanswered:
+        return True
+    return False
 
 
 def party_known(state: TripState) -> bool:

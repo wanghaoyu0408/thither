@@ -29,6 +29,23 @@ def _selected_label(decision: Any) -> str | None:
     return label_for(chosen.data) if chosen else None
 
 
+def _arrival_line(state: TripState, item: Any) -> dict[str, Any] | None:
+    """Parking for one stop, as briefly as it can honestly be put."""
+    arrival = state.arrival.get(item.entity_id) if item.entity_id else None
+    if arrival is None:
+        return None
+    spot = arrival.parking.best
+    return {
+        # "unknown" means nobody checked. It is not "no parking", and the model
+        # is told so in the prompt rather than left to infer it.
+        "parking": arrival.parking.availability,
+        "walk_minutes": spot.walking_minutes if spot else None,
+        "cost": spot.cost if spot else None,
+        "permit_required": arrival.parking.permit_required,
+        "reservation_required": arrival.parking.reservation_required,
+    }
+
+
 def _traveler_line(traveler: TripTraveler) -> dict[str, Any]:
     """One traveller, with enough of their taste to be discussed by name.
 
@@ -207,6 +224,18 @@ def summarize(state: TripState) -> dict[str, Any]:
             {
                 "date": day.date.isoformat(),
                 "theme": day.theme,
+                # A forecast may be planned around; a norm may not be used to
+                # say what this date will do. The kind travels with the figures
+                # so the model cannot lose the distinction.
+                "weather": (
+                    {
+                        "kind": day.weather.kind,
+                        "summary": day.weather.headline(),
+                        "is_forecast": day.weather.is_forecast,
+                    }
+                    if day.weather
+                    else None
+                ),
                 "items": [
                     {
                         "item_id": item.item_id,
@@ -216,6 +245,11 @@ def summarize(state: TripState) -> dict[str, Any]:
                         "end_at": item.end_at.isoformat() if item.end_at else None,
                         "entity_id": item.entity_id,
                         "locked": item.item_id in locked_items,
+                        # Where the car goes and how far the walk is. Without
+                        # this the model cannot act on "this place has bad
+                        # parking" - it would be taking the traveller's word
+                        # for something the trip already knows.
+                        "arrival": _arrival_line(state, item),
                         "hours": (
                             describe(state.entities[item.entity_id].opening_hours, item.start_at)
                             if item.entity_id in state.entities and item.start_at

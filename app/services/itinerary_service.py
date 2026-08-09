@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Literal
 
+from app.config import get_settings
 from app.models.common import Pace, new_id
 from app.models.entity import PlaceEntity
 from app.models.itinerary import ItemType, ItineraryDay, ItineraryItem
@@ -35,8 +36,10 @@ from app.services.day_metrics import summarize_day
 from app.services.geo import haversine_km
 from app.services.opening_hours import OpenState, covers_visit, describe
 from app.services.validation_service import (
+    OUTDOOR_CATEGORIES,
     TravelLookup,
     ValidationLimits,
+    long_haul_mode,
     validate_itinerary,
 )
 
@@ -157,6 +160,134 @@ def _fits(entity: PlaceEntity, slot: Slot, day: date) -> tuple[int, float]:
         _openness(entity, slot, day)
     ]
     return rank, -(entity.rating or 0.0)
+
+
+def substitution_candidates(state: TripState, item_id: str) -> list[PlaceEntity]:
+    """The places that could take this slot, before any ranking.
+
+    Exposed so a caller can go and *measure* them - parking for a candidate is
+    never known in advance, because the parking pass only covers stops that are
+    already scheduled. Without this the ranking could only ever avoid a
+    known-bad option, never choose a known-good one, and a swap would trade a
+    measured inconvenience for an unmeasured one.
+    """
+    found = next(
+        ((day, item) for day, item in state.itinerary.iter_items() if item.item_id == item_id),
+        None,
+    )
+    if found is None:
+        return []
+    day, item = found
+
+    current = state.entities.get(item.entity_id or "")
+    kind: SlotKind = slot_kind_for(current) if current else "activity"
+    minutes = (
+        int((item.end_at - item.start_at).total_seconds() // 60)
+        if item.start_at and item.end_at
+        else 90
+    )
+    slot = Slot(kind, (item.start_at or datetime.combine(day.date, time(10, 0))).time(), minutes)
+
+    scheduled = {other.entity_id for _d, other in state.itinerary.iter_items() if other.entity_id}
+    rejected = {
+        rejection.target_id
+        for rejection in state.rejections
+        if rejection.target_kind == "entity"
+    }
+    return [
+        entity
+        for entity in state.entities.values()
+        if entity.entity_id not in scheduled
+        and entity.entity_id not in rejected
+        and slot_kind_for(entity) == kind
+        and _openness(entity, slot, day.date) != OpenState.CLOSED
+    ]
+
+
+def _substitution_summary(
+    state: TripState, replaced: ItineraryItem, chosen: PlaceEntity, day: ItineraryDay
+) -> str:
+    """Say what actually moved the choice, from figures the trip holds.
+
+    Only differences that are real are named. If the new place has no better
+    parking and the weather argued for nothing, the sentence says so rather
+    than dressing the swap up in reasons it did not have.
+    """
+    reasons: list[str] = []
+
+    was = state.arrival.get(replaced.entity_id) if replaced.entity_id else None
+    now = state.arrival.get(chosen.entity_id)
+    if now is not None and now.parking.is_known:
+        walk = now.overhead_minutes
+        before = was.overhead_minutes if was and was.parking.is_known else None
+        if walk is not None and before is not None and walk < before:
+            reasons.append(f"{walk:.0f} min from the car park instead of {before:.0f}")
+        elif walk is not None:
+            reasons.append(f"{walk:.0f} min from the car park")
+        elif was is not None and not was.parking.is_known:
+            reasons.append("parking here is known, where the last one was unverified")
+    elif was is not None and was.parking.is_known:
+        reasons.append("parking here has not been checked")
+
+    weather = day.weather
+    if weather is not None and weather.is_forecast:
+        chance = weather.precipitation_probability
+        if chance is not None and chance >= get_settings().rain_warning_probability:
+            outdoor_now = bool(OUTDOOR_CATEGORIES.intersection(chosen.categories))
+            reasons.append(
+                f"indoors, with rain forecast at {chance * 100:.0f}%"
+                if not outdoor_now
+                else f"still outdoors, and rain is forecast at {chance * 100:.0f}%"
+            )
+
+    head = f"{replaced.title} replaced with {chosen.name}"
+    return f"{head} — {'; '.join(reasons)}" if reasons else head
+
+
+def arrival_penalty(state: TripState, entity: PlaceEntity) -> float:
+    """How much harder this place is to arrive at, from what the trip knows.
+
+    A nudge, never a filter. Somewhere nobody has checked is still a real place
+    and stays in the running - it just loses to somewhere we know you can park.
+    Only a *confirmed* absence weighs heavily, which is the parking invariant
+    applied to ranking rather than to validation.
+    """
+    if long_haul_mode(state) != "driving":
+        return 0.0
+    arrival = state.arrival.get(entity.entity_id)
+    if arrival is None:
+        return 1.0
+    availability = arrival.parking.availability
+    if availability == "unavailable":
+        return 3.0
+    if availability == "unknown":
+        return 1.0
+    walk = arrival.overhead_minutes
+    if walk is None:
+        return 1.0
+    # A five-minute walk is nothing; twenty is the difference between an easy
+    # stop and a trek. Scaled rather than banded so it orders smoothly.
+    return min(walk / 10.0, 2.0)
+
+
+def weather_penalty(state: TripState, entity: PlaceEntity, day: ItineraryDay) -> float:
+    """Whether the day's weather argues against being outside.
+
+    Only a **forecast** counts. A seasonal norm may inform a traveller and may
+    not push a specific date's choice around, which is the same line the
+    validator holds.
+    """
+    weather = day.weather
+    if weather is None or not weather.is_forecast:
+        return 0.0
+    chance = weather.precipitation_probability
+    if chance is None or chance < get_settings().rain_warning_probability:
+        return 0.0
+    return 1.5 if OUTDOOR_CATEGORIES.intersection(entity.categories) else 0.0
+
+
+def _ease(state: TripState, entity: PlaceEntity, day: ItineraryDay) -> float:
+    return arrival_penalty(state, entity) + weather_penalty(state, entity, day)
 
 
 def _schedule_day(
@@ -443,7 +574,17 @@ def substitute_item(
             ],
         )
 
-    best = min(candidates, key=lambda entity: (*_fits(entity, slot, day.date), entity.entity_id))
+    # Openness first, then how easy it is to actually get to and stand in, then
+    # rating. Parking and a wet forecast are what "somewhere easier" means.
+    best = min(
+        candidates,
+        key=lambda entity: (
+            _fits(entity, slot, day.date)[0],
+            round(_ease(state, entity, day), 2),
+            _fits(entity, slot, day.date)[1],
+            entity.entity_id,
+        ),
+    )
     start, end = slot.window(day.date)
     replacement = ItineraryItem(
         type=item_type_for(kind),
@@ -491,7 +632,7 @@ def substitute_item(
         ],
         days=[_planned_day(candidate_state.itinerary.days[day_index], candidate_state, locked)],
         days_changed=[day.date],
-        summary=f"{item.title} replaced with {best.name}",
+        summary=_substitution_summary(state, item, best, day),
         validation=validation,
         warnings=[
             f"{len(candidates) - 1} other alternative(s) were available"

@@ -14,8 +14,15 @@ from datetime import date as date_type
 from typing import Any
 
 from app.config import Settings
+from app.models.arrival import ArrivalContext
 from app.models.common import utcnow
-from app.models.decision import Decision, DecisionOption, FlightOptionData, PlaceOption
+from app.models.decision import (
+    Decision,
+    DecisionOption,
+    DecisionScore,
+    FlightOptionData,
+    PlaceOption,
+)
 from app.models.flight import AirportOption, SearchAirportsInput, SearchFlightsInput
 from app.models.group import TravelerPreferences
 from app.models.hotel import SearchHotelsInput
@@ -51,7 +58,14 @@ from app.services.intake_service import (
     resolve_date,
     today_at,
 )
-from app.services.itinerary_service import build_itinerary, replan_day
+from app.services.itinerary_service import (
+    arrival_penalty,
+    build_itinerary,
+    replan_day,
+    substitute_item,
+    substitution_candidates,
+    weather_penalty,
+)
 from app.services.preference_service import (
     diff_profile,
     effective,
@@ -64,6 +78,7 @@ from app.services.toolbox import Toolbox
 from app.services.validation_service import (
     TravelLookup,
     build_travel_lookup,
+    long_haul_mode,
     mode_between,
     validate_itinerary,
 )
@@ -577,6 +592,24 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "type": "function",
+        "name": "replace_item",
+        "description": (
+            "Swap one stop for the best alternative this trip already knows about, keeping "
+            "its slot. Ranks candidates on how easy they are to arrive at - measured walk "
+            "from the car park, and whether the day's forecast argues against being "
+            "outdoors - so this is the tool for 'the parking there is bad, find somewhere "
+            "easier'. Refuses rather than leaving a hole when nothing fits; search for "
+            "somewhere new and try again."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"item_id": {"type": "string"}},
+            "required": ["item_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
         "name": "replan_day",
         "description": (
             "Rework one day and nothing else. Use this whenever the user complains about a "
@@ -687,6 +720,8 @@ class ToolContext:
     pending_brief_ops: list = field(default_factory=list)
     # Serialized ClarificationQuestions to ask the traveller.
     pending_clarifications: list = field(default_factory=list)
+    # entity_id -> serialized ArrivalContext measured this turn.
+    pending_arrival: dict = field(default_factory=dict)
     # Set only by the deterministic check in _update_trip_brief. The model never
     # gets to declare the brief ready; "confirmed" is the traveller's alone.
     pending_intake_status: str | None = None
@@ -852,6 +887,7 @@ def _working_state(context: ToolContext) -> TripState:
         or context.pending_traveler_prefs
         or context.pending_brief_ops
         or context.pending_clarifications
+        or context.pending_arrival
     )
     if not staged_anything:
         return context.state
@@ -873,6 +909,8 @@ def _working_state(context: ToolContext) -> TripState:
         working = TripState.model_validate(document)
     for question in context.pending_clarifications:
         working.intake.questions.append(ClarificationQuestion.model_validate(question))
+    for entity_id, arrival in context.pending_arrival.items():
+        working.arrival[entity_id] = ArrivalContext.model_validate(arrival)
     return working
 
 
@@ -2094,6 +2132,147 @@ async def _generate_itinerary(context: ToolContext, args: dict[str, Any]) -> dic
     return _proposal_view(proposal)
 
 
+# Enough to choose between, without spending a Places search and a Routes call
+# on every place the trip has ever heard of.
+MAX_PARKING_LOOKUPS = 5
+
+
+async def _ensure_parking(context: ToolContext, candidates: list) -> int:
+    """Measure parking for the places we are about to rank.
+
+    Without this the ranking has parking data for scheduled stops only, so it
+    could avoid a known-bad option but never choose a known-good one - and a
+    swap traded a measured sixteen-minute walk for an unmeasured one, which is
+    not "easier", only less known.
+    """
+    unknown = [
+        entity
+        for entity in candidates
+        if entity.entity_id not in context.state.arrival
+        and entity.entity_id not in context.pending_arrival
+    ][:MAX_PARKING_LOOKUPS]
+    if not unknown or context.toolbox is None:
+        return 0
+
+    mode = str(long_haul_mode(context.state))
+    for entity in unknown:
+        found = await context.toolbox.parking.context_for(context.state, entity, mode=mode)
+        context.pending_arrival[entity.entity_id] = found.model_dump(mode="json")
+    return len(unknown)
+
+
+async def _replace_item(context: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    """Swap one stop for the best alternative the trip already knows.
+
+    Exposed because the agent could not do it. `substitute_item` has existed
+    since the P0 pass, ranks on parking and the day's forecast, and was reachable
+    only from a button - so "replace this, the parking is bad" could be served
+    only by `replan_day` dropping the stop and leaving a hole. Removing
+    something is not replacing it.
+    """
+    item_id = args.get("item_id")
+    if not item_id:
+        return {"error": "item_id is required"}
+
+    working = _working_state(context)
+    day = next((d for d, i in working.itinerary.iter_items() if i.item_id == item_id), None)
+    if day is not None:
+        await _ensure_hours(context, [i.entity_id for i in day.items if i.entity_id])
+
+    await _ensure_parking(context, substitution_candidates(_working_state(context), item_id))
+    proposal = substitute_item(_working_state(context), item_id, travel=context.travel)
+    if proposal.is_empty:
+        return {
+            "replaced": False,
+            "reason": proposal.summary,
+            "hint": (
+                "Nothing the trip already knows fits that slot. Search for somewhere new "
+                "first, or say plainly that there is no alternative rather than dropping "
+                "the stop and leaving a hole."
+            ),
+        }
+
+    if await _ensure_routes(context, proposal):
+        proposal = substitute_item(_working_state(context), item_id, travel=context.travel)
+
+    _record_substitution(context, proposal)
+    context.proposals.put(proposal)
+    return _proposal_view(proposal)
+
+
+def _record_substitution(context: ToolContext, proposal: ItineraryProposal) -> None:
+    """Keep why the swap was made, so `Why?` can answer later.
+
+    The reasoning is computed either way - it is in the proposal summary. Not
+    storing it meant a stop chosen for a measured two-minute walk over a
+    sixteen-minute one reported "no stored decision recommended this place",
+    which is the provenance gap this project keeps finding in new places.
+    """
+    working = _working_state(context)
+    # The replacement is the item on the proposed day that is not on the stored
+    # one. Comparing ids is exact; comparing titles is not.
+    stored_ids = {item.item_id for _d, item in context.state.itinerary.iter_items()}
+    chosen = next(
+        (
+            item
+            for day in proposal.days
+            for item in day.items
+            if item.item_id not in stored_ids and item.entity_id
+        ),
+        None,
+    )
+    if chosen is None:
+        return
+
+    arrival = working.arrival.get(chosen.entity_id)
+    pros: list[str] = []
+    cons: list[str] = []
+    if arrival is not None and arrival.parking.is_known:
+        walk = arrival.overhead_minutes
+        pros.append(
+            f"{walk:.0f} min on foot from the car park" if walk is not None
+            else "parking is known here"
+        )
+    else:
+        cons.append("parking here has not been verified")
+    # The summary already states the trade-off in the terms it was decided on.
+    if "—" in proposal.summary:
+        pros.append(proposal.summary.split("—", 1)[1].strip())
+
+    # The ranking that actually chose it, in the terms it was decided on.
+    # Penalties are friction, so 0 is the best a place can do; the total is
+    # stated as the ordinary higher-is-better score everything else uses.
+    entity = working.entities.get(chosen.entity_id)
+    day = next((d for d in working.itinerary.days if chosen in d.items), None)
+    parking_penalty = arrival_penalty(working, entity) if entity else 1.0
+    rain_penalty = weather_penalty(working, entity, day) if entity and day else 0.0
+    score = DecisionScore(
+        total=round(max(0.0, 1.0 - (parking_penalty + rain_penalty) / 3.0), 3),
+        dimensions={"arrival": round(parking_penalty, 2), "weather": round(rain_penalty, 2)},
+        # Half coverage when the walk was never measured: the number rests on
+        # less than it looks like it does.
+        coverage=1.0 if (arrival and arrival.parking.is_known) else 0.5,
+        notes="friction, not quality: 0 penalty scores 1.0",
+    )
+
+    key = f"place_shortlists.replacement_{_slug(chosen.title)}"
+    context.pending_decisions[key] = Decision[PlaceOption](
+        status="selected",
+        rationale=proposal.summary,
+        updated_at=utcnow(),
+        options=[
+            DecisionOption[PlaceOption](
+                option_id=f"opt_{chosen.item_id}",
+                data=PlaceOption(entity_id=chosen.entity_id, purpose="replacement"),
+                status="selected",
+                score=score,
+                pros=pros,
+                cons=cons,
+            )
+        ],
+    ).model_dump(mode="json")
+
+
 async def _replan_day(context: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
     try:
         target = date_type.fromisoformat(args["date"])
@@ -2175,6 +2354,14 @@ async def _apply_trip_patch(context: ToolContext, args: dict[str, Any]) -> dict[
     # status if the deterministic check said the brief is now complete. All
     # unscoped - the brief is not about any one day.
     decision_ops += list(context.pending_brief_ops)
+    decision_ops += [
+        {
+            "op": "set" if entity_id in context.state.arrival else "add",
+            "path": f"/arrival/{entity_id}",
+            "value": arrival,
+        }
+        for entity_id, arrival in context.pending_arrival.items()
+    ]
     decision_ops += [
         {"op": "add", "path": "/intake/questions/-", "value": question}
         for question in context.pending_clarifications
@@ -2322,6 +2509,7 @@ HANDLERS = {
     "get_place_details": _get_place_details,
     "get_routes": _get_routes,
     "generate_itinerary": _generate_itinerary,
+    "replace_item": _replace_item,
     "replan_day": _replan_day,
     "validate_itinerary": _validate_itinerary,
     "apply_trip_patch": _apply_trip_patch,
@@ -2349,6 +2537,7 @@ RESEARCH_TOOLS = frozenset(
         "search_hotels",
         "generate_itinerary",
         "replan_day",
+        "replace_item",
     }
 )
 

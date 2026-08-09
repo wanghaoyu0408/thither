@@ -196,6 +196,17 @@ async def test_a_trip_that_predates_intake_still_researches(session):
 
     assert research_allowed(state) is True
 
+    # And recording a brief fact does not gate it. Moving to
+    # `awaiting_confirmation` used to defeat the grandfather clause, so the
+    # agent blocked itself the moment it wrote something down.
+    state.intake.status = "awaiting_confirmation"
+    assert research_allowed(state) is True
+
+    # An outstanding question does hold it, because something is genuinely
+    # waiting on the traveller.
+    state.intake.questions.append(ClarificationQuestion(question="When exactly?"))
+    assert research_allowed(state) is False
+
     # But a new trip that intake has actually touched is held.
     fresh = blank_trip()
     assert research_allowed(fresh) is False
