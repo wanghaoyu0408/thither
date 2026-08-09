@@ -595,11 +595,15 @@ details.debug li { font: 11.5px/1.7 var(--mono); color: var(--ink-3); }
            down a 656px scroll, which is the same as not being there. -->
       <form class="new" id="newTrip" hidden>
         <input name="title" placeholder="Title" required>
-        <input name="city" placeholder="Destination city" required>
+        <!-- Where from, not only where to. Without an origin the agent cannot
+             search flights or judge how far anything is, and it had to ask for
+             it in the chat every single time. -->
+        <input name="origin" placeholder="From (city or airport)">
+        <input name="city" placeholder="To (city)" required>
         <div class="row2"><input name="start" type="date" required><input name="end" type="date" required></div>
         <div class="row2">
-          <input name="adults" type="number" min="1" max="16" value="2" title="Adults">
-          <input name="rooms" type="number" min="1" max="8" value="1" title="Rooms">
+          <input name="adults" type="number" min="1" max="16" placeholder="Adults" title="Adults">
+          <input name="rooms" type="number" min="1" max="8" placeholder="Rooms" title="Rooms">
         </div>
         <button class="btn" type="submit">Create</button>
       </form>
@@ -851,12 +855,29 @@ $("newTrip").onsubmit = async (e) => {
   const f = new FormData(e.target), btn = e.target.querySelector("button");
   btn.disabled = true;
   try {
+    const text = (name) => (f.get(name) || "").trim();
+    // An empty box means "I have not said", not a number we picked for them:
+    // a trip quietly created for 2 adults is a trip priced for people who may
+    // not exist. Left blank, intake asks before anything is searched.
+    const count = (name) => {
+      const raw = text(name);
+      return raw === "" ? null : Number(raw) || null;
+    };
+    // "SFO" is an airport, "San Francisco" is a city; three upper-case letters
+    // is the only unambiguous signal, and guessing wrong sends the flight
+    // search somewhere real but wrong.
+    const from = text("origin");
+    const origin = /^[A-Za-z]{3}$/.test(from)
+      ? { airport_codes: [from.toUpperCase()] }
+      : from ? { city: from } : {};
+
     const trip = await api("/trips", { method: "POST", body: JSON.stringify({
-      title: f.get("title"),
+      title: text("title"),
       brief: {
-        destination: { city: f.get("city"), flexible: false },
+        origin,
+        destination: { city: text("city"), flexible: false },
         dates: { start: f.get("start"), end: f.get("end") },
-        party: { adults: +f.get("adults") || 2, rooms: +f.get("rooms") || 1 },
+        party: { adults: count("adults"), rooms: count("rooms") },
       },
     })});
     e.target.reset();
@@ -1759,28 +1780,41 @@ function photoFor(placeId) {
   return PHOTOS.get(placeId);
 }
 
-let photoWatcher = null;
+/** Tiles inside (or just outside) the scrolled viewport, not yet attempted.
+ *
+ *  Measured rather than observed. IntersectionObserver only delivers records
+ *  for a page that is compositing frames, so in a backgrounded or headless
+ *  window it silently never fires and no photo ever loads - the failure mode
+ *  where a feature exists and is unreachable. A rect test always answers. */
+function visibleTiles() {
+  const scroller = document.querySelector(".work-scroll");
+  if (!scroller) return [];
+  const box = scroller.getBoundingClientRect();
+  return [...$("work").querySelectorAll(".thumb[data-photo]")].filter((tile) => {
+    if (!tile.dataset.photo || tile.dataset.tried) return false;
+    const rect = tile.getBoundingClientRect();
+    return rect.bottom > box.top - 150 && rect.top < box.bottom + 150;
+  });
+}
 
 function hydratePhotos() {
-  const tiles = [...$("work").querySelectorAll(".thumb[data-photo]")]
-    .filter((el) => el.dataset.photo && !el.classList.contains("loaded"));
-  if (!tiles.length) return;
+  for (const tile of visibleTiles()) {
+    tile.dataset.tried = "1";      // one attempt per card, per render
+    photoFor(tile.dataset.photo).then((url) => {
+      if (url && tile.isConnected) {
+        tile.style.backgroundImage = `url("${url}")`;
+        tile.classList.add("loaded");
+      }
+    });
+  }
+}
 
-  if (photoWatcher) photoWatcher.disconnect();
-  photoWatcher = new IntersectionObserver((entries) => {
-    for (const entry of entries) {
-      if (!entry.isIntersecting) continue;
-      const tile = entry.target;
-      photoWatcher.unobserve(tile);
-      photoFor(tile.dataset.photo).then((url) => {
-        if (url && tile.isConnected) {
-          tile.style.backgroundImage = `url("${url}")`;
-          tile.classList.add("loaded");
-        }
-      });
-    }
-  }, { root: document.querySelector(".work-scroll"), rootMargin: "120px" });
-  tiles.forEach((tile) => photoWatcher.observe(tile));
+/** Scrolling brings more cards into view; nothing is fetched before then. */
+function watchForPhotos() {
+  let tick = null;
+  const soon = () => { clearTimeout(tick); tick = setTimeout(hydratePhotos, 150); };
+  document.querySelector(".work-scroll")?.addEventListener("scroll", soon, { passive: true });
+  addEventListener("resize", soon);
 }
 
 function closeMenus() {
@@ -2511,6 +2545,7 @@ $("newTripToggle").onclick = () => {
 
 restoreLayout();
 wireGrips();
+watchForPhotos();
 loadTrips().catch((err) =>
   $("tripList").innerHTML = `<p class="empty">Cannot reach the server: ${esc(err.message)}</p>`);
 </script>
