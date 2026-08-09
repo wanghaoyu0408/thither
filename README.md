@@ -64,7 +64,7 @@ Then open http://127.0.0.1:8000/docs.
 .venv/Scripts/python.exe -m pytest -q
 ```
 
-559 tests, no network, no API keys. The `tests/scenarios/` files map one-to-one onto each
+598 tests, no network, no API keys. The `tests/scenarios/` files map one-to-one onto each
 milestone's acceptance criteria.
 
 Contract tests against the real Google APIs are opt-in, since they cost quota:
@@ -330,6 +330,12 @@ Any failure aborts the whole patch. There is no partial application, and no path
 lets a caller hand back a replacement state.
 
 ## Design decisions worth knowing
+
+The load-bearing rules — and one test per defect that a live run turned up — are
+written down in **[INVARIANTS.md](INVARIANTS.md)** rather than left in anyone's head:
+absence is not negation, a score is not a confidence, a write is all-or-nothing and
+success is reported only after re-reading the row, a group score never hides a split,
+and conflict detection cannot be moved by tuning a ranker.
 
 **Locks address ids, not paths.** A path-based lock silently stops protecting its target
 the moment an array index shifts. `LockRecord` names `(target_kind, target_id)`, and

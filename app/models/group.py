@@ -90,9 +90,15 @@ class GroupScore(BaseModel):
     worst_traveler_id: str | None = None
     spread: float = 0.0
 
-    # 0.6*mean + 0.4*worst. Sorting needs one number; this is the one that costs
-    # an option something for ruining somebody.
+    # (1-worst_weight)*mean + worst_weight*worst, undamped: what the group's
+    # scores actually say. The evidence discount lives at ordering time in
+    # group_scoring.group_ranking_value, never in this stored number.
     total: float = 0.0
+
+    # The fairness weight this total was computed with, recorded so a stored
+    # score is self-describing - a 0.62 means nothing without knowing how much
+    # the unhappiest traveller counted. Configurable via Settings.
+    worst_weight: float = 0.4
 
     # How much of the intended evidence the underlying scores rested on. Four
     # people agreeing about a hotel nobody has any data for is not consensus,
@@ -230,14 +236,6 @@ class PreferenceConflict(BaseModel):
         )
 
 
-# What a place is verified to support, from a provider that only ever asserts
-# the positive case.
-#
-#   yes     - the provider positively attested it
-#   unknown - it did not, which is NOT the same as "no"
-#
-# Google returns `servesVegetarianFood: false` for every pizzeria in Shibuya,
-# and every pizzeria serves a margherita. Treating that false as a confirmed
-# violation would hard-filter most of a city off a vegetarian's trip on the
-# strength of a field that only ever means "not attested".
-DietaryFit = Literal["yes", "unknown"]
+# Dietary and accessibility verification uses the shared tri-state
+# `Attestation` from app/models/common.py - see there for why absence is not
+# negation, with the measured evidence.

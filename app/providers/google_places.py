@@ -15,6 +15,7 @@ from typing import Any
 
 import httpx
 
+from app.models.common import Attestation
 from app.models.place import PlaceFieldSet, PlaceSummary
 from app.providers.base import request_json
 
@@ -85,27 +86,28 @@ def details_field_mask(field_set: PlaceFieldSet) -> str:
     return ",".join(fields_for(field_set))
 
 
-def _attested(value: Any) -> bool | None:
-    """Google's booleans are one-directional; only `True` is a claim.
-
-    `servesVegetarianFood: false` is returned for every pizzeria in Shibuya, and
-    every pizzeria serves a margherita. The field means "attested" or "not
-    attested" - never "confirmed absent" - so the false case is folded into
-    None, where the rest of this codebase already knows how to treat an unknown.
-    """
-    return True if value is True else None
+# Google -> Attestation. This provider can only ever assert the positive case:
+# its False is "not attested" (measured live: every Shibuya pizzeria comes back
+# false, and every pizzeria serves a margherita), so nothing Google returns maps
+# to confirmed_false. A future provider that genuinely asserts the negative maps
+# its denial to confirmed_false explicitly - the mapping table lives in
+# INVARIANTS.md.
 
 
-def _accessibility(raw: dict[str, Any]) -> dict[str, bool]:
-    """Only the accessibility keys Google positively attested.
+def _attested(value: Any) -> Attestation:
+    return "confirmed_true" if value is True else "unknown"
 
-    Same asymmetry: an all-false object turns up beside half-true ones on
-    comparable venues, so a false here is silence rather than a denial.
+
+def _accessibility(raw: dict[str, Any]) -> dict[str, Attestation]:
+    """Per-option attestations; only positives are claims here.
+
+    An all-false accessibilityOptions object turns up beside half-true ones on
+    comparable venues, so a false is silence rather than a denial.
     """
     options = raw.get("accessibilityOptions")
     if not isinstance(options, dict):
         return {}
-    return {key: True for key, value in options.items() if value is True}
+    return {key: _attested(value) for key, value in options.items() if value is True}
 
 
 def normalize_place(raw: dict[str, Any]) -> PlaceSummary:

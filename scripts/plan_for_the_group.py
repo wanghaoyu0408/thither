@@ -282,11 +282,11 @@ async def main() -> int:
                 print(f"    {query}")
                 resolved = resolve_places(details.results, {})
                 for entity in resolved:
-                    verdict = (
-                        "CONFIRMED serves vegetarian food"
-                        if entity.serves_vegetarian
-                        else "unverified - Google has not said either way"
-                    )
+                    verdict = {
+                        "confirmed_true": "CONFIRMED serves vegetarian food",
+                        "confirmed_false": "CONFIRMED unsuitable",
+                        "unknown": "unverified - Google has not said either way",
+                    }[entity.serves_vegetarian]
                     print(f"       {entity.name[:40]:<42} {verdict}")
                 entities.extend(resolved)
                 print()

@@ -173,23 +173,58 @@ class TripRepository:
         ]
 
     async def apply_patch(self, trip_id: str, patch: TripPatch) -> PatchResult:
-        """Validate the patch against current state, then commit it conditionally."""
+        """One patch, atomically. See `apply_patches` - this is the n=1 case."""
+        return (await self.apply_patches(trip_id, [patch]))[-1]
+
+    async def apply_patches(self, trip_id: str, patches: list[TripPatch]) -> list[PatchResult]:
+        """Apply a sequence of patches as one all-or-nothing unit.
+
+        Callers sometimes need several patches to land together - refreshing a
+        place's facts before a day-scoped replan, for instance, because a scoped
+        patch may not rewrite existing entities. Applying them one commit at a
+        time meant the first could persist and the second be rejected, leaving
+        the trip in a state nobody asked for. So:
+
+        1. Every patch is validated and applied *in memory*, chained, using the
+           same pure pipeline as a single patch. Any rejection aborts before a
+           single row is written.
+        2. One conditional UPDATE carries the final state. The WHERE clause is
+           still the optimistic-concurrency guard, now against the revision the
+           batch started from, so a concurrent writer invalidates all of it
+           rather than half.
+        3. One commit, then a **reload**: the returned state and revision come
+           from re-reading the row, never from the in-memory candidate. Success
+           is only ever reported for something the store actually holds.
+
+        Returns one result per patch, so a caller can see which one failed.
+        """
+        if not patches:
+            return []
+
         state = await self.get(trip_id)
+        base_revision = state.revision
 
-        result = apply_patch_to_state(state, patch)
-        if not result.applied or result.state is None:
-            return result
-
-        new_state = result.state
+        results: list[PatchResult] = []
+        working = state
+        for patch in patches:
+            result = apply_patch_to_state(working, patch)
+            results.append(result)
+            if not result.applied or result.state is None:
+                # Nothing has been written yet - the loop is pure - but roll back
+                # so no earlier statement in this session can leak out.
+                await self._session.rollback()
+                return results
+            working = result.state
 
         # The WHERE clause is the concurrency guard: if another writer moved the
-        # revision after our read, this matches zero rows.
+        # revision after our read, this matches zero rows and none of the batch
+        # lands.
         outcome = await self._session.execute(
             update(TripRow)
-            .where(TripRow.id == trip_id, TripRow.revision == patch.base_revision)
+            .where(TripRow.id == trip_id, TripRow.revision == base_revision)
             .values(
-                revision=new_state.revision,
-                state=new_state.model_dump(mode="json"),
+                revision=working.revision,
+                state=working.model_dump(mode="json"),
                 updated_at=utcnow(),
             )
         )
@@ -199,36 +234,49 @@ class TripRepository:
             current = await self._session.scalar(
                 select(TripRow.revision).where(TripRow.id == trip_id)
             )
-            return PatchResult(
-                applied=False,
-                revision=current if current is not None else patch.base_revision,
-                errors=[
-                    PatchError(
-                        code="REVISION_CONFLICT",
-                        message=(
-                            f"another change landed while this patch was being validated; "
-                            f"the trip is now at revision {current}"
-                        ),
-                    )
-                ],
+            conflict = PatchError(
+                code="REVISION_CONFLICT",
+                message=(
+                    f"another change landed while this patch was being validated; "
+                    f"the trip is now at revision {current}"
+                ),
             )
-
-        for event_type in [*_derive_event_types(patch.operations), "patch_applied"]:
-            self._session.add(
-                TripEventRow(
-                    trip_id=trip_id,
-                    revision=new_state.revision,
-                    event_type=event_type,
-                    payload={
-                        "reason": patch.reason,
-                        "actor": patch.actor,
-                        "operations": [op.model_dump(mode="json") for op in patch.operations],
-                        "warnings": [w.model_dump(mode="json") for w in result.warnings],
-                    }
-                    if event_type == "patch_applied"
-                    else {"reason": patch.reason, "actor": patch.actor},
+            return [
+                PatchResult(
+                    applied=False,
+                    revision=current if current is not None else base_revision,
+                    errors=[conflict],
                 )
-            )
+                for _ in patches
+            ]
+
+        # Audit granularity is per patch even though persistence is per batch.
+        for patch, result in zip(patches, results, strict=True):
+            for event_type in [*_derive_event_types(patch.operations), "patch_applied"]:
+                self._session.add(
+                    TripEventRow(
+                        trip_id=trip_id,
+                        revision=result.revision,
+                        event_type=event_type,
+                        payload={
+                            "reason": patch.reason,
+                            "actor": patch.actor,
+                            "operations": [op.model_dump(mode="json") for op in patch.operations],
+                            "warnings": [w.model_dump(mode="json") for w in result.warnings],
+                        }
+                        if event_type == "patch_applied"
+                        else {"reason": patch.reason, "actor": patch.actor},
+                    )
+                )
 
         await self._session.commit()
-        return result
+
+        # Reload. The caller's success payload is built from what the database
+        # holds, not from what we hoped to write - a report of "applied,
+        # revision N" that was never read back is a claim, not a fact.
+        self._session.expire_all()
+        persisted = await self.get(trip_id)
+        results[-1] = results[-1].model_copy(
+            update={"state": persisted, "revision": persisted.revision}
+        )
+        return results

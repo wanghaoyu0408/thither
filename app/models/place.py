@@ -4,6 +4,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.models.common import AttestationField, AttestationMap
+
 
 class PlaceFieldSet(StrEnum):
     """How much to ask Google for, which is also how much it costs.
@@ -94,18 +96,14 @@ class PlaceSummary(BaseModel):
 
     opening_hours: dict[str, Any] | None = None
 
-    # Google attests the positive case only. `True` means it confirmed the
-    # place serves vegetarian food; `False` and absent are the same thing -
-    # not attested - and are both stored as None.
-    #
-    # Verified live: every pizzeria in Shibuya comes back False, and every
-    # pizzeria serves a margherita. Keeping False would turn "Google did not
-    # say" into "Google said no", which is the exact confident wrongness this
-    # project exists to avoid.
-    serves_vegetarian: bool | None = None
+    # Tri-state on purpose: Google attests the positive case only, so its False
+    # is "not attested", never "confirmed absent" - see Attestation in
+    # app/models/common.py for the measured evidence. Old bool|None values in
+    # cached JSON are coerced (True -> confirmed_true, False/None -> unknown).
+    serves_vegetarian: AttestationField = "unknown"
 
-    # Same asymmetry. Only the keys Google actually attested are kept.
-    accessibility: dict[str, bool] = {}
+    # Same asymmetry, per accessibility option.
+    accessibility: AttestationMap = {}
 
     website_url: str | None = None
     maps_url: str | None = None

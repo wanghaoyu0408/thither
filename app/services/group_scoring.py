@@ -39,14 +39,16 @@ def build_group_score(
     per_traveler: dict[str, float],
     names: dict[str, str] | None = None,
     coverage: float = 1.0,
+    worst_weight: float = WORST_WEIGHT,
 ) -> GroupScore:
     """Summarize per-traveller scores without discarding them.
 
-    Lives here rather than on the model because it is arithmetic, and because
-    the damping rule it shares with `combine` belongs to the service layer.
+    Lives here rather than on the model because it is arithmetic. `total` is
+    undamped - it says what the group's scores say - and `worst_weight` is
+    recorded alongside it so the number is self-describing.
     """
     if not per_traveler:
-        return GroupScore(names=names or {})
+        return GroupScore(names=names or {}, worst_weight=worst_weight)
 
     values = list(per_traveler.values())
     worst = min(values)
@@ -63,16 +65,22 @@ def build_group_score(
         best=round(best, 4),
         worst_traveler_id=worst_id,
         spread=round(best - worst, 4),
-        # The group's shared verdict gets the same treatment an individual score
-        # does, against the worst-informed member's coverage. Otherwise a hotel
-        # with three reviews leads the ranking because the one traveller who
-        # only cares about price happens to know the one thing there is to know.
-        # You cannot recommend what nobody has looked at.
-        total=round(
-            damp_for_coverage((1.0 - WORST_WEIGHT) * mean + WORST_WEIGHT * worst, coverage), 4
-        ),
+        total=round((1.0 - worst_weight) * mean + worst_weight * worst, 4),
+        worst_weight=worst_weight,
         coverage=round(coverage, 3),
     )
+
+
+def group_ranking_value(group: GroupScore) -> float:
+    """What group ordering sorts on: the verdict, discounted by its evidence.
+
+    Damped against the *worst-informed* member's coverage. Otherwise a hotel
+    with three reviews leads because the one traveller who only cares about
+    price happens to know the one thing there is to know - and you cannot
+    recommend what nobody has looked at. Never stored; the mirror of
+    `scoring.ranking_value` for the group case.
+    """
+    return damp_for_coverage(group.total, group.coverage)
 
 
 @dataclass
@@ -91,6 +99,11 @@ class GroupRanked[T]:
     def total(self) -> float:
         return self.group.total
 
+    @property
+    def ranking_value(self) -> float:
+        """What this sorted on - the verdict discounted by its evidence."""
+        return group_ranking_value(self.group)
+
 
 def score_for_group[T](
     options: Sequence[T],
@@ -99,6 +112,7 @@ def score_for_group[T](
     names: dict[str, str],
     score_one: Callable[[T, TravelerPreferences], Any],
     key: Callable[[T], str],
+    worst_weight: float = WORST_WEIGHT,
 ) -> list[GroupRanked[T]]:
     """Score every option for every traveller, then combine.
 
@@ -121,7 +135,7 @@ def score_for_group[T](
         # The thinnest evidence anyone's score rested on. Four people agreeing
         # about an option nobody has data for is not agreement.
         coverage = min((scored.score.coverage for scored in per_traveler.values()), default=1.0)
-        group = build_group_score(totals, names, coverage=coverage)
+        group = build_group_score(totals, names, coverage=coverage, worst_weight=worst_weight)
         ranked.append(
             GroupRanked(
                 option=option,
@@ -132,8 +146,9 @@ def score_for_group[T](
             )
         )
 
-    # Ties break on the option key so the order is reproducible.
-    ranked.sort(key=lambda item: (-item.group.total, key(item.option)))
+    # Ordered on the evidence-discounted value, not the stored total. Ties break
+    # on the option key so the order is reproducible.
+    ranked.sort(key=lambda item: (-group_ranking_value(item.group), key(item.option)))
     return ranked
 
 
@@ -185,6 +200,7 @@ def rank_flights_for_group(
     names: dict[str, str],
     airports: list[AirportOption] | None = None,
     limit: int | None = None,
+    worst_weight: float = WORST_WEIGHT,
 ) -> tuple[list[GroupRanked[FlightOptionData]], list[str]]:
     """Group flight ranking, with the avoided-airline rule applied group-wide.
 
@@ -240,6 +256,7 @@ def rank_flights_for_group(
             preferences=prefs.flight,
         ),
         key=lambda option: option.offer_ref,
+        worst_weight=worst_weight,
     )
     return (ranked[:limit] if limit else ranked), warnings
 
@@ -251,6 +268,7 @@ def rank_hotels_for_group(
     names: dict[str, str],
     limit: int | None = None,
     cheapest: float | None = None,
+    worst_weight: float = WORST_WEIGHT,
 ) -> list[GroupRanked[HotelOptionData]]:
     """Group hotel ranking.
 
@@ -276,6 +294,7 @@ def rank_hotels_for_group(
             option, cheapest=cheapest, preferences=prefs.hotel
         ),
         key=lambda option: option.offer_ref or option.name,
+        worst_weight=worst_weight,
     )
     return ranked[:limit] if limit else ranked
 
@@ -288,6 +307,7 @@ def rank_places_for_group(
     origin: tuple[float, float] | None = None,
     signals: dict | None = None,
     limit: int | None = None,
+    worst_weight: float = WORST_WEIGHT,
 ) -> list[GroupRanked[PlaceSummary]]:
     """Group place ranking.
 
@@ -313,6 +333,7 @@ def rank_places_for_group(
             signal=by_place_id.get(place.place_id),
         ),
         key=lambda place: place.place_id,
+        worst_weight=worst_weight,
     )[: limit or None]
 
 

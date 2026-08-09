@@ -29,6 +29,7 @@ from app.services.entity_service import resolve_places
 from app.services.flight_ranking import cheapest_of, explain_choice, rank_flights
 from app.services.flight_service import SANDBOX_DISCLAIMER
 from app.services.group_scoring import (
+    group_ranking_value,
     rank_flights_for_group,
     rank_hotels_for_group,
     rank_places_for_group,
@@ -741,6 +742,28 @@ async def _discover_restaurants(context: ToolContext, args: dict[str, Any]) -> d
     # happens once inside the pipeline; this only says who each result suits.
     working = _working_state(context)
     travelers, gaps = effective(working)
+
+    # The confirmed-violation rule: an option a provider positively asserts
+    # cannot suit somebody's diet is filtered out of a *new* shortlist, with the
+    # removal named. Only confirmed_false - an unknown is never filtered, it is
+    # raised as a question by the conflict layer. No current provider emits
+    # confirmed_false; the branch exists so the tri-state means something.
+    restricted = any(prefs.food.dietary_restrictions for prefs in travelers.values())
+    if restricted:
+        denied = [
+            rec
+            for rec in outcome.recommendations
+            if (entity := outcome.entities.get(rec.entity_id)) is not None
+            and entity.serves_vegetarian == "confirmed_false"
+        ]
+        if denied:
+            names_dropped = ", ".join(outcome.entities[rec.entity_id].name for rec in denied)
+            outcome.recommendations = [rec for rec in outcome.recommendations if rec not in denied]
+            outcome.warnings.append(
+                f"dropped {len(denied)} option(s) confirmed unsuitable for a stated dietary "
+                f"restriction: {names_dropped}. Unverified places are kept and raised as "
+                f"questions instead."
+            )
     group_by_place: dict[str, Any] = {}
     if travelers and outcome.recommendations:
         group_by_place = {
@@ -749,6 +772,7 @@ async def _discover_restaurants(context: ToolContext, args: dict[str, Any]) -> d
                 [rec.ranked.place for rec in outcome.recommendations],
                 travelers=travelers,
                 names=traveler_names(working),
+                worst_weight=context.settings.group_worst_weight,
             )
         }
 
@@ -878,14 +902,18 @@ async def _search_flights(context: ToolContext, args: dict[str, Any]) -> dict[st
     group_warnings: list[str] = list(gaps)
     if travelers:
         grouped, airline_warnings = rank_flights_for_group(
-            result.results, travelers=travelers, names=names, airports=context.airports
+            result.results,
+            travelers=travelers,
+            names=names,
+            airports=context.airports,
+            worst_weight=context.settings.group_worst_weight,
         )
         group_warnings.extend(airline_warnings)
         group_by_ref = {item.option.offer_ref: item for item in grouped}
         # The group's order wins where there is a group to have one.
         ranked.sort(
             key=lambda item: (
-                -group_by_ref[item.option.offer_ref].group.total
+                -group_ranking_value(group_by_ref[item.option.offer_ref].group)
                 if item.option.offer_ref in group_by_ref
                 else 0.0,
                 item.option.offer_ref,
@@ -1047,11 +1075,12 @@ async def _search_hotels(context: ToolContext, args: dict[str, Any]) -> dict[str
             [item.option for item in shortlist.ranked],
             travelers=travelers,
             names=traveler_names(working),
+            worst_weight=context.settings.group_worst_weight,
         )
         group_by_ref = {(item.option.offer_ref or item.option.name): item for item in grouped}
         shortlist.ranked.sort(
             key=lambda item: (
-                -group_by_ref[item.option.offer_ref or item.option.name].group.total,
+                -group_ranking_value(group_by_ref[item.option.offer_ref or item.option.name].group),
                 item.option.name,
             )
         )
@@ -1123,8 +1152,13 @@ def _group_view(ranked: Any) -> dict[str, Any]:
         return {}
     group = ranked.group
     return {
-        "group_score": group.total,
+        # The verdict sentence first, and the raw number only alongside the two
+        # things that qualify it. A bare `group_score` invited exactly the
+        # quotation this milestone forbids.
         "group_verdict": group.describe(),
+        "group_score": group.total,
+        "group_score_evidence_coverage": group.coverage,
+        "group_worst_weight": group.worst_weight,
         "per_traveler": {group.name_of(tid): value for tid, value in group.per_traveler.items()},
         "group_is_split": group.is_split,
         "worst_served": group.name_of(group.worst_traveler_id),

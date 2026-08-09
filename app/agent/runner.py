@@ -201,56 +201,65 @@ class AgentRunner:
     async def _apply_all(
         self, context: ToolContext, run: AgentRun, plans: list[dict[str, Any]]
     ) -> dict[str, Any]:
-        """Apply patch plans in order, stopping at the first rejection.
+        """Commit every plan as one all-or-nothing unit.
 
-        Each plan is built against the revision left by the previous one, so a
-        refresh-then-replan pair cannot conflict with itself.
+        A turn can need more than one patch - refreshing a place's facts before
+        a day-scoped replan, because a scoped patch may not rewrite existing
+        entities. Committing them separately meant the refresh could land and
+        the replan be rejected, leaving the trip half-changed. They now go to
+        the repository together: all of them persist, or none does.
+
+        Chained base revisions are constructed here (orig, orig+1, ...) because
+        the repository validates each against the state the previous one left.
         """
-        outcome: dict[str, Any] = {"applied": False}
-        for plan in plans:
-            if not plan["operations"]:
-                continue
-            patch = TripPatch(
-                base_revision=context.state.revision,
+        prepared = [plan for plan in plans if plan["operations"]]
+        if not prepared:
+            return {"applied": False}
+
+        base = context.state.revision
+        patches = [
+            TripPatch(
+                base_revision=base + offset,
                 reason=plan["reason"],
                 actor="agent",
                 operations=plan["operations"],
                 scope=plan.get("scope"),
                 unlock_targets=plan.get("unlock_targets", []),
             )
-            outcome = await self._apply(context, run, patch)
-            if not outcome.get("applied"):
-                return outcome
-        return outcome
+            for offset, plan in enumerate(prepared)
+        ]
 
-    async def _apply(self, context: ToolContext, run: AgentRun, patch: TripPatch) -> dict[str, Any]:
-        result = await self._repo.apply_patch(context.state.trip_id, patch)
-        run.patches.append(result)
+        results = await self._repo.apply_patches(context.state.trip_id, patches)
+        run.patches.extend(results)
 
-        if not result.applied:
+        failed = next((result for result in results if not result.applied), None)
+        if failed is not None:
+            # Nothing was written, so the turn's staged work is still valid and
+            # every pending_* buffer is deliberately left intact.
             return {
                 "applied": False,
                 "errors": [
-                    {
-                        "code": error.code,
-                        "message": error.message,
-                        "details": error.details,
-                    }
-                    for error in result.errors
+                    {"code": error.code, "message": error.message, "details": error.details}
+                    for error in failed.errors
                 ],
                 "hint": "fix the cause and propose again; do not retry this patch unchanged",
             }
 
-        context.state = result.state
+        # `results[-1].state` is the row re-read after commit, so everything
+        # below is reporting what the store holds rather than what we sent.
+        final = results[-1]
+        context.state = final.state
         context.pending_entity_ops.clear()
         context.pending_evidence.clear()
         context.pending_decisions.clear()
         context.pending_traveler_prefs.clear()
         context.pending_questions.clear()
-        run.revision_after = result.revision
+        context.pending_stale.clear()
+        run.revision_after = final.revision
 
         return {
             "applied": True,
-            "revision": result.revision,
-            "warnings": [w.message for w in result.warnings],
+            "revision": final.revision,
+            "persisted": True,
+            "warnings": [w.message for result in results for w in result.warnings],
         }

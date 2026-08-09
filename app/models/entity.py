@@ -3,7 +3,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from app.models.common import new_id, utcnow
+from app.models.common import AttestationField, AttestationMap, new_id, utcnow
 
 
 class PlaceEntity(BaseModel):
@@ -37,10 +37,11 @@ class PlaceEntity(BaseModel):
     # whenever this was fetched.
     opening_hours: dict[str, Any] | None = None
 
-    # Positive attestations only; None means "Google did not say", never "no".
-    # See PlaceSummary.serves_vegetarian for why the distinction is load-bearing.
-    serves_vegetarian: bool | None = None
-    accessibility: dict[str, bool] = {}
+    # Tri-state: unknown means "nobody said", never "no". Stored TripState rows
+    # from before the tri-state carry true/null/false here and are coerced on
+    # validation - see as_attestation in app/models/common.py.
+    serves_vegetarian: AttestationField = "unknown"
+    accessibility: AttestationMap = {}
 
     # IANA zone, e.g. "Asia/Tokyo".
     timezone: str | None = None

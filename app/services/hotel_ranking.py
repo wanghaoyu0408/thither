@@ -23,10 +23,11 @@ comes to mean "expensive category" without anyone deciding that it should.
 
 from dataclasses import dataclass, field
 
+from app.models.common import Attestation
 from app.models.decision import DecisionScore, HotelOptionData
 from app.models.hotel import HotelRating
 from app.models.traveler import HotelPreferences
-from app.services.scoring import combine, price_score
+from app.services.scoring import combine, floor_check, price_score, ranking_value
 
 # Beyond this a hotel is a commute from the trip, not a base for it. Same
 # ceiling the area ranker uses, and for the same reason.
@@ -98,35 +99,49 @@ def _star_score(option: HotelOptionData) -> float | None:
     return round(rating.value / rating.scale_max, 4)
 
 
-def _minimum_score(option: HotelOptionData, preferences: HotelPreferences) -> float | None:
-    """Whether this clears the rating floor the traveller asked for.
+def floor_verdict(option: HotelOptionData, minimum: float | None) -> Attestation:
+    """Whether this hotel clears a stated rating floor, in the tri-state.
 
-    `None` when they asked for nothing, or when the rating is not solid enough
-    to answer with. A 5.0 from three reviews is already too thin to score on
-    (`_user_rating_score` refuses it), and letting it clear a stated 4.5 floor
-    anyway would be the same number being untrustworthy and authoritative at
-    once. An unproven hotel has not failed the test - nobody has run it.
+    Shares the vocabulary of the dietary attestations on purpose: both answer a
+    factual question that sparse data cannot settle. `unknown` covers "no
+    rating published" and "too few reviews to read anything into" - neither is
+    a pass, and neither is a failure.
+    """
+    if minimum is None:
+        return "confirmed_true"
+    rating = option.user_rating
+    return floor_check(
+        rating.value if rating else None,
+        rating.review_count if rating else None,
+        minimum,
+        min_reviews=MIN_REVIEWS_TO_SCORE,
+    )
+
+
+def _minimum_score(option: HotelOptionData, preferences: HotelPreferences) -> float | None:
+    """The stated floor as a score dimension, or nothing when unanswerable.
+
+    A 5.0 from three reviews is too thin to score on (`_user_rating_score`
+    refuses it), so letting it clear a stated 4.5 floor would make the same
+    number untrustworthy and authoritative at once. Unknown scores nothing at
+    all rather than passing or failing.
     """
     if preferences.min_rating is None:
         return None
-    rating = option.user_rating
-    if rating is None:
+    verdict = floor_verdict(option, preferences.min_rating)
+    if verdict == "unknown":
         return None
-    if rating.review_count is not None and rating.review_count < MIN_REVIEWS_TO_SCORE:
-        return None
-    return 1.0 if rating.value >= preferences.min_rating else 0.0
+    return 1.0 if verdict == "confirmed_true" else 0.0
 
 
 def meets_min_rating(option: HotelOptionData, minimum: float | None) -> bool:
-    """Whether the guest rating clears an explicitly stated floor.
+    """Whether a hotel survives an explicitly stated floor as a filter.
 
-    A hotel with no user rating is not treated as failing: absent is not low,
-    and dropping every unreviewed property would quietly delete new hotels.
+    Only a *confirmed* failure is dropped. An unrated or barely-rated hotel has
+    not failed the test - nobody could run it - so it is kept and left to the
+    conflict layer to raise, rather than quietly deleting every new property.
     """
-    if minimum is None:
-        return True
-    rating = option.user_rating
-    return rating is None or rating.value >= minimum
+    return floor_verdict(option, minimum) != "confirmed_false"
 
 
 def score_hotel(
@@ -283,9 +298,11 @@ def rank_hotels(
         cheapest = min(prices) if prices else None
 
     ranked = [score_hotel(option, cheapest=cheapest, preferences=preferences) for option in options]
+    # ranking_value, not the stored total: thin evidence is discounted at
+    # ordering time only (INVARIANTS.md section 2).
     ranked.sort(
         key=lambda item: (
-            -item.score.total,
+            -ranking_value(item.score),
             item.nightly if item.nightly is not None else 1e9,
             item.ref,
         )

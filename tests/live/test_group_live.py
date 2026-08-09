@@ -53,12 +53,12 @@ async def details_for(toolbox, query: str, limit: int = 6):
 async def test_a_full_fetch_carries_the_dietary_attestation(toolbox):
     places = await details_for(toolbox, "vegetarian restaurant in Shibuya Tokyo")
 
-    confirmed = [place for place in places if place.serves_vegetarian]
+    confirmed = [place for place in places if place.serves_vegetarian == "confirmed_true"]
     assert confirmed, "no vegetarian restaurant came back attested; the field mask may be wrong"
-    # Only ever True or None. A False would mean the normalizer stopped folding
-    # "not attested" into unknown, and the conflict service would start treating
-    # silence as a denial.
-    assert all(place.serves_vegetarian in (True, None) for place in places)
+    # Google can only assert the positive case, so nothing it returns may map
+    # to confirmed_false. If one appears, the provider mapping has changed and
+    # the conflict service would start treating silence as a denial.
+    assert all(place.serves_vegetarian in ("confirmed_true", "unknown") for place in places)
 
 
 async def test_silence_is_not_a_denial(toolbox):
@@ -74,7 +74,7 @@ async def test_silence_is_not_a_denial(toolbox):
     places = await details_for(toolbox, "pizza in Shibuya Tokyo", limit=8)
 
     assert places
-    unattested = [place for place in places if place.serves_vegetarian is not True]
+    unattested = [place for place in places if place.serves_vegetarian != "confirmed_true"]
     assert unattested, (
         "Google now attests vegetarian food at every pizzeria; revisit whether a dietary "
         "conflict should still raise a question rather than filter"
@@ -95,10 +95,10 @@ async def test_the_attestation_is_a_full_tier_field_only(toolbox):
     if found.found_nothing:
         pytest.skip("nothing matched today")
 
-    assert all(place.serves_vegetarian is None for place in found.results)
+    assert all(place.serves_vegetarian == "unknown" for place in found.results)
 
     detailed = await details_for(toolbox, "Indian restaurant in Shinjuku Tokyo", limit=6)
-    assert any(place.serves_vegetarian for place in detailed)
+    assert any(place.serves_vegetarian == "confirmed_true" for place in detailed)
 
 
 async def test_accessibility_keeps_only_what_was_attested(toolbox):
@@ -106,8 +106,10 @@ async def test_accessibility_keeps_only_what_was_attested(toolbox):
 
     attested = [place for place in places if place.accessibility]
     assert attested, "no accessibility attestation at all; the field mask may be wrong"
-    # Only the True keys survive normalization, for the same reason.
-    assert all(value is True for place in places for value in place.accessibility.values())
+    # Only positive attestations survive normalization, for the same reason.
+    assert all(
+        value == "confirmed_true" for place in places for value in place.accessibility.values()
+    )
 
 
 async def test_the_attestation_survives_into_a_registry_entity(toolbox):
@@ -116,8 +118,8 @@ async def test_the_attestation_survives_into_a_registry_entity(toolbox):
     places = await details_for(toolbox, "vegetarian restaurant in Shibuya Tokyo", limit=4)
     entities = resolve_places(places, {})
 
-    assert any(entity.serves_vegetarian for entity in entities)
-    assert all(entity.serves_vegetarian in (True, None) for entity in entities)
+    assert any(entity.serves_vegetarian == "confirmed_true" for entity in entities)
+    assert all(entity.serves_vegetarian in ("confirmed_true", "unknown") for entity in entities)
 
 
 async def test_a_cheaper_search_does_not_wipe_a_details_attestation(toolbox):
@@ -127,7 +129,9 @@ async def test_a_cheaper_search_does_not_wipe_a_details_attestation(toolbox):
     places = await details_for(toolbox, "vegetarian restaurant in Shibuya Tokyo", limit=4)
     entities = resolve_places(places, {})
     known = {entity.entity_id: entity for entity in entities}
-    attested = next((entity for entity in entities if entity.serves_vegetarian), None)
+    attested = next(
+        (entity for entity in entities if entity.serves_vegetarian == "confirmed_true"), None
+    )
     if attested is None:
         pytest.skip("nothing was attested today")
 
@@ -142,4 +146,4 @@ async def test_a_cheaper_search_does_not_wipe_a_details_attestation(toolbox):
 
     same = [entity for entity in refreshed if entity.entity_id == attested.entity_id]
     if same:
-        assert same[0].serves_vegetarian is True
+        assert same[0].serves_vegetarian == "confirmed_true"

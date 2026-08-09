@@ -8,11 +8,33 @@ us.
 
 from datetime import datetime, timedelta
 
-from app.models.common import new_id, utcnow
+from app.models.common import Attestation, new_id, utcnow
 from app.models.entity import PlaceEntity
 from app.models.place import PlaceSummary
 
 GOOGLE_REF = "google_place_id"
+
+
+def keep_attested(new: Attestation, old: Attestation) -> Attestation:
+    """The tri-state merge rule: unknown never overwrites a confirmed value.
+
+    A confirmed value (either direction) replaces anything - fresher provider
+    data wins. But "unknown" is the absence of a claim, and letting it erase a
+    confirmed_true from an earlier FULL fetch would lose a fact to a cheaper
+    call that simply did not ask.
+    """
+    return old if new == "unknown" else new
+
+
+def _merge_attestations(
+    new: dict[str, Attestation], old: dict[str, Attestation]
+) -> dict[str, Attestation]:
+    """Key-wise keep_attested, so one option's silence keeps another's claim."""
+    merged = dict(old)
+    for key, value in new.items():
+        merged[key] = keep_attested(value, merged.get(key, "unknown"))
+    return merged
+
 
 # How old a stored fact may be before it must be re-fetched rather than quoted.
 # Matches the 30-day ceiling the Maps terms place on cached coordinates, and
@@ -59,12 +81,16 @@ def resolve_place(
         rating_count=keep(summary.rating_count, known.rating_count if known else None),
         price_level=keep(summary.price_level, known.price_level if known else None),
         opening_hours=keep(summary.opening_hours, known.opening_hours if known else None),
-        # Only FULL fetches carry these, so a later RANKING-tier search must not
-        # wipe an attestation an earlier details call established.
-        serves_vegetarian=keep(
-            summary.serves_vegetarian, known.serves_vegetarian if known else None
+        # Only FULL fetches carry attestations, so a later RANKING-tier search
+        # arrives all-unknown - and an unknown must never erase a confirmed
+        # value. This is `keep()` restated for the tri-state, where the "absent"
+        # sentinel is the string "unknown" rather than None.
+        serves_vegetarian=keep_attested(
+            summary.serves_vegetarian, known.serves_vegetarian if known else "unknown"
         ),
-        accessibility=summary.accessibility or (known.accessibility if known else {}),
+        accessibility=_merge_attestations(
+            summary.accessibility, known.accessibility if known else {}
+        ),
         timezone=keep(summary.timezone, known.timezone if known else None),
         website_url=keep(summary.website_url, known.website_url if known else None),
         maps_url=keep(summary.maps_url, known.maps_url if known else None),

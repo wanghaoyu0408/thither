@@ -25,6 +25,7 @@ most of a city on the strength of a field that only ever means "not attested".
 
 from datetime import time
 
+from app.models.common import Attestation
 from app.models.group import PreferenceConflict, TravelerPreferences
 from app.models.trip import TripState
 
@@ -116,14 +117,14 @@ def unresolved_blocking(state: TripState) -> list[PreferenceConflict]:
 # --- dietary and accessibility ------------------------------------------------
 
 
-def _scheduled_meals(state: TripState) -> list[tuple[str, str, bool | None]]:
-    """(item_id, title, verified) for every meal on the itinerary."""
-    meals: list[tuple[str, str, bool | None]] = []
+def _scheduled_meals(state: TripState) -> list[tuple[str, str, Attestation]]:
+    """(item_id, title, attestation) for every meal on the itinerary."""
+    meals: list[tuple[str, str, Attestation]] = []
     for _day, item in state.itinerary.iter_items():
         if item.type not in _MEAL_TYPES:
             continue
         entity = state.entities.get(item.entity_id or "")
-        meals.append((item.item_id, item.title, entity.serves_vegetarian if entity else None))
+        meals.append((item.item_id, item.title, entity.serves_vegetarian if entity else "unknown"))
     return meals
 
 
@@ -149,35 +150,67 @@ def _dietary(
     if not meals:
         return []
 
-    unverified = [(item_id, title) for item_id, title, verified in meals if verified is not True]
-    if not unverified:
-        return []
+    # The tri-state decides which conflict a meal raises. Unknown and
+    # confirmed_false are different situations calling for different actions,
+    # and folding them together was exactly the bool|None mistake.
+    unknown = [(item_id, title) for item_id, title, fit in meals if fit == "unknown"]
+    denied = [(item_id, title) for item_id, title, fit in meals if fit == "confirmed_false"]
 
     who = ", ".join(names.get(tid, tid) for tid in sorted(restricted))
     all_restrictions = sorted({r for values in restricted.values() for r in values})
+    positions = {tid: f"needs {', '.join(values)}" for tid, values in sorted(restricted.items())}
 
-    return [
-        PreferenceConflict(
-            kind="dietary",
-            severity="blocking",
-            traveler_ids=sorted(restricted),
-            summary=(
-                f"{who} follows a {', '.join(all_restrictions)} diet, and "
-                f"{len(unverified)} of {len(meals)} planned meal(s) are not confirmed to suit "
-                f"it. Google only ever confirms that a place does serve suitable food - it "
-                f"never confirms the opposite - so these are unverified, not unsuitable."
-            ),
-            positions={
-                tid: f"needs {', '.join(values)}" for tid, values in sorted(restricted.items())
-            },
-            affects=[item_id for item_id, _title in unverified],
-            resolution_options=[
-                f"check the menu for {', '.join(title for _id, title in unverified[:3])}",
-                "swap in restaurants Google confirms serve suitable food",
-                "accept them as they are and note that the group checked",
-            ],
+    conflicts: list[PreferenceConflict] = []
+
+    if denied:
+        # A confirmed violation is not a question - the provider positively
+        # asserted the place cannot suit the diet, so "check the menu" would be
+        # asking the group to verify what is already verified. The resolution
+        # is a swap, and new shortlists filter these out entirely (the user's
+        # rule: a confirmed hard violation is filtered; an unknown never is).
+        conflicts.append(
+            PreferenceConflict(
+                kind="dietary",
+                severity="blocking",
+                traveler_ids=sorted(restricted),
+                summary=(
+                    f"{who} follows a {', '.join(all_restrictions)} diet, and "
+                    f"{len(denied)} planned meal(s) are confirmed unsuitable: "
+                    f"{', '.join(title for _id, title in denied[:3])}. This is a provider's "
+                    f"positive assertion, not a gap in the data."
+                ),
+                positions=positions,
+                affects=[item_id for item_id, _title in denied],
+                resolution_options=[
+                    "swap these for restaurants confirmed to suit the diet",
+                    "split the group for these meals",
+                ],
+            )
         )
-    ]
+
+    if unknown:
+        conflicts.append(
+            PreferenceConflict(
+                kind="dietary",
+                severity="blocking",
+                traveler_ids=sorted(restricted),
+                summary=(
+                    f"{who} follows a {', '.join(all_restrictions)} diet, and "
+                    f"{len(unknown)} of {len(meals)} planned meal(s) are not confirmed to suit "
+                    f"it. Google only ever confirms that a place does serve suitable food - it "
+                    f"never confirms the opposite - so these are unverified, not unsuitable."
+                ),
+                positions=positions,
+                affects=[item_id for item_id, _title in unknown],
+                resolution_options=[
+                    f"check the menu for {', '.join(title for _id, title in unknown[:3])}",
+                    "swap in restaurants Google confirms serve suitable food",
+                    "accept them as they are and note that the group checked",
+                ],
+            )
+        )
+
+    return conflicts
 
 
 def _accessibility(
@@ -199,7 +232,14 @@ def _accessibility(
             continue
         total += 1
         entity = state.entities.get(item.entity_id)
-        if entity is None or not entity.accessibility.get("wheelchairAccessibleEntrance"):
+        # Explicit comparison: with the tri-state, "unknown" is a truthy string
+        # and a bare truthiness check would count it as confirmed.
+        entrance = (
+            entity.accessibility.get("wheelchairAccessibleEntrance", "unknown")
+            if entity
+            else "unknown"
+        )
+        if entrance != "confirmed_true":
             unverified.append(item.item_id)
 
     if not unverified or not total:

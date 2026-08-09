@@ -47,7 +47,7 @@ from app.services.geo import centroid, haversine_km
 from app.services.place_service import PlaceService
 from app.services.research_service import ResearchService
 from app.services.route_service import RouteService
-from app.services.scoring import combine
+from app.services.scoring import combine, ranking_value
 
 SOURCE = "hotel_area"
 
@@ -549,7 +549,7 @@ class HotelAreaService:
         # alike are separated by the figure the traveller actually feels.
         ranked.sort(
             key=lambda area: (
-                -area.score.total,
+                -ranking_value(area.score),
                 area.mean_minutes if area.mean_minutes is not None else 1e9,
                 area.candidate.area_name,
             )

@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from app.models.decision import DecisionScore, FlightOptionData
 from app.models.flight import AirportOption
 from app.models.traveler import FlightPreferences
-from app.services.scoring import PRICE_TOLERANCE, combine, price_score
+from app.services.scoring import PRICE_TOLERANCE, combine, price_score, ranking_value
 
 __all__ = [
     "PRICE_TOLERANCE",
@@ -256,9 +256,13 @@ def rank_flights(
         )
         for option in options
     ]
-    # Price breaks a tie before the offer id does: two otherwise identical
-    # options should never be separated by which reference sorted first.
-    ranked.sort(key=lambda item: (-item.score.total, item.per_person, item.option.offer_ref))
+    # Ordered on ranking_value, not the stored total: the stored score says what
+    # the evidence says, and the ordering discounts thin evidence (INVARIANTS.md
+    # section 2). Price breaks a tie before the offer id does: two otherwise
+    # identical options should never be separated by which reference sorted first.
+    ranked.sort(
+        key=lambda item: (-ranking_value(item.score), item.per_person, item.option.offer_ref)
+    )
     return ranked[:limit] if limit else ranked
 
 

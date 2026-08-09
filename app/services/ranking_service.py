@@ -19,6 +19,7 @@ from app.models.decision import DecisionScore
 from app.models.evidence import CommunitySignal
 from app.models.place import PlaceSummary
 from app.services.geo import haversine_km
+from app.services.scoring import combine, ranking_value
 
 # Reviews needed before a rating is treated as fully trustworthy. A 5.0 from
 # seven people should not outrank a 4.4 from three thousand.
@@ -112,22 +113,10 @@ def score_place(
         "community": (_community_score(signal), weights.community),
     }
 
-    dimensions = {
-        name: round(value, 3) for name, (value, _) in components.items() if value is not None
-    }
-
-    # Renormalize over the dimensions we actually have, so a missing price
-    # level depresses nothing.
-    available = sum(weight for value, weight in components.values() if value is not None)
-    total = (
-        sum(value * weight for value, weight in components.values() if value is not None)
-        / available
-        if available
-        else 0.0
-    )
-
-    missing = sorted(name for name, (value, _) in components.items() if value is None)
-    notes = f"no data for: {', '.join(missing)}" if missing else None
+    # Renormalization, coverage and the missing-dimension note all come from the
+    # shared primitive rather than a second implementation of the same three
+    # rules - which is also how places gained a real `coverage` figure.
+    score = combine(components)
 
     pros: list[str] = []
     cons: list[str] = []
@@ -150,12 +139,7 @@ def score_place(
         if signal.themes:
             pros.append("community notes: " + "; ".join(signal.themes[:3]))
 
-    return RankedPlace(
-        place=place,
-        score=DecisionScore(total=round(total, 4), dimensions=dimensions, notes=notes),
-        pros=pros,
-        cons=cons,
-    )
+    return RankedPlace(place=place, score=score, pros=pros, cons=cons)
 
 
 def rank_places(
@@ -197,7 +181,8 @@ def rank_places(
         )
         for place in survivors
     ]
-    # place_id breaks ties so the order is stable across runs.
-    ranked.sort(key=lambda item: (-item.score.total, item.place.place_id))
+    # ranking_value discounts thin evidence at ordering time; place_id breaks
+    # ties so the order is stable across runs.
+    ranked.sort(key=lambda item: (-ranking_value(item.score), item.place.place_id))
 
     return ranked[:limit] if limit else ranked

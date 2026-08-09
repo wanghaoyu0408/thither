@@ -112,8 +112,8 @@ def group_trip(*, who: tuple[str, ...] = ("ann", "bo", "cy", "dee"), resolved=Tr
     return state
 
 
-def with_dinner(state: TripState, *, verified: bool | None) -> TripState:
-    """A scheduled restaurant, optionally confirmed to serve vegetarian food."""
+def with_dinner(state: TripState, *, verified: str = "unknown") -> TripState:
+    """A scheduled restaurant, with a given dietary attestation."""
     state.entities["ent_dinner"] = PlaceEntity(
         entity_id="ent_dinner",
         name="Yakitori Ichidai",
@@ -250,6 +250,42 @@ def test_a_relaxed_and_a_packed_traveler_conflict_on_pace():
     assert any("16" in c.summary and "5" in c.summary for c in conflicts)
 
 
+@pytest.mark.parametrize("worst_weight", [0.0, 0.4, 1.0])
+def test_conflicts_do_not_depend_on_the_ranking_formula(worst_weight):
+    """Conflicts come from what people want, never from how options are scored.
+
+    A group that disagrees disagrees whether the formula is a plain mean or
+    pure maximin. If the fairness weight could change what gets *reported*,
+    tuning the ranker would quietly change which arguments the group is told
+    about - which is the averaging failure wearing a different hat.
+    """
+    from app.services.group_scoring import build_group_score
+
+    state = with_dinner(group_trip(), verified="unknown")
+    baseline = detect_conflicts(state)
+
+    # Scoring anything at all under this weight must not perturb the trip.
+    build_group_score({"trv_ann": 0.9, "trv_cy": 0.1}, worst_weight=worst_weight)
+    again = detect_conflicts(state)
+
+    assert [c.conflict_id for c in again] == [c.conflict_id for c in baseline]
+    assert [c.summary for c in again] == [c.summary for c in baseline]
+    assert [c.positions for c in again] == [c.positions for c in baseline]
+
+
+def test_the_configured_weight_reaches_the_group_ranker():
+    cheap = hotel("Bargain Inn", nightly=90.0, rating=3.2)
+    state = group_trip()
+    travelers = {t.traveler_id: t.preferences for t in state.travelers}
+    names = {t.traveler_id: t.name for t in state.travelers}
+
+    maximin = rank_hotels_for_group([cheap], travelers=travelers, names=names, worst_weight=1.0)[0]
+
+    assert maximin.group.worst_weight == 1.0
+    # Pure maximin: the group verdict *is* the unhappiest traveller's score.
+    assert maximin.group.total == maximin.group.worst
+
+
 def test_a_group_that_agrees_produces_no_conflicts():
     state = group_trip(who=("bo",))
 
@@ -259,43 +295,67 @@ def test_a_group_that_agrees_produces_no_conflicts():
 # --- you cannot recommend what nobody has looked at --------------------------
 
 
-def test_a_score_built_on_almost_nothing_is_pulled_back_toward_neutral():
+def test_an_option_cannot_win_on_ignorance():
     """Renormalizing alone lets an option win on ignorance.
 
     Found on live data: a hotel with three reviews has no usable guest rating,
     no star category and no measured travel time, so price was its only
     dimension - and being cheapest made it a flawless 1.00 that beat a hotel we
     knew five things about.
+
+    The fix is in the *ordering*, not the score. `total` still reports what the
+    one known dimension said; `ranking_value` is what refuses to rank it first.
     """
-    from app.services.scoring import combine
+    from app.services.scoring import combine, ranking_value
 
     thin = combine({"price": (1.0, 0.5), "rating": (None, 0.5), "location": (None, 1.0)})
     full = combine({"price": (0.8, 0.5), "rating": (0.8, 0.5), "location": (0.8, 1.0)})
 
     assert thin.coverage == 0.25
     assert full.coverage == 1.0
-    # A perfect score on a quarter of the evidence does not beat a good one on all of it.
-    assert thin.total < full.total
+
+    # The stored score is not doctored: price really was 1.0 for the thin one.
+    assert thin.total == 1.0
+    assert full.total == 0.8
+
+    # But a perfect score on a quarter of the evidence does not outrank a good
+    # one on all of it.
+    assert ranking_value(thin) < ranking_value(full)
     assert "25% of the usual evidence" in thin.notes
 
 
-def test_full_evidence_is_never_damped():
-    from app.services.scoring import combine
+def test_score_and_confidence_are_never_folded_together():
+    """The stored number says what the evidence says; coverage says how much.
+
+    Two dimensions known at 0.8 and 0.8 is a 0.8 whether it is two of two or
+    two of ten - what differs is `coverage`, and that difference must not be
+    smuggled into the score.
+    """
+    from app.services.scoring import combine, ranking_value
 
     scored = combine({"a": (0.8, 1.0), "b": (0.6, 1.0)})
-
     assert scored.coverage == 1.0
     assert scored.total == 0.7
+    # Full evidence: ordering and score agree exactly.
+    assert ranking_value(scored) == scored.total
+
+    partial = combine({"a": (0.8, 1.0), "b": (0.8, 1.0), "c": (None, 8.0)})
+    assert partial.total == 0.8
+    assert partial.coverage == 0.2
+    assert ranking_value(partial) < partial.total
 
 
 def test_a_group_cannot_agree_about_something_nobody_knows():
+    from app.services.group_scoring import group_ranking_value
+
     thin = build_group_score({"a": 0.9, "b": 0.9}, {"a": "Ann", "b": "Bo"}, coverage=0.1)
 
     assert thin.thinly_evidenced
     assert "nobody has much to go on" in thin.describe()
     assert "10% of the usual evidence" in thin.describe()
-    # And the shared verdict is pulled back too, not just annotated.
-    assert thin.total < 0.9
+    # The verdict still reports what they scored; the ordering is what pulls back.
+    assert thin.total == 0.9
+    assert group_ranking_value(thin) < 0.9
 
 
 def test_a_thin_rating_cannot_clear_a_stated_floor():
@@ -330,7 +390,7 @@ def test_an_unverified_restaurant_raises_a_question_and_is_not_removed():
     So an unattested restaurant is unverified, not unsuitable, and deleting it
     would be a confident claim on no evidence.
     """
-    state = with_dinner(group_trip(), verified=None)
+    state = with_dinner(group_trip(), verified="unknown")
 
     conflict = next(c for c in detect_conflicts(state) if c.kind == "dietary")
 
@@ -345,13 +405,53 @@ def test_an_unverified_restaurant_raises_a_question_and_is_not_removed():
 
 
 def test_a_confirmed_restaurant_clears_the_conflict():
-    state = with_dinner(group_trip(), verified=True)
+    state = with_dinner(group_trip(), verified="confirmed_true")
 
     assert not any(c.kind == "dietary" for c in detect_conflicts(state))
 
 
+def test_a_confirmed_denial_is_a_different_conflict_from_an_unknown():
+    """The whole point of the third state.
+
+    "Nobody checked" asks the group to check. "The provider says no" asks them
+    to swap. Collapsing the two into one bool made both read as the first.
+    """
+    state = with_dinner(group_trip(), verified="confirmed_false")
+
+    conflict = next(c for c in detect_conflicts(state) if c.kind == "dietary")
+
+    assert conflict.severity == "blocking"
+    assert "confirmed unsuitable" in conflict.summary
+    assert "positive assertion" in conflict.summary
+    # Swap, not verify - there is nothing left to verify.
+    assert any("swap" in option for option in conflict.resolution_options)
+    assert not any("check the menu" in option for option in conflict.resolution_options)
+
+
+def test_unknown_and_confirmed_denials_are_reported_separately():
+    state = with_dinner(group_trip(), verified="confirmed_false")
+    # A second meal nobody has checked.
+    state.entities["ent_lunch"] = PlaceEntity(
+        entity_id="ent_lunch",
+        name="Unchecked Diner",
+        categories=["restaurant"],
+        lat=35.7,
+        lng=139.8,
+    )
+    state.itinerary.days[0].items.append(
+        ItineraryItem(item_id="item_lunch", type="restaurant", entity_id="ent_lunch", title="Lunch")
+    )
+
+    dietary = [c for c in detect_conflicts(state) if c.kind == "dietary"]
+
+    assert len(dietary) == 2
+    assert {c.affects[0] for c in dietary} == {"item_dinner", "item_lunch"}
+    # And they keep separate identities, so answering one does not settle the other.
+    assert len({c.conflict_id for c in dietary}) == 2
+
+
 def test_a_traveler_with_no_restrictions_raises_nothing():
-    state = with_dinner(group_trip(who=("ann", "bo")), verified=None)
+    state = with_dinner(group_trip(who=("ann", "bo")), verified="unknown")
 
     assert not any(c.kind == "dietary" for c in detect_conflicts(state))
 
@@ -360,7 +460,7 @@ def test_a_traveler_with_no_restrictions_raises_nothing():
 
 
 def test_a_trip_cannot_be_marked_ready_over_an_unanswered_conflict():
-    state = with_dinner(group_trip(), verified=None)
+    state = with_dinner(group_trip(), verified="unknown")
     state.status = "ready"
 
     problems = check_integrity(state)
@@ -369,7 +469,7 @@ def test_a_trip_cannot_be_marked_ready_over_an_unanswered_conflict():
 
 
 def test_answering_the_question_lets_the_trip_be_ready():
-    state = with_dinner(group_trip(), verified=None)
+    state = with_dinner(group_trip(), verified="unknown")
     conflict = next(c for c in detect_conflicts(state) if c.kind == "dietary")
     state.open_questions = [
         OpenQuestion(
@@ -386,14 +486,14 @@ def test_answering_the_question_lets_the_trip_be_ready():
 
 def test_a_planning_trip_with_a_blocking_conflict_is_still_valid_to_work_on():
     """Blocking stops the claim of readiness, never the work."""
-    state = with_dinner(group_trip(), verified=None)
+    state = with_dinner(group_trip(), verified="unknown")
     state.status = "planning"
 
     assert check_integrity(state) == []
 
 
 def test_the_validator_reports_the_conflict_with_every_position():
-    state = with_dinner(group_trip(), verified=None)
+    state = with_dinner(group_trip(), verified="unknown")
 
     issues = [i for i in validate_itinerary(state).issues if i.type == "preference_conflict"]
 
@@ -409,7 +509,7 @@ def test_the_validator_reports_the_conflict_with_every_position():
 def test_the_model_sees_conflicts_and_preferences_every_turn():
     from app.agent.context import summarize
 
-    view = summarize(with_dinner(group_trip(), verified=None))
+    view = summarize(with_dinner(group_trip(), verified="unknown"))
 
     assert view["preference_conflicts"], "conflicts must be in the summary, not behind a tool"
     assert any(c["severity"] == "blocking" for c in view["preference_conflicts"])
@@ -578,7 +678,7 @@ def test_changing_a_preference_changes_the_conflicts_with_no_patch_between():
 
 
 def test_unresolved_blocking_ignores_conflicts_the_group_has_settled():
-    state = with_dinner(group_trip(), verified=None)
+    state = with_dinner(group_trip(), verified="unknown")
     assert unresolved_blocking(state)
 
     conflict = next(c for c in detect_conflicts(state) if c.kind == "dietary")
@@ -626,7 +726,7 @@ def tool_context(state: TripState):
 async def test_the_review_tool_resolves_and_reports_every_side():
     from app.agent.tool_registry import _review_group_preferences
 
-    context = tool_context(with_dinner(group_trip(resolved=False), verified=None))
+    context = tool_context(with_dinner(group_trip(resolved=False), verified="unknown"))
 
     reply = await _review_group_preferences(context, {})
 
@@ -798,7 +898,7 @@ async def test_preferences_and_questions_reach_trip_state(session):
     from app.models.patch import TripPatch
 
     repository = TripRepository(session)
-    stored = await repository.create(with_dinner(group_trip(resolved=False), verified=None))
+    stored = await repository.create(with_dinner(group_trip(resolved=False), verified="unknown"))
 
     context = tool_context(stored)
     await _review_group_preferences(context, {})
@@ -829,7 +929,7 @@ async def test_work_continues_while_a_conflict_stands(session, status):
     from app.models.patch import TripPatch
 
     repository = TripRepository(session)
-    stored = await repository.create(with_dinner(group_trip(), verified=None))
+    stored = await repository.create(with_dinner(group_trip(), verified="unknown"))
 
     applied = await repository.apply_patch(
         stored.trip_id,
@@ -849,7 +949,7 @@ async def test_marking_ready_is_refused_by_the_patch_engine(session):
     from app.models.patch import TripPatch
 
     repository = TripRepository(session)
-    stored = await repository.create(with_dinner(group_trip(), verified=None))
+    stored = await repository.create(with_dinner(group_trip(), verified="unknown"))
 
     applied = await repository.apply_patch(
         stored.trip_id,

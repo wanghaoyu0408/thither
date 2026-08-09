@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -42,6 +43,15 @@ class Settings(BaseSettings):
     # Ceiling on fresh Places searches per planning run; the entity registry is
     # consulted first.
     planning_search_budget: int = 8
+
+    # How much the worst-served traveller counts in a group score:
+    #   total = (1 - w) * mean + w * worst
+    # 0.0 is a plain mean, which lets three people vote one into a trip they
+    # will hate; 1.0 is pure maximin, which lets one lukewarm person veto
+    # everything. Configurable because it is a judgement about the group, not a
+    # fact about the options - and it is recorded on every GroupScore so a
+    # stored number can be read back correctly.
+    group_worst_weight: float = Field(default=0.4, ge=0.0, le=1.0)
 
     # Flights. Required from Milestone 5.
     duffel_access_token: str | None = None
