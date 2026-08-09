@@ -216,6 +216,8 @@ it cannot come back.
 | 15 | Reviewing *group* preferences on a **one-person** trip spent a planning round and derailed the plan | M7 live | `test_a_solo_trip_gets_none_of_this_machinery` |
 | 16 | Japanese place names + a cp1252 pipe killed a script on its own output | M7 live | `test_the_scripts_survive_being_piped` |
 | 17 | Multi-patch turns committed per patch, so one could land and the next be rejected | hardening pass | invariant 3 |
+| 18 | A replan that arrived at the day it started from still committed, spending a revision on an empty diff — the number moved and nothing explained it | frontend P0 live | `test_a_replan_that_changes_nothing_does_not_spend_a_revision` |
+| 19 | The UI's `post` helper was declared `(path, body)` while all eight call sites pass the body first, so every POST carried `{}`. Move failed outright; replan silently ignored the requested pace, planned a balanced day, and reported success | frontend P0 live | `test_the_post_helper_takes_the_body_first` |
 
 ---
 
