@@ -11,6 +11,7 @@ therefore split per mode, issued concurrently, and stitched back by index.
 
 import asyncio
 from datetime import datetime, timedelta
+from typing import Any
 
 from app.models.common import utcnow
 from app.models.entity import PlaceEntity
@@ -101,6 +102,81 @@ class RouteService:
         self._provider = provider
         self._cache = cache
         self._deduper = deduper or RequestDeduper()
+
+    async def measure_days(self, state, days) -> Any:
+        """Real travel times between consecutive stops on these days.
+
+        Each leg is fetched in the mode the validator will look it up under.
+        Shared by the agent and by the action endpoints because they were
+        drifting: the buttons validated against an empty lookup and reported
+        every pair as `travel_time_unknown`, while the agent had real numbers.
+        """
+        from app.services.validation_service import TravelLookup, mode_between
+
+        lookup = TravelLookup()
+        by_mode: dict[TravelMode, list[tuple[str, str]]] = {}
+        for day in days:
+            stops = [item.entity_id for item in day.items if item.entity_id in state.entities]
+            for origin, destination in zip(stops, stops[1:], strict=False):
+                if origin == destination:
+                    continue
+                mode = mode_between(
+                    state, state.entities.get(origin), state.entities.get(destination)
+                )
+                by_mode.setdefault(mode, []).append((origin, destination))
+
+        for mode, pairs in by_mode.items():
+            origins = sorted({origin for origin, _ in pairs})
+            destinations = sorted({destination for _, destination in pairs})
+            result = await self.get_routes(
+                GetRoutesInput(
+                    origins=[LocationRef(entity_id=eid) for eid in origins],
+                    destinations=[LocationRef(entity_id=eid) for eid in destinations],
+                    mode=mode,
+                ),
+                entities=state.entities,
+            )
+            if not result.ok:
+                continue
+            for leg in result.results:
+                if leg.status != "ok" or leg.duration_seconds is None:
+                    continue
+                key = (origins[leg.origin_index], destinations[leg.destination_index], mode)
+                lookup.minutes[key] = leg.duration_seconds / 60.0
+                if leg.distance_meters is not None:
+                    lookup.meters[key] = float(leg.distance_meters)
+        return lookup
+
+    async def path_between(
+        self, origin: LocationRef, destination: LocationRef, *, mode: TravelMode
+    ) -> RouteLeg | None:
+        """One route with its geometry, for drawing.
+
+        The matrix endpoint returns durations and no shape, so a map drawing
+        from it can only join two pins with a straight line. This is the single
+        call that comes back with the road. Cached like everything else, and
+        never persisted into a trip - it is fetched for a view.
+        """
+        key = cache_key(
+            "routes:path",
+            {"o": _ref_key(origin), "d": _ref_key(destination), "mode": mode},
+        )
+        cached = await self._cache.get(key, VOLATILE_POLICY)
+        if cached is not None:
+            return RouteLeg.model_validate(cached)
+
+        async def call() -> RouteLeg | None:
+            try:
+                return await self._provider.compute_route(origin, destination, mode=mode)
+            except ProviderError:
+                # A missing shape is a missing shape; the caller says so rather
+                # than drawing a line it cannot vouch for.
+                return None
+
+        leg = await self._deduper.run(key, call)
+        if leg is not None:
+            await self._cache.set(key, leg.model_dump(mode="json"), VOLATILE_POLICY)
+        return leg
 
     async def get_routes(
         self,

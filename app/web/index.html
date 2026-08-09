@@ -136,6 +136,10 @@ section.work { background: var(--bg); }
 
 /* --- itinerary ------------------------------------------------------------ */
 .day { margin-bottom: 26px; }
+.daymetrics { font-size: 12px; color: var(--ink-2); margin: -3px 0 11px; }
+.daymetrics.none { color: var(--ink-3); }
+.daymetrics .ok { color: var(--accent); }
+.daymetrics .bad { color: var(--warn); }
 .day-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 9px; }
 .day-head h3 { font-size: 14.5px; }
 .day-head small { color: var(--ink-3); font-size: 12px; }
@@ -341,6 +345,8 @@ section.work { background: var(--bg); }
 .mapnote.warn { background: var(--warn-soft); border-color: var(--warn); color: var(--warn); }
 .mapnote code { font: 11px var(--mono); }
 .unmapped { font-size: 12px; color: var(--warn); margin-top: 7px; }
+.unmapped.straight { color: var(--ink-3); }
+.unmapped.route { color: var(--accent); }
 /* Google's InfoWindow renders outside our stylesheet's reach; keep it legible. */
 .gm-style .gm-style-iw-c { border-radius: 8px; padding: 9px 11px; }
 .iw { font: 13px/1.4 inherit; color: #17181b; }
@@ -499,8 +505,10 @@ async function selectTrip(id) {
   S.tripId = id; S.lastDiff = null; S.mapDay = null; S.decisions = null; S.intake = null;
   await refresh();
   await loadIntake();
-  // An unconfirmed brief is where the trip starts, so that is what opens.
-  S.view = S.intake && S.intake.status !== "confirmed"
+  // Open on intake only while it is actually holding something up. A trip that
+  // predates intake is allowed to research, so opening its brief screen would
+  // be asking for a confirmation nothing is waiting on.
+  S.view = S.intake && !S.intake.research_allowed
     ? "intake"
     : (S.trip.itinerary.days || []).length ? "itinerary" : "overview";
   await loadMessages();
@@ -568,7 +576,7 @@ async function loadIntake() {
   // The tab is only there while it has something to say. Once the brief is
   // confirmed it stays available but stops being where the trip starts.
   $("intakeTab").hidden = false;
-  $("intakeTab").textContent = S.intake.status === "confirmed" ? "Brief" : "Start here";
+  $("intakeTab").textContent = S.intake.research_allowed ? "Brief" : "Start here";
 }
 
 function paintHeader() {
@@ -719,15 +727,43 @@ function itineraryHtml() {
         <h3>${esc(dayLabel(day.date))}</h3>
         ${day.theme ? `<small>${esc(day.theme)}</small>` : ""}
         <div class="spacer"></div>
-        <small>${day.items.length} stop(s)</small>
         <button class="chip" data-replan="${day.date}">Make this day easier</button>
       </div>
+      ${dayMetricsHtml(day)}
       ${day.items.length
         ? day.items.map(itemHtml).join("")
         : '<p class="empty">Nothing scheduled.</p>'}
     </div>`);
   }
   return out.join("");
+}
+
+/** The day's load, with every partial labelled as one. Rendered from the stored
+ *  summary: the browser does no arithmetic, and shows nothing where nothing was
+ *  measured rather than a zero. */
+function dayMetricsHtml(day) {
+  const s = day.summary;
+  if (!s) return `<p class="daymetrics none">${day.items.length} stop(s)</p>`;
+
+  const partial = s.legs_measured < s.legs_total ? " (partial)" : "";
+  const bits = [`${s.stops} stop${s.stops === 1 ? "" : "s"}`];
+  if (s.driving_minutes) bits.push(`${Math.round(s.driving_minutes)} min driving${partial}`);
+  if (s.total_transit_minutes) bits.push(`${s.total_transit_minutes} min transit${partial}`);
+  if (s.total_walking_km) bits.push(`${s.total_walking_km.toFixed(1)} km walking${partial}`);
+  if (s.legs_total && !s.legs_measured) bits.push("travel times not measured");
+
+  if (s.estimated_cost) {
+    const money = `${Math.round(s.estimated_cost.amount).toLocaleString()} ${s.estimated_cost.currency}`;
+    // Never "total" while an item on the day carries no price.
+    bits.push(s.items_priced < s.items_total ? `~${money} partial estimate` : `${money} total`);
+  }
+  if (s.pace) bits.push(`${s.pace} pace`);
+  if (s.locked_items) bits.push(`${s.locked_items} locked`);
+
+  const health = s.unresolved_issues
+    ? `<span class="bad">${s.unresolved_issues} to resolve</span>`
+    : '<span class="ok">✓ nothing blocking</span>';
+  return `<p class="daymetrics">${bits.map(esc).join(" · ")} · ${health}</p>`;
 }
 
 /** Which items a blocking conflict points at - "needs verification". */
@@ -1093,8 +1129,10 @@ async function mapsReady() {
         const timer = setTimeout(() => fail(new Error("timed out")), 15000);
         window.__mapsReady = () => { clearTimeout(timer); ok(); };
         const s = document.createElement("script");
+        // `geometry` decodes the encoded polylines the route endpoint returns.
         s.src = "https://maps.googleapis.com/maps/api/js?v=weekly&loading=async"
-              + "&callback=__mapsReady&key=" + encodeURIComponent(cfg.maps_key);
+              + "&libraries=geometry&callback=__mapsReady&key="
+              + encodeURIComponent(cfg.maps_key);
         s.async = true;
         s.onerror = () => { clearTimeout(timer); fail(new Error("blocked")); };
         document.head.appendChild(s);
@@ -1216,13 +1254,58 @@ function drawDay(day) {
     M.markers.push(marker);
   });
 
-  M.line = new google.maps.Polyline({
-    map: M.map, path, strokeColor: "#2f5d50", strokeOpacity: 0.6, strokeWeight: 2,
-  });
+  // Straight lines until the real geometry arrives, and labelled as such. A
+  // line between two pins is not a route, and a map that lets it be read as one
+  // is claiming a road it has never looked at.
+  drawLine(path, { dashed: true });
   if (stops.length === 1) { M.map.setCenter(path[0]); M.map.setZoom(15); }
   else M.map.fitBounds(bounds, 36);
 
-  $("mapnote").innerHTML = tail;
+  $("mapnote").innerHTML =
+    `<p class="unmapped straight">Straight lines between stops — not driving routes.</p>${tail}`;
+  drawRealRoute(day, tail);
+}
+
+function drawLine(path, { dashed }) {
+  if (M.line) M.line.setMap(null);
+  M.line = new google.maps.Polyline({
+    map: M.map,
+    path,
+    strokeColor: "#2f5d50",
+    strokeOpacity: dashed ? 0 : 0.75,
+    strokeWeight: dashed ? 0 : 3,
+    icons: dashed
+      ? [{ icon: { path: "M 0,-1 0,1", strokeOpacity: 0.55, scale: 3 },
+           offset: "0", repeat: "10px" }]
+      : [],
+  });
+}
+
+/** Replace the straight lines with the road, when the server can supply it.
+ *  The browser decodes and draws; it never decides a route. */
+async function drawRealRoute(day, tail) {
+  let route;
+  try { route = await api(`/trips/${S.tripId}/days/${day.date}/route`); }
+  catch { return; }
+  if (S.mapDay !== day.date || M.status !== "ready") return;   // moved on since
+
+  const drawn = route.legs.filter((leg) => leg.polyline);
+  if (!drawn.length) {
+    if (route.note) $("mapnote").innerHTML =
+      `<p class="unmapped straight">${esc(route.note)}</p>${tail}`;
+    return;
+  }
+
+  const path = [];
+  for (const leg of drawn) {
+    path.push(...google.maps.geometry.encoding.decodePath(leg.polyline).map(
+      (point) => ({ lat: point.lat(), lng: point.lng() })));
+  }
+  drawLine(path, { dashed: false });
+
+  const modes = [...new Set(drawn.map((leg) => leg.mode))].join(" and ");
+  $("mapnote").innerHTML = `<p class="unmapped route">Actual ${esc(modes)} route${
+    route.note ? ` — ${esc(route.note)}` : ""}.</p>${tail}`;
 }
 
 /** Clicking a card points at its marker, so the list and the map agree about

@@ -81,6 +81,12 @@ class RouteLeg(BaseModel):
 
     status: Literal["ok", "not_found", "zero_results"] = "ok"
 
+    # Google's encoded polyline for the actual path, when one was asked for.
+    # Only `compute_route` returns geometry; the matrix endpoint has none, so a
+    # matrix leg leaves this None and the caller must not draw a line pretending
+    # otherwise. Not persisted - it is fetched for a view and thrown away.
+    polyline: str | None = None
+
     @property
     def duration_minutes(self) -> float | None:
         return None if self.duration_seconds is None else self.duration_seconds / 60.0

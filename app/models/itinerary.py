@@ -18,10 +18,53 @@ ItemStatus = Literal["proposed", "selected", "locked"]
 
 
 class DaySummary(BaseModel):
+    """What a day costs in time, distance and money, as far as it is known.
+
+    Every figure here is measured, never estimated to fill a gap - so most of
+    them come in pairs with a count of what was measured. `legs_measured` out of
+    `legs_total` is what turns "58 min driving" into "58 min driving, 3 of 4
+    legs measured", and stops a day whose routes half failed from reading as a
+    short day.
+
+    A missing leg contributes nothing to a total and one to `legs_total`. It
+    never contributes zero minutes, which would be a claim.
+    """
+
+    stops: int = 0
+
+    walking_minutes: float | None = None
+    driving_minutes: float | None = None
     total_walking_km: float | None = None
     total_transit_minutes: int | None = None
+
+    # How much of the day's travel is actually behind those numbers.
+    legs_total: int = 0
+    legs_measured: int = 0
+
     estimated_cost: Money | None = None
+    # Items that carried a price, out of the items on the day. Below 1.0 the
+    # figure above is a partial and has to be shown as one.
+    items_priced: int = 0
+    items_total: int = 0
+
+    pace: str | None = None
+    locked_items: int = 0
+    unresolved_issues: int = 0
+
+    measured_at: datetime | None = None
     notes: str | None = None
+
+    @property
+    def travel_is_partial(self) -> bool:
+        return self.legs_measured < self.legs_total
+
+    @property
+    def cost_is_partial(self) -> bool:
+        return self.items_priced < self.items_total
+
+    @property
+    def cost_coverage(self) -> float:
+        return self.items_priced / self.items_total if self.items_total else 0.0
 
 
 class ItineraryItem(BaseModel):

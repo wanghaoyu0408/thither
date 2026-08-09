@@ -64,6 +64,7 @@ from app.services.toolbox import Toolbox
 from app.services.validation_service import (
     TravelLookup,
     build_travel_lookup,
+    mode_between,
     validate_itinerary,
 )
 
@@ -1963,41 +1964,44 @@ async def _ensure_routes(context: ToolContext, proposal) -> int:
     """Look up real travel times between consecutive stops on each proposed day."""
     known = {**context.state.entities, **{e.entity_id: e for e in context.pending_entity_ops}}
 
-    pairs: list[tuple[str, str]] = []
+    # Each pair is fetched in the mode the validator will look it up under.
+    # Fetching one mode and reading another is not a near miss - it is a
+    # guaranteed miss, and it made every leg over 1.5 km permanently unknown.
+    state = _working_state(context)
+    by_mode: dict[str, list[tuple[str, str]]] = {}
     for day in proposal.days:
         scheduled = [item.entity_id for item in day.items if item.entity_id in known]
-        pairs.extend(zip(scheduled, scheduled[1:], strict=False))
+        for origin, destination in zip(scheduled, scheduled[1:], strict=False):
+            if origin == destination:
+                continue
+            mode = mode_between(state, known.get(origin), known.get(destination))
+            if (origin, destination, mode) in context.travel.minutes:
+                continue
+            by_mode.setdefault(mode, []).append((origin, destination))
 
-    pairs = [
-        pair
-        for pair in pairs
-        if pair[0] != pair[1] and (pair[0], pair[1], "walking") not in context.travel.minutes
-    ]
-    if not pairs:
-        return 0
-
-    origins = sorted({origin for origin, _ in pairs})
-    destinations = sorted({destination for _, destination in pairs})
-
-    result = await context.toolbox.routes.get_routes(
-        GetRoutesInput(
-            origins=[LocationRef(entity_id=eid) for eid in origins],
-            destinations=[LocationRef(entity_id=eid) for eid in destinations],
-            mode="walking",
-        ),
-        entities=known,
-    )
-    if not result.ok:
-        return 0
-
-    for leg in result.results:
-        if leg.status != "ok" or leg.duration_seconds is None:
+    measured = 0
+    for mode, pairs in by_mode.items():
+        origins = sorted({origin for origin, _ in pairs})
+        destinations = sorted({destination for _, destination in pairs})
+        result = await context.toolbox.routes.get_routes(
+            GetRoutesInput(
+                origins=[LocationRef(entity_id=eid) for eid in origins],
+                destinations=[LocationRef(entity_id=eid) for eid in destinations],
+                mode=mode,
+            ),
+            entities=known,
+        )
+        if not result.ok:
             continue
-        key = (origins[leg.origin_index], destinations[leg.destination_index], "walking")
-        context.travel.minutes[key] = leg.duration_seconds / 60.0
-        if leg.distance_meters is not None:
-            context.travel.meters[key] = float(leg.distance_meters)
-    return len(result.results)
+        for leg in result.results:
+            if leg.status != "ok" or leg.duration_seconds is None:
+                continue
+            key = (origins[leg.origin_index], destinations[leg.destination_index], mode)
+            context.travel.minutes[key] = leg.duration_seconds / 60.0
+            if leg.distance_meters is not None:
+                context.travel.meters[key] = float(leg.distance_meters)
+        measured += len(result.results)
+    return measured
 
 
 async def _generate_itinerary(context: ToolContext, args: dict[str, Any]) -> dict[str, Any]:

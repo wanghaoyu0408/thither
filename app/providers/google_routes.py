@@ -29,7 +29,12 @@ PROVIDER = "google_routes"
 BASE_URL = "https://routes.googleapis.com"
 
 MATRIX_FIELD_MASK = "originIndex,destinationIndex,duration,distanceMeters,status,condition"
-ROUTE_FIELD_MASK = "routes.duration,routes.distanceMeters,routes.legs.duration"
+ROUTE_FIELD_MASK = (
+    "routes.duration,routes.distanceMeters,routes.legs.duration,"
+    # The path itself, so a map can draw the road rather than a straight line
+    # between two pins and let it be read as a route.
+    "routes.polyline.encodedPolyline"
+)
 
 
 def waypoint(ref: LocationRef) -> dict[str, Any]:
@@ -186,4 +191,5 @@ class GoogleRoutesProvider:
             mode=mode,
             distance_meters=best.get("distanceMeters"),
             duration_seconds=_parse_duration(best.get("duration")),
+            polyline=(best.get("polyline") or {}).get("encodedPolyline"),
         )

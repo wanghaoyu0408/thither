@@ -80,14 +80,34 @@ def _end_of(item: ItineraryItem) -> datetime:
     return item.end_at or item.start_at
 
 
-def _mode_between(
+def long_haul_mode(state: TripState) -> TravelMode:
+    """How this trip covers a distance it will not walk.
+
+    A trip with a car drives. Assuming transit for one was not a neutral
+    default: Google publishes no transit times for Maui, so every leg came back
+    unknown and the day's travel load silently totalled zero.
+    """
+    return "driving" if state.brief.scope.rental_car in ("plan", "already_arranged") else "transit"
+
+
+def mode_between(
     state: TripState, origin: PlaceEntity | None, destination: PlaceEntity | None
 ) -> TravelMode:
-    """Walk when it is plainly walkable, otherwise assume transit."""
+    """Walk when it is plainly walkable, otherwise however this trip travels.
+
+    Public because the fetcher has to ask for exactly the mode this returns.
+    They disagreed for three milestones - routes were fetched for walking while
+    the validator looked up transit - so every long leg was unknown by
+    construction.
+    """
     if origin is None or destination is None:
         return "walking"
     km = haversine_km(origin.lat, origin.lng, destination.lat, destination.lng)
-    return "walking" if km <= 1.5 else "transit"
+    return "walking" if km <= 1.5 else long_haul_mode(state)
+
+
+# Kept for the module's own callers below.
+_mode_between = mode_between
 
 
 # --- individual checks -------------------------------------------------------

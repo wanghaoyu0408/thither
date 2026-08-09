@@ -63,6 +63,29 @@ async def planned_trip(session, *, locks: list[str] | None = None, spares: int =
     return await TripRepository(session).create(state)
 
 
+async def three_stop_trip(session):
+    """Enough stops for two legs, which is what a drawn route needs."""
+    state = sample_state()
+    state.entities = {
+        "ent_a": place("ent_a", "First"),
+        "ent_b": place("ent_b", "Second"),
+        "ent_c": place("ent_c", "Third"),
+    }
+    state.itinerary = TripItinerary(
+        days=[
+            ItineraryDay(
+                date=DAY_ONE,
+                items=[
+                    item("item_a", "First", 10, "ent_a"),
+                    item("item_b", "Second", 13, "ent_b"),
+                    item("item_c", "Third", 16, "ent_c"),
+                ],
+            )
+        ]
+    )
+    return await TripRepository(session).create(state)
+
+
 # --- success is only ever reported after a reload ----------------------------
 
 
@@ -308,6 +331,62 @@ async def test_a_replan_that_changes_nothing_does_not_spend_a_revision(client, s
     assert second["diff"] == []
     persisted = await TripRepository(session).get(trip.trip_id)
     assert persisted.revision == first["revision"]
+
+
+async def test_a_day_route_never_claims_a_road_it_did_not_fetch(client, session, monkeypatch):
+    """A line between two pins is not a route. The map may draw one only when
+    the server hands back geometry, and the two ways it can fail to - Google
+    knows of no route, and the lookup itself failed - are reported apart."""
+    from app.models.route import RouteLeg
+
+    trip = await three_stop_trip(session)
+
+    class Routes:
+        async def path_between(self, origin, destination, *, mode):
+            if origin.entity_id == "ent_a":
+                return RouteLeg(
+                    origin_index=0, destination_index=0, mode=mode,
+                    duration_seconds=600, distance_meters=4200, polyline="abc123",
+                )
+            return None  # the lookup could not answer
+
+    class FakeToolbox:
+        routes = Routes()
+
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr("app.api.actions.Toolbox", FakeToolbox)
+
+    body = (await client.get(f"/trips/{trip.trip_id}/days/{DAY_ONE}/route")).json()
+
+    assert body["geometry"] == "route"
+    assert [leg["status"] for leg in body["legs"]] == ["ok", "lookup_failed"]
+    assert "could not answer" in body["note"]
+    assert "straight lines" in body["note"]
+
+
+async def test_a_day_route_with_no_key_says_the_line_is_straight(client, session, monkeypatch):
+    from app.services.toolbox import MissingCredentials
+
+    trip = await three_stop_trip(session)
+
+    def refuse(**kwargs):
+        raise MissingCredentials("no key")
+
+    monkeypatch.setattr("app.api.actions.Toolbox", refuse)
+
+    body = (await client.get(f"/trips/{trip.trip_id}/days/{DAY_ONE}/route")).json()
+
+    assert body["geometry"] == "straight_line"
+    assert "not a route" in body["note"]
+    assert body["legs"] == []
 
 
 async def test_replanning_an_unknown_day_is_a_404(client, session):

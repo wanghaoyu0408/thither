@@ -21,25 +21,27 @@ a venue, and it does not quietly leave a hole.
 
 from datetime import date as date_type
 from datetime import datetime, time
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.repository import TripNotFound, TripRepository
-from app.db.session import get_session
+from app.db.session import get_session, get_sessionmaker
 from app.models.itinerary_plan import ItineraryProposal, ReplanParams
 from app.models.lock import LockRecord
 from app.models.patch import PatchError, TripPatch
 from app.models.rejection import RejectionRecord
+from app.models.route import LocationRef
 from app.models.trip import TripState
 from app.services import json_pointer as jp
 from app.services.conflict_service import detect_conflicts, unresolved_blocking
 from app.services.explanation_service import Explanation, explain, explain_item
 from app.services.itinerary_diff import DayDiff, changed_days
 from app.services.itinerary_service import replan_day, substitute_item
-from app.services.validation_service import validate_itinerary
+from app.services.toolbox import MissingCredentials, Toolbox
+from app.services.validation_service import TravelLookup, mode_between, validate_itinerary
 
 router = APIRouter(prefix="/trips/{trip_id}", tags=["actions"])
 
@@ -101,6 +103,22 @@ async def _load(session: AsyncSession, trip_id: str) -> TripState:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"trip {trip_id} not found") from None
 
 
+async def _measure(state: TripState, days) -> TravelLookup:
+    """Real travel times for these days, or an empty lookup if we cannot get them.
+
+    Buttons used to validate against nothing at all, so every action reported
+    `travel_time_unknown` for every pair and every day summary it wrote said the
+    travel was unmeasured. The agent had real numbers the whole time; only the
+    HTTP path was blind.
+    """
+    try:
+        toolbox = Toolbox(sessions=get_sessionmaker())
+    except MissingCredentials:
+        return TravelLookup()
+    async with toolbox:
+        return await toolbox.routes.measure_days(state, days)
+
+
 def _view(
     state: TripState,
     before: TripState,
@@ -109,9 +127,12 @@ def _view(
     summary: str,
     errors: list[PatchError] | None = None,
     warnings: list[str] | None = None,
+    travel: TravelLookup | None = None,
 ) -> ActionResult:
     """One response shape, built from the state the caller will actually see."""
-    validation = validate_itinerary(state)
+    # With no lookup the validator reports every pair as `travel_time_unknown`,
+    # which is true but useless: it was unknown because nobody looked.
+    validation = validate_itinerary(state, travel=travel)
     return ActionResult(
         applied=applied,
         revision=state.revision,
@@ -152,10 +173,17 @@ async def _commit(
             summary="nothing was changed",
             errors=failed.errors,
             warnings=warnings,
+            travel=await _measure(current, current.itinerary.days),
         )
 
+    committed = results[-1].state
     return _view(
-        results[-1].state, before, applied=True, summary=summary, warnings=warnings
+        committed,
+        before,
+        applied=True,
+        summary=summary,
+        warnings=warnings,
+        travel=await _measure(committed, committed.itinerary.days),
     )
 
 
@@ -204,11 +232,25 @@ def _is_noop(state: TripState, proposal: ItineraryProposal) -> bool:
     document = state.model_dump(mode="json")
     for operation in proposal.operations:
         try:
-            if jp.resolve(document, operation.path) != operation.value:
-                return False
+            current = jp.resolve(document, operation.path)
         except jp.PointerError:
             return False
+        if _comparable(operation.path, current) != _comparable(operation.path, operation.value):
+            return False
     return True
+
+
+def _comparable(path: str, value: Any) -> Any:
+    """The part of a value that says what the trip *is*.
+
+    A day summary records when it was measured. Re-measuring an unchanged day
+    produces a new timestamp and an otherwise identical summary, and comparing
+    that stamp would make every repeat replan look like a change - which is the
+    exact bug this guard was added to fix.
+    """
+    if path.endswith("/summary") and isinstance(value, dict):
+        return {key: item for key, item in value.items() if key != "measured_at"}
+    return value
 
 
 def _proposal_patches(
@@ -223,6 +265,111 @@ def _proposal_patches(
             scope=proposal.scope,
         )
     ]
+
+
+class DayRouteLeg(BaseModel):
+    """One hop between consecutive stops, as the road actually runs."""
+
+    from_item_id: str
+    to_item_id: str
+    from_title: str
+    to_title: str
+    mode: str
+    minutes: float | None = None
+    meters: int | None = None
+    # Google's encoded path. None means we could not get one, and the caller
+    # must not fall back to a straight line without saying that is what it is.
+    polyline: str | None = None
+    # Why there is no path, kept apart the way this project keeps them apart
+    # everywhere else: "Google knows of no route" and "the lookup failed" are
+    # different facts and only one of them is about the trip.
+    status: Literal["ok", "no_route", "lookup_failed"] = "ok"
+
+
+class DayRoute(BaseModel):
+    date: date_type
+    legs: list[DayRouteLeg] = []
+    # What the caller may claim about the line it draws.
+    geometry: Literal["route", "straight_line", "none"] = "none"
+    note: str | None = None
+
+
+@router.get("/days/{when}/route", response_model=DayRoute)
+async def day_route(trip_id: str, when: date_type, session: SessionDep) -> DayRoute:
+    """The real path between a day's stops, for drawing.
+
+    Fetched for the view and not persisted: route geometry is provider content
+    with a short shelf life, and the trip has no business holding a copy of the
+    road. The mode is whichever one this trip actually travels in, so a driving
+    trip gets driving directions rather than a walking line.
+    """
+    state = await _load(session, trip_id)
+    day = state.itinerary.days[_day_index(state, when)]
+
+    stops = [item for item in day.items if item.entity_id in state.entities]
+    if len(stops) < 2:
+        return DayRoute(date=when, note="not enough stops to draw a route")
+
+    try:
+        toolbox = Toolbox(sessions=get_sessionmaker())
+    except MissingCredentials:
+        return DayRoute(
+            date=when,
+            geometry="straight_line",
+            note="no routing key configured, so the line is straight, not a route",
+        )
+
+    legs: list[DayRouteLeg] = []
+    async with toolbox:
+        for earlier, later in zip(stops, stops[1:], strict=False):
+            origin, destination = state.entities[earlier.entity_id], state.entities[later.entity_id]
+            mode = mode_between(state, origin, destination)
+            leg = await toolbox.routes.path_between(
+                LocationRef(entity_id=origin.entity_id, lat=origin.lat, lng=origin.lng),
+                LocationRef(
+                    entity_id=destination.entity_id, lat=destination.lat, lng=destination.lng
+                ),
+                mode=mode,
+            )
+            if leg is None:
+                status = "lookup_failed"
+            elif leg.polyline:
+                status = "ok"
+            else:
+                status = "no_route"
+            legs.append(
+                DayRouteLeg(
+                    from_item_id=earlier.item_id,
+                    to_item_id=later.item_id,
+                    from_title=earlier.title,
+                    to_title=later.title,
+                    mode=mode,
+                    minutes=leg.duration_minutes if leg else None,
+                    meters=leg.distance_meters if leg else None,
+                    polyline=leg.polyline if leg else None,
+                    status=status,
+                )
+            )
+
+    drawn = [leg for leg in legs if leg.status == "ok"]
+    missing = [leg for leg in legs if leg.status == "no_route"]
+    failed = [leg for leg in legs if leg.status == "lookup_failed"]
+
+    reasons = []
+    if missing:
+        reasons.append(f"{len(missing)} with no {missing[0].mode} route Google knows of")
+    if failed:
+        reasons.append(f"{len(failed)} the routing lookup could not answer")
+    return DayRoute(
+        date=when,
+        legs=legs,
+        geometry="route" if drawn else "straight_line",
+        note=(
+            None
+            if not reasons
+            else f"of {len(legs)} legs, " + " and ".join(reasons) + "; those stay straight lines"
+        ),
+    )
 
 
 # --- locking -----------------------------------------------------------------
@@ -425,7 +572,8 @@ async def replace_item(
     _refuse_if_locked(state, item_id, "replace")
     _find_item(state, item_id)
 
-    proposal = substitute_item(state, item_id)
+    day, _ = _find_item(state, item_id)
+    proposal = substitute_item(state, item_id, travel=await _measure(state, [day]))
     if proposal.is_empty:
         return _view(
             state,
@@ -522,6 +670,7 @@ async def replan_one_day(
     proposal = replan_day(
         state,
         when,
+        travel=await _measure(state, [state.itinerary.days[_day_index(state, when)]]),
         params=ReplanParams(
             intensity=payload.intensity,
             max_items=payload.max_items,

@@ -31,6 +31,7 @@ from app.models.itinerary_plan import (
 from app.models.patch import PatchOperation, PatchScope
 from app.models.trip import TripState
 from app.services.clustering import cluster_places, label_clusters
+from app.services.day_metrics import summarize_day
 from app.services.geo import haversine_km
 from app.services.opening_hours import OpenState, covers_visit, describe
 from app.services.validation_service import (
@@ -320,6 +321,17 @@ def build_itinerary(
     candidate_state = state.model_copy(deep=True)
     candidate_state.itinerary.days = new_days
     validation = validate_itinerary(candidate_state, travel=travel)
+    new_days = [
+        day.model_copy(
+            update={
+                "summary": summarize_day(
+                    day, candidate_state, travel, issues=validation.issues
+                )
+            }
+        )
+        for day in new_days
+    ]
+    candidate_state.itinerary.days = new_days
 
     operations = [
         PatchOperation(
@@ -451,6 +463,15 @@ def substitute_item(
     candidate_state = state.model_copy(deep=True)
     candidate_state.itinerary.days[day_index] = day.model_copy(update={"items": items})
     validation = validate_itinerary(candidate_state, travel=travel, target_date=day.date)
+    new_summary = summarize_day(
+        candidate_state.itinerary.days[day_index],
+        candidate_state,
+        travel,
+        issues=validation.issues,
+    )
+    candidate_state.itinerary.days[day_index] = candidate_state.itinerary.days[
+        day_index
+    ].model_copy(update={"summary": new_summary})
 
     return ItineraryProposal(
         trip_id=state.trip_id,
@@ -461,7 +482,12 @@ def substitute_item(
                 op="set",
                 path=f"/itinerary/days/{day_index}/items",
                 value=[entry.model_dump(mode="json") for entry in items],
-            )
+            ),
+            PatchOperation(
+                op="set",
+                path=f"/itinerary/days/{day_index}/summary",
+                value=new_summary.model_dump(mode="json"),
+            ),
         ],
         days=[_planned_day(candidate_state.itinerary.days[day_index], candidate_state, locked)],
         days_changed=[day.date],
@@ -629,6 +655,16 @@ def replan_day(
     )
     candidate_state.itinerary.days[day_index] = new_day
     validation = validate_itinerary(candidate_state, travel=travel, target_date=target_date)
+    # Measured here, where the routes for this day are already in hand. Computing
+    # it at read time would mean either fetching on a GET or reporting zeros.
+    new_day = new_day.model_copy(
+        update={
+            "summary": summarize_day(
+                new_day, candidate_state, travel, issues=validation.issues, pace=pace
+            )
+        }
+    )
+    candidate_state.itinerary.days[day_index] = new_day
 
     removed = len(day.items) - len(retimed)
     warnings = []
@@ -651,7 +687,12 @@ def replan_day(
                 op="set",
                 path=f"/itinerary/days/{day_index}/items",
                 value=[item.model_dump(mode="json") for item in retimed],
-            )
+            ),
+            PatchOperation(
+                op="set",
+                path=f"/itinerary/days/{day_index}/summary",
+                value=new_day.summary.model_dump(mode="json") if new_day.summary else None,
+            ),
         ],
         days=[_planned_day(new_day, candidate_state, locked)],
         days_changed=[target_date],
