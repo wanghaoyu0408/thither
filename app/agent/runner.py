@@ -189,6 +189,10 @@ class AgentRunner:
                 # them itself, so every write goes through one code path here.
                 if "__patches__" in result:
                     result = await self._apply_all(context, run, result["__patches__"])
+                    if control is not None:
+                        # Purely telemetry: the browser polls this to paint
+                        # committed work while the turn is still running.
+                        control.revision = run.revision_after
 
                 ok = "error" not in result
                 if control is not None:

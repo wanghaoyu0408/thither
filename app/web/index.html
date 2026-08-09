@@ -92,6 +92,11 @@ main {
   main { grid-template-columns: 1fr; }
   aside.left, .grip[data-grip="left"] { display: none; }
 }
+/* A rail with nothing useful gives the space back entirely. After the media
+   queries so it wins at every width. */
+main.norail { grid-template-columns: var(--left) var(--gw) 1fr; }
+main.norail aside.right, main.norail .grip[data-grip="right"] { display: none; }
+@media (max-width: 820px) { main.norail { grid-template-columns: 1fr; } }
 aside, section.work { min-height: 0; display: flex; flex-direction: column; }
 aside.left  { background: var(--panel); }
 aside.right { background: var(--panel); }
@@ -129,9 +134,9 @@ form.new { flex: none; padding: 0 12px 12px; }
   cursor: pointer;
 }
 .trip:hover { background: var(--panel-2); }
-/* A rule rather than a filled block: with a list this long, twenty filled
-   rectangles is noise and one marked edge is an answer. */
-.trip.on { background: var(--accent-soft); border-left-color: var(--accent); }
+/* A rule rather than a filled block - and a neutral fill, so the accent means
+   action and success rather than also meaning "where you are". */
+.trip.on { background: var(--panel-2); border-left-color: var(--accent); }
 .trip b {
   display: block; font-weight: 550; font-size: 13.5px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -207,9 +212,26 @@ section.work { background: var(--bg); }
 }
 .hero h2 { font-size: 27px; font-weight: 650; letter-spacing: -0.02em; line-height: 1.2; }
 .hero p { color: var(--ink-2); font-size: 13.5px; margin-top: 3px; }
-.hero.img { background-size: cover; background-position: center; min-height: 190px; }
+.hero.img { background-size: cover; background-position: center; min-height: 190px; position: relative; }
 .hero.img h2 { color: #fff; text-shadow: 0 1px 8px rgba(0,0,0,.35); }
 .hero.img p { color: rgba(255,255,255,.92); text-shadow: 0 1px 6px rgba(0,0,0,.35); }
+.hero .style { font-size: 12.5px; margin-top: 1px; }
+/* The photographer's name: the price of the picture, kept legible and small. */
+.hero .credit {
+  position: absolute; right: 12px; bottom: 8px; font-size: 10.5px;
+  color: rgba(255,255,255,.75); text-shadow: 0 1px 4px rgba(0,0,0,.5);
+}
+
+/* The selected stop's context card in the rail. */
+.selstop {
+  background: var(--panel-2); border-radius: var(--r); padding: 12px 14px;
+  margin-bottom: 16px;
+}
+.selstop-head { display: flex; align-items: baseline; justify-content: space-between; }
+.selstop h3 { font-size: 14.5px; margin: 2px 0 1px; }
+.selstop .wx { margin-top: 8px; }
+.selstop .issue { margin-top: 8px; }
+.selstop > .linkish { padding: 6px 0 0; display: inline-block; }
 
 /* Info-notes fold to one calm line; open only if you go looking. */
 .quietnotes summary {
@@ -314,6 +336,8 @@ section.work { background: var(--bg); }
 }
 .card.locked { border-color: var(--line-2); background: var(--panel-2); box-shadow: none; }
 .card.attention { border-left: 3px solid var(--warn); }
+/* The stop being discussed: the ring the map and the rail both point at. */
+.card.focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .card-main { flex: 1; min-width: 0; }
 .card-top { display: flex; align-items: flex-start; gap: 8px; }
 .card-top h4 { font-size: 15.5px; font-weight: 600; flex: 1; }
@@ -535,17 +559,30 @@ section.work { background: var(--bg); }
 }
 .chat .inner, .chat > * { max-width: 820px; margin-left: auto; margin-right: auto; }
 
-/* What the agent is doing right now, visible whether or not the conversation
-   pane is open. Nobody should stare at a spinner for two minutes. */
+/* What the agent is doing right now, as a plan taking shape - visible whether
+   or not the conversation pane is open. Nobody should stare at a spinner for
+   two minutes, and nobody should be shown tool names or round counts. */
 .busy-strip {
   flex: none; background: var(--panel); border-top: 1px solid var(--line);
-  padding: 9px 20px; font-size: 12.5px; color: var(--ink-2);
+  padding: 10px 20px 12px; font-size: 13px; color: var(--ink-2);
 }
-.busy-strip .inner { max-width: 780px; margin: 0 auto; display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
-.busy-strip .now { color: var(--ink); font-weight: 550; }
-.busy-strip .done { color: var(--ink-3); }
-.busy-strip .done b { color: var(--accent); font-weight: 600; }
-.busy-strip .done .failed { color: var(--error); }
+.busy-strip .inner { max-width: 820px; margin: 0 auto; }
+.plan-head { display: flex; align-items: center; gap: 9px; margin-bottom: 6px; }
+.plan-head b { font-size: 13px; color: var(--ink); font-weight: 600; }
+.plan-secs { font-size: 11.5px; color: var(--ink-3); }
+.plan-head .linkish { margin-left: auto; }
+.plan-rows { display: flex; flex-direction: column; gap: 3px; }
+.plan-row { display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; }
+.plan-row .mk { flex: none; width: 14px; text-align: center; }
+.plan-row.done { color: var(--ink-3); }
+.plan-row.done .mk { color: var(--accent); }
+.plan-row.now { color: var(--ink); font-weight: 550; }
+.plan-row.now .mk { color: var(--accent); animation: pulse 1.15s infinite; }
+.plan-row.todo { color: var(--ink-3); }
+.activity { margin-top: 7px; }
+.activity summary { font-size: 11.5px; color: var(--ink-3); cursor: pointer; }
+.act-line { font-size: 12px; color: var(--ink-2); padding: 2px 0 0 14px; }
+.act-line.failed { color: var(--error); }
 
 /* The conversation collapses to one line of the last reply; the input stays. */
 .chatbar {
@@ -697,7 +734,7 @@ details.debug li { font: 11.5px/1.7 var(--mono); color: var(--ink-3); }
             <span class="preview" id="chatPreview" title="Open the conversation"></span>
           </div>
           <div class="ask">
-            <textarea id="input" rows="1" placeholder="Tell the agent what to change…" disabled></textarea>
+            <textarea id="input" rows="1" placeholder="✦ Ask or change anything about this trip…" disabled></textarea>
             <button class="btn" id="send" disabled>Send</button>
           </div>
           <p class="hint" id="hint">Create or pick a trip to start.</p>
@@ -1057,25 +1094,44 @@ function paintHero() {
   const hero = $("hero");
   if (!S.trip) { hero.hidden = true; return; }
   const b = S.trip.brief;
+  const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
   const where = b.destination.city || b.destination.region || "";
   const when = b.dates.start && b.dates.end
     ? `${shortDay(b.dates.start)} – ${shortDay(b.dates.end)}` : "";
+  const nights = b.dates.start && b.dates.end
+    ? Math.round((new Date(b.dates.end) - new Date(b.dates.start)) / 86400000) : null;
+  // Only what is actually known: an unknown party stays unsaid, never "2".
+  const heads = b.party.adults != null ? b.party.adults + (b.party.children || 0) : null;
+  const facts = [
+    where, when,
+    nights ? `${nights} night${nights === 1 ? "" : "s"}` : null,
+    heads ? `${heads} traveler${heads === 1 ? "" : "s"}` : null,
+  ].filter(Boolean).join(" · ");
+  const style = [...(b.priorities || []).map(cap), b.pace ? `${cap(b.pace)} pace` : null]
+    .filter(Boolean).join(" · ");
   const title = S.trip.metadata?.title || where || "Trip";
 
   hero.hidden = false;
   hero.innerHTML = `<h2>${esc(title)}</h2>
-    <p>${esc([where, when].filter(Boolean).join(" · "))}</p>`;
+    <p>${esc(facts)}</p>
+    ${style ? `<p class="style">${esc(style)}</p>` : ""}`;
 
   const tripId = S.tripId;
   const first = Object.values(S.trip.entities || {})
     .find((e) => e.provider_refs && e.provider_refs.google_place_id);
   if (!first) { hero.classList.remove("img"); hero.style.backgroundImage = ""; return; }
-  photoFor(first.provider_refs.google_place_id).then((url) => {
+  photoFor(first.provider_refs.google_place_id).then((photo) => {
     if (S.tripId !== tripId) return;          // moved on while the photo loaded
-    if (!url) { hero.classList.remove("img"); hero.style.backgroundImage = ""; return; }
+    if (!photo) { hero.classList.remove("img"); hero.style.backgroundImage = ""; return; }
     hero.style.backgroundImage =
-      `linear-gradient(180deg, rgba(15,18,22,.14), rgba(15,18,22,.58)), url("${url}")`;
+      `linear-gradient(180deg, rgba(15,18,22,.14), rgba(15,18,22,.58)), url("${photo.url}")`;
     hero.classList.add("img");
+    // Google photos carry their photographer; showing the name is part of the
+    // deal for using the picture.
+    if (photo.credit && !hero.querySelector(".credit")) {
+      hero.insertAdjacentHTML("beforeend",
+        `<span class="credit">Photo: ${esc(photo.credit)}</span>`);
+    }
   });
 }
 
@@ -1096,7 +1152,9 @@ function paintHeader() {
   const warns = issues.filter((i) => i.severity === "warning").length;
   chip.hidden = !errors && !warns;
   chip.className = "chip " + (errors ? "bad" : "warn");
-  chip.textContent = errors ? `${errors} to resolve` : `${warns} to check`;
+  chip.textContent = errors
+    ? `${errors} issue${errors === 1 ? "" : "s"} to fix`
+    : `${warns} thing${warns === 1 ? "" : "s"} to check`;
   chip.onclick = () => { S.view = "itinerary"; render(); document.querySelector(".issue")?.scrollIntoView({behavior:"smooth", block:"center"}); };
 }
 
@@ -1562,9 +1620,13 @@ function intakeHtml() {
   if (view === null) return '<p class="empty">Loading…</p>';
 
   if (view.status === "confirmed") {
-    return `<div class="intake"><h2>Brief confirmed</h2>
-      <p class="lede">Planning is under way. Everything below is what you agreed to.</p>
-      ${briefCardHtml(view, { confirmed: true })}</div>`;
+    // A summary of what was agreed, not a transcript of how. The conversation
+    // lives in the chat drawer; this page is the record.
+    return `<div class="intake"><h2>Trip brief</h2>
+      <p class="lede">What we agreed. Planning builds on it — edit anything and the agent keeps up.</p>
+      ${briefCardHtml(view, { confirmed: true })}
+      <div class="go"><button class="btn ghost sm" id="editBriefBtn">Edit trip brief</button></div>
+    </div>`;
   }
 
   // Questions go *above* the brief, never instead of it. They used to replace
@@ -1831,7 +1893,21 @@ function researchHtml() {
     for (const entityId of record.entity_ids || [])
       (byEntity[entityId] ||= []).push(record);
 
-  return revLine + Object.entries(byEntity).map(([entityId, records]) => {
+  // Findings grouped the way a traveller thinks - restaurants, experiences,
+  // places - by how the trip actually uses each entity, not as a flat log.
+  const useOf = {};
+  for (const day of S.trip.itinerary.days || [])
+    for (const item of day.items)
+      if (item.entity_id && !useOf[item.entity_id]) useOf[item.entity_id] = item.type;
+  const SECTION = { restaurant: "Restaurants", meal: "Restaurants", food: "Restaurants",
+                    activity: "Experiences", sight: "Experiences" };
+  const groups = {};
+  for (const [entityId, records] of Object.entries(byEntity)) {
+    const section = SECTION[useOf[entityId]] || "Places";
+    (groups[section] ||= []).push([entityId, records]);
+  }
+
+  const block = ([entityId, records]) => {
     const entity = S.trip.entities[entityId];
     return `<div class="day">
       <div class="day-head"><h3>${esc(entity?.name || entityId)}</h3>
@@ -1839,7 +1915,12 @@ function researchHtml() {
         <button class="chip" data-whyentity="${esc(entityId)}">Why?</button></div>
       ${records.map(sourceHtml).join("")}
     </div>`;
-  }).join("");
+  };
+  return revLine + ["Restaurants", "Experiences", "Places"]
+    .filter((section) => groups[section])
+    .map((section) => `<p class="eyebrow" style="margin:18px 0 10px">${section}</p>`
+      + groups[section].map(block).join(""))
+    .join("");
 }
 
 function sourceHtml(record) {
@@ -1862,6 +1943,24 @@ const M = { status: "idle", pending: null, map: null, info: null,
 async function mapsReady() {
   if (M.status !== "idle") return M.status === "loading" ? M.pending : M.status;
   M.status = "loading";
+
+  // Google reports *why* it refused a key only to the console, as an error
+  // ending in "MapError". Capture the code so the refusal note can name the
+  // actual problem - referrer, API list, bad key - instead of guessing at all
+  // three and leaving the person to open devtools.
+  if (!M.errHooked) {
+    M.errHooked = true;
+    const original = console.error.bind(console);
+    console.error = (...args) => {
+      const match = args.map(String).join(" ").match(/([A-Za-z]+MapError)/);
+      if (match) {
+        M.errorCode = match[1];
+        if (M.status === "rejected") paintMap();   // upgrade the note in place
+      }
+      original(...args);
+    };
+  }
+
   M.pending = (async () => {
     let cfg;
     try { cfg = await api("/ui-config"); }
@@ -1912,7 +2011,12 @@ function photoFor(placeId) {
         const { Place } = await google.maps.importLibrary("places");
         const place = new Place({ id: placeId });
         await place.fetchFields({ fields: ["photos"] });
-        return place.photos?.[0]?.getURI({ maxHeight: 176 }) || null;
+        const photo = place.photos?.[0];
+        if (!photo) return null;
+        return {
+          url: photo.getURI({ maxHeight: 400 }),
+          credit: photo.authorAttributions?.[0]?.displayName || "",
+        };
       } catch { return null; }
     })());
   }
@@ -1939,10 +2043,11 @@ function visibleTiles() {
 function hydratePhotos() {
   for (const tile of visibleTiles()) {
     tile.dataset.tried = "1";      // one attempt per card, per render
-    photoFor(tile.dataset.photo).then((url) => {
-      if (url && tile.isConnected) {
-        tile.style.backgroundImage = `url("${url}")`;
+    photoFor(tile.dataset.photo).then((photo) => {
+      if (photo && photo.url && tile.isConnected) {
+        tile.style.backgroundImage = `url("${photo.url}")`;
         tile.classList.add("loaded");
+        if (photo.credit) tile.title = `Photo: ${photo.credit}`;
       }
     });
   }
@@ -1995,6 +2100,27 @@ const NOTES = {
     this page still works — the trip is served from your own machine.</div>`,
 };
 
+/** The refusal note, upgraded to the exact code when Google gave one. */
+function noteFor(status) {
+  if (status !== "rejected" || !M.errorCode) return NOTES[status] || NOTES.offline;
+  const here = `${location.origin}/*`;
+  const fixes = {
+    RefererNotAllowedMapError: `This key's referrer list does not allow
+      <code>${esc(location.origin)}</code>. Add <code>${esc(here)}</code> under the key's
+      website restrictions. A privacy extension that strips the Referer header
+      triggers this too — allow this site in the extension, or test in a clean profile.`,
+    ApiNotActivatedMapError: `<b>Maps JavaScript API</b> is not enabled on this key's
+      project, or is missing from the key's allowed-API list.`,
+    InvalidKeyMapError: `The key itself is not valid — re-copy
+      <code>MAPS_BROWSER_API_KEY</code> into <code>.env</code> and restart.`,
+    ExpiredKeyMapError: `The key is expired or was deleted — issue a new one.`,
+  };
+  const fix = fixes[M.errorCode]
+    || `Restriction changes can also take a few minutes to apply — wait and reload.`;
+  return `<div class="mapnote warn"><b>Google refused this key:
+    <code>${esc(M.errorCode)}</code></b><br>${fix}</div>`;
+}
+
 async function paintMap() {
   const wrap = $("mapwrap"), days = mappableDays();
   wrap.hidden = !days.length;
@@ -2009,7 +2135,7 @@ async function paintMap() {
   const status = await mapsReady();
   if (status !== "ready") {
     $("map").classList.add("gone");
-    $("mapnote").innerHTML = NOTES[status] || NOTES.offline;
+    $("mapnote").innerHTML = noteFor(status);
     return;
   }
   drawDay(days.find((d) => d.date === S.mapDay));
@@ -2059,6 +2185,7 @@ function drawDay(day) {
         esc([clock(item.start_at), item.type, entity.rating ? "★ " + entity.rating : ""]
           .filter(Boolean).join(" · "))}</span></div>`);
       M.info.open({ map: M.map, anchor: marker });
+      selectStop(item.item_id);
       document.querySelector(`[data-item="${item.item_id}"]`)
         ?.scrollIntoView({ behavior: "smooth", block: "center" });
     });
@@ -2167,6 +2294,7 @@ function drawParking(stops) {
 }
 
 function focusStop(itemId) {
+  selectStop(itemId);
   const day = mappableDays().find((d) => d.items.some((i) => i.item_id === itemId));
   if (!day) return;
   if (day.date !== S.mapDay) {      // clicked a stop on a day the map is not showing
@@ -2175,6 +2303,15 @@ function focusStop(itemId) {
     return;
   }
   panTo(itemId);
+}
+
+/** One stop is "the one being discussed": its card wears a ring, and the rail
+ *  shows only that stop's context - weather, parking, its own issues. */
+function selectStop(itemId) {
+  S.selectedItem = itemId;
+  document.querySelectorAll(".card.focus").forEach((el) => el.classList.remove("focus"));
+  if (itemId) document.querySelector(`[data-item="${CSS.escape(itemId)}"]`)?.classList.add("focus");
+  renderRail();
 }
 
 function panTo(itemId) {
@@ -2192,6 +2329,32 @@ function renderRail() {
   if (blocking.length) {
     out.push(`<div class="banner">This trip cannot be called ready:
       ${blocking.length} unresolved blocking conflict(s).</div>`);
+  }
+
+  // The selected stop's own context - and only its own. Weather for its day,
+  // how you arrive, whatever the validator said about it, a way to navigate.
+  const selected = S.selectedItem ? itemById(S.selectedItem) : null;
+  if (S.selectedItem && !selected) S.selectedItem = null;   // stop no longer exists
+  if (selected) {
+    const day = (S.trip.itinerary.days || [])
+      .find((d) => d.items.some((i) => i.item_id === selected.item_id));
+    const entity = S.trip.entities[selected.entity_id];
+    const issues = (S.over.validation.issues || [])
+      .filter((i) => (i.item_ids || []).includes(selected.item_id) && i.severity !== "info");
+    out.push(`<div class="selstop">
+      <div class="selstop-head">
+        <p class="eyebrow">Selected stop</p>
+        <button class="linkish" data-clearsel="1">clear</button>
+      </div>
+      <h3>${esc(selected.title)}</h3>
+      <p class="meta">${esc([day ? dayLabel(day.date) : "", clock(selected.start_at)]
+        .filter(Boolean).join(" · "))}</p>
+      ${day ? weatherChipHtml(day) : ""}
+      ${arrivalHtml(selected)}
+      ${issues.map((i) => `<div class="issue ${esc(i.severity)}"><p>${esc(i.message)}</p>
+        ${i.suggested_fix ? `<p class="fix">Suggested: ${esc(i.suggested_fix)}</p>` : ""}</div>`).join("")}
+      ${entity ? `<button class="linkish" data-maps="${esc(entity.name)}">Open in Google Maps</button>` : ""}
+    </div>`);
   }
 
   const conflicts = S.over.conflicts || [];
@@ -2224,6 +2387,30 @@ function renderRail() {
     </details>`);
   }
   $("rail").innerHTML = out.join("");
+
+  // A rail with nothing to say gives its 400px back. Hidden entirely - grip
+  // too - rather than kept open to display "Nothing to flag".
+  const empty = !mappableDays().length && !out.length;
+  document.querySelector("main").classList.toggle("norail", empty);
+
+  // Rail-local wiring: these buttons live outside #work, so wireWorkspace's
+  // bindings never reach them.
+  const rail = $("rail");
+  rail.querySelectorAll("[data-clearsel]").forEach((b) => b.onclick = () => selectStop(null));
+  rail.querySelectorAll("[data-maps]").forEach((b) => b.onclick = () =>
+    window.open(`https://www.google.com/maps/search/${encodeURIComponent(b.dataset.maps)}`,
+      "_blank", "noopener"));
+  rail.querySelectorAll("[data-wx]").forEach((b) => b.onclick = () => {
+    const day = (S.trip.itinerary.days || []).find((d) => d.date === b.dataset.wx);
+    if (day) showWeather(day);
+  });
+  rail.querySelectorAll("[data-parkto]").forEach((b) => b.onclick = () => {
+    const item = itemById(b.dataset.parkto);
+    const spot = item && bestSpot((S.trip.arrival[item.entity_id] || {}).parking || {});
+    if (!spot || !spot.location) return toast("No parking location stored");
+    window.open(`https://www.google.com/maps/dir/?api=1&destination=${
+      spot.location.lat},${spot.location.lng}&travelmode=driving`, "_blank", "noopener");
+  });
 }
 
 function travelerName(id) {
@@ -2242,6 +2429,12 @@ function wireWorkspace() {
     el.addEventListener("click", (e) => {
       if (!e.target.closest("button")) focusStop(el.dataset.item);
     }));
+
+  // #work was just rebuilt; the selected stop's ring has to be re-worn.
+  if (S.selectedItem) {
+    document.querySelector(`[data-item="${CSS.escape(S.selectedItem)}"]`)
+      ?.classList.add("focus");
+  }
 
   // The ⋯ menus: one open at a time, closed by choosing or by clicking away.
   $("work").querySelectorAll(".kmenu-btn").forEach((btn) =>
@@ -2500,56 +2693,129 @@ async function loadMessages() {
    dead. */
 
 const TOOL_LABELS = {
-  update_trip_brief: "Recording what you said",
-  ask_clarifications: "Writing down a question",
-  search_places: "Searching places",
-  get_place_details: "Checking a place's details",
-  get_routes: "Measuring travel times",
-  research_web: "Reading travel articles",
-  discover_restaurants: "Searching restaurants",
-  get_weather_context: "Checking the weather",
-  search_airports: "Looking up airports",
-  search_flights: "Searching flights",
-  recommend_hotel_areas: "Ranking hotel areas",
-  search_hotels: "Searching hotels",
-  review_group_preferences: "Reviewing everyone's preferences",
-  refresh_traveler_preferences: "Refreshing traveller profiles",
-  generate_itinerary: "Building the plan",
-  replace_item: "Finding a substitute",
-  replan_day: "Reworking the day",
-  validate_itinerary: "Validating the plan",
-  apply_trip_patch: "Saving changes",
+  update_trip_brief: "Recorded what you said",
+  ask_clarifications: "Wrote down a question for you",
+  search_places: "Searched places",
+  get_place_details: "Checked a place's details",
+  get_routes: "Measured travel times",
+  research_web: "Read travel articles",
+  discover_restaurants: "Searched restaurants",
+  get_weather_context: "Checked the weather",
+  search_airports: "Looked up airports",
+  search_flights: "Searched flights",
+  recommend_hotel_areas: "Compared neighbourhoods",
+  search_hotels: "Searched hotels",
+  review_group_preferences: "Reviewed everyone's preferences",
+  refresh_traveler_preferences: "Refreshed traveller profiles",
+  generate_itinerary: "Built a draft itinerary",
+  replace_item: "Looked for a substitute",
+  replan_day: "Reworked a day",
+  validate_itinerary: "Checked the plan for problems",
+  apply_trip_patch: "Saved progress",
 };
 const toolLabel = (name) => TOOL_LABELS[name] || name.replace(/_/g, " ");
+
+/* Tools grouped into work a traveller would name. The checklist renders these,
+   not tool names - progress should describe the trip taking shape, not the
+   machinery. */
+const PHASES = [
+  ["understand", "Understanding your trip", ["update_trip_brief", "ask_clarifications"]],
+  ["prefs", "Reviewing everyone's preferences",
+    ["review_group_preferences", "refresh_traveler_preferences"]],
+  ["places", "Finding places worth going",
+    ["search_places", "discover_restaurants", "research_web", "get_place_details"]],
+  ["areas", "Comparing neighbourhoods", ["recommend_hotel_areas"]],
+  ["hotels", "Finding hotels", ["search_hotels"]],
+  ["flights", "Finding flights", ["search_airports", "search_flights"]],
+  ["travel", "Measuring travel times", ["get_routes"]],
+  ["weather", "Checking the weather", ["get_weather_context"]],
+  ["itinerary", "Building the daily itinerary",
+    ["generate_itinerary", "replan_day", "replace_item", "validate_itinerary"]],
+];
+const PHASE_OF = {};
+const PHASE_LABEL = {};
+for (const [id, label, tools] of PHASES) {
+  PHASE_LABEL[id] = label;
+  for (const t of tools) PHASE_OF[t] = id;
+}
 
 function paintBusy(snap) {
   const box = $("busyStrip");
   box.hidden = false;
-  // Status a traveller can read: what is happening now, how long, what is
-  // done. Rounds and iterations are agent-console vocabulary and stay out.
-  const secs = Math.round((snap?.elapsed_ms ?? 0) / 1000);
-  const now = snap?.cancelled ? "stopping at the next safe point…"
-    : snap?.current_tool
-      ? `${toolLabel(snap.current_tool.name)} · ${Math.round(snap.current_tool.elapsed_ms / 1000)}s`
-      : "thinking…";
+
   const done = snap?.tools_done || [];
-  const doneBits = done.map((t) =>
-    `<span class="${t.ok ? "" : "failed"}">${t.ok ? "✓" : "✗"} ${esc(toolLabel(t.name))}</span>`
-  ).join(" · ");
+  const currentTool = snap?.current_tool?.name || null;
+  const currentPhase = currentTool ? (PHASE_OF[currentTool] || null) : null;
+
+  // Phases in the order they actually happened; the one running is ● even if
+  // it also already has finished tools behind it.
+  const seen = [];
+  for (const t of done) {
+    const phase = PHASE_OF[t.name];
+    if (phase && !seen.includes(phase)) seen.push(phase);
+  }
+  const rows = seen.map((phase) => ({
+    mark: phase === currentPhase ? "now" : "done",
+    label: PHASE_LABEL[phase],
+  }));
+  if (currentPhase && !seen.includes(currentPhase)) {
+    rows.push({ mark: "now", label: PHASE_LABEL[currentPhase] });
+  }
+  // Between rounds, or before the first tool: say the model is deciding,
+  // rather than showing a list with nothing in motion.
+  if (!rows.some((r) => r.mark === "now")) {
+    rows.push({ mark: "now", label: "Thinking about the next step" });
+  }
+
+  // Upcoming rows only when the trip's own state says that work is wanted and
+  // it has not started - never a promise about what the agent will do next.
+  const brief = S.trip?.brief;
+  const upcoming = [];
+  if (brief) {
+    const started = new Set(seen.concat(currentPhase ? [currentPhase] : []));
+    if (brief.scope.flights === "plan" && !started.has("flights")
+        && !(S.trip.decisions?.flights?.options || []).length)
+      upcoming.push("Find flight options");
+    if (brief.scope.lodging === "plan" && !started.has("hotels")
+        && !(S.trip.decisions?.hotel?.options || []).length)
+      upcoming.push("Find a place to stay");
+    if (!(S.trip.itinerary.days || []).length && !started.has("itinerary"))
+      upcoming.push("Build the daily itinerary");
+  }
+
+  const secs = Math.round((snap?.elapsed_ms ?? 0) / 1000);
+  const stopping = !!snap?.cancelled;
+  const activity = done.map((t) =>
+    `<div class="act-line ${t.ok ? "" : "failed"}">${t.ok ? "✓" : "✗"} ${esc(toolLabel(t.name))}</div>`
+  ).join("");
+
   box.querySelector(".inner").innerHTML = `
-    <span class="thinking"><span class="dot"></span></span>
-    <span class="now">${esc(now)}</span>
-    <span>${secs}s${done.length ? ` · ${done.length} step(s) done` : ""}</span>
-    ${done.length ? `<span class="done">${doneBits}</span>` : ""}`;
+    <div class="plan-head">
+      <span class="thinking"><span class="dot"></span></span>
+      <b>Planning your trip</b>
+      <span class="plan-secs">${secs}s</span>
+      <button class="linkish" id="stopLink">${stopping ? "Stopping…" : "Stop"}</button>
+    </div>
+    <div class="plan-rows">
+      ${rows.map((r) => `<div class="plan-row ${r.mark}">
+        <span class="mk">${r.mark === "done" ? "✓" : "●"}</span>${esc(r.label)}</div>`).join("")}
+      ${upcoming.map((label) => `<div class="plan-row todo"><span class="mk">○</span>${esc(label)}</div>`).join("")}
+    </div>
+    ${done.length ? `<details class="activity"><summary>View activity</summary>${activity}</details>` : ""}`;
+
+  const stop = $("stopLink");
+  if (stop) stop.onclick = () => { stop.textContent = "Stopping…"; stopRun(); };
 }
 
 function setBusyUI(on) {
   S.busy = on;
   $("input").disabled = on || !S.tripId;
+  // Stop lives in the progress card as a quiet link; the Send button simply
+  // waits. A large red Stop as the strongest element on the page made every
+  // planning run look like an emergency.
   const send = $("send");
-  send.disabled = false;
-  send.textContent = on ? "Stop" : "Send";
-  send.classList.toggle("stop", on);
+  send.disabled = on || !S.tripId;
+  send.textContent = "Send";
   if (!on) $("busyStrip").hidden = true;
 }
 
@@ -2559,7 +2825,22 @@ function startRunPoll(tripId) {
     if (S.tripId !== tripId) { stopRunPoll(); return; }
     try {
       const snap = await api(`/trips/${tripId}/run`);
-      if (snap.running) paintBusy(snap);
+      if (!snap.running) return;
+      paintBusy(snap);
+      // Committed work appears as it lands, not at the end of the turn. The
+      // registry carries the revision of the run's last commit; when it moves
+      // past what is painted, re-read and paint. Only persisted state is ever
+      // shown - this reads the store, never the run's intentions.
+      if (snap.revision != null && S.trip && snap.revision > S.trip.revision && !S.midRefresh) {
+        S.midRefresh = true;
+        try {
+          await refresh();
+          S.decisions = null;
+          await loadIntake();
+          render();
+          if (S.view === "decisions") loadDecisions().then(render);
+        } finally { S.midRefresh = false; }
+      }
     } catch {}
   }, 1200);
 }

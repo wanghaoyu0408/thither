@@ -33,6 +33,11 @@ class RunControl:
     tools_done: list[dict[str, Any]] = field(default_factory=list)
     current_tool: str | None = None
     current_tool_started: float | None = None
+    # The trip revision after the run's most recent commit. Telemetry only -
+    # it changes nothing about the run - but it is what lets the screen notice
+    # that committed work exists *during* the turn and paint it, instead of
+    # sitting on a spinner for two minutes and revealing everything at the end.
+    revision: int | None = None
     _cancel: asyncio.Event = field(default_factory=asyncio.Event)
 
     # -- what the runner tells us -------------------------------------------
@@ -70,6 +75,7 @@ class RunControl:
             "elapsed_ms": int((now - self.started_at) * 1000),
             "iteration": self.iteration,
             "cancelled": self.cancelled,
+            "revision": self.revision,
             "current_tool": (
                 {
                     "name": self.current_tool,

@@ -113,6 +113,8 @@ def test_a_snapshot_reports_progress_without_trip_state():
     assert snap["running"] is True
     assert snap["iteration"] == 2
     assert snap["cancelled"] is False
+    # No commit yet: unknown, never a made-up number the poller might act on.
+    assert snap["revision"] is None
     assert snap["tools_done"] == [
         {"name": "discover_restaurants", "milliseconds": 1234, "ok": True}
     ]
@@ -204,6 +206,10 @@ async def test_cancel_during_a_tool_lets_it_finish_and_stops_the_next(session):
     persisted = await TripRepository(session).get(state.trip_id)
     assert persisted.status == "planning"
     assert persisted.brief.notes != "b landed"
+    # The commit was stamped into the registry the moment it landed, which is
+    # what lets the screen paint mid-turn work instead of waiting for the end.
+    assert control.revision == persisted.revision
+    assert control.snapshot()["revision"] == persisted.revision
 
 
 async def test_a_cancelled_turn_reports_what_it_saved_and_skips_the_next_round(session):
