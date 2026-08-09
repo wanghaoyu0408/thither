@@ -15,6 +15,7 @@ from typing import Any
 
 from app.config import Settings
 from app.models.common import utcnow
+from app.models.decision import Decision, DecisionOption, PlaceOption
 from app.models.flight import SearchAirportsInput, SearchFlightsInput
 from app.models.group import TravelerPreferences
 from app.models.hotel import SearchHotelsInput
@@ -721,6 +722,22 @@ async def _research_web(context: ToolContext, args: dict[str, Any]) -> dict[str,
     }
 
 
+def _slug(text: str, limit: int = 24) -> str:
+    cleaned = "".join(c if c.isalnum() else " " for c in (text or "").lower()).split()
+    return "_".join(cleaned)[:limit].strip("_")
+
+
+def _shortlist_key(args: dict[str, Any]) -> str:
+    """A stable name for one shortlist, so re-running a search updates it.
+
+    Derived from what was asked rather than randomly generated: searching
+    "izakaya" in "Asakusa, Tokyo" twice should refine one shortlist, not
+    accumulate two that disagree.
+    """
+    parts = [_slug(args.get("query", "places")), _slug(args.get("near", ""))]
+    return "_".join(part for part in parts if part) or "places"
+
+
 async def _discover_restaurants(context: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
     if context.budget_left() <= 0:
         return {"error": "search budget exhausted for this turn"}
@@ -775,6 +792,43 @@ async def _discover_restaurants(context: ToolContext, args: dict[str, Any]) -> d
                 worst_weight=context.settings.group_worst_weight,
             )
         }
+
+    # Persist the ranking, not just the places.
+    #
+    # Until this existed, discovery stored the entities and the evidence and
+    # threw the reasoning away at the end of the turn - so nothing downstream
+    # could answer "why this one?" without inventing an answer, which is exactly
+    # what INVARIANTS.md forbids. The shortlist goes in the *same* atomic batch
+    # as the entities and evidence it points at, because referential integrity
+    # requires both to resolve.
+    if outcome.recommendations:
+        context.pending_decisions[f"place_shortlists.{_shortlist_key(args)}"] = Decision[
+            PlaceOption
+        ](
+            status="shortlisted",
+            rationale=f"{args['query']} in {args['near']}",
+            updated_at=utcnow(),
+            options=[
+                DecisionOption[PlaceOption](
+                    data=PlaceOption(
+                        entity_id=rec.entity_id,
+                        purpose=args["query"],
+                        why=(rec.ranked.pros[0] if rec.ranked.pros else None),
+                    ),
+                    status="shortlisted" if position < 3 else "candidate",
+                    score=rec.ranked.score,
+                    group_score=(
+                        group_by_place[rec.ranked.place.place_id].group
+                        if rec.ranked.place.place_id in group_by_place
+                        else None
+                    ),
+                    pros=rec.ranked.pros,
+                    cons=rec.ranked.cons,
+                    evidence_refs=rec.evidence_ids,
+                )
+                for position, rec in enumerate(outcome.recommendations)
+            ],
+        ).model_dump(mode="json")
 
     return {
         "recommendations": [
@@ -1497,11 +1551,7 @@ async def _apply_trip_patch(context: ToolContext, args: dict[str, Any]) -> dict[
     # Decisions are the one thing worth committing without an itinerary
     # proposal: recommending neighbourhoods produces a Decision and no days.
     decision_ops = [
-        {
-            "op": "add" if getattr(context.state.decisions, name, None) is None else "set",
-            "path": f"/decisions/{name}",
-            "value": value,
-        }
+        _decision_op(context.state, name, value)
         for name, value in context.pending_decisions.items()
     ]
     decision_ops += _stale_ops(context)
@@ -1610,6 +1660,24 @@ async def _apply_trip_patch(context: ToolContext, args: dict[str, Any]) -> dict[
     )
 
     return {"__patches__": plans, "proposal_id": proposal.proposal_id}
+
+
+def _decision_op(state: TripState, name: str, value: Any) -> dict[str, Any]:
+    """One decision as a patch operation.
+
+    `name` is either a singleton ("hotel_area") or a keyed one
+    ("place_shortlists.izakaya_asakusa"). Whether the op is `add` or `set`
+    depends on whether it is already there - `add` onto an existing key would
+    still work here, but saying which one this is keeps the audit event honest.
+    """
+    if "." in name:
+        group, _, key = name.partition(".")
+        exists = key in (getattr(state.decisions, group, None) or {})
+        path = f"/decisions/{group}/{key}"
+    else:
+        exists = getattr(state.decisions, name, None) is not None
+        path = f"/decisions/{name}"
+    return {"op": "set" if exists else "add", "path": path, "value": value}
 
 
 def _stale_ops(context: ToolContext) -> list[dict[str, Any]]:

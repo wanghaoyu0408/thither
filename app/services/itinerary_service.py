@@ -346,6 +346,135 @@ def build_itinerary(
     )
 
 
+def substitute_item(
+    state: TripState,
+    item_id: str,
+    *,
+    travel: TravelLookup | None = None,
+) -> ItineraryProposal:
+    """Swap one scheduled place for the best alternative the trip already knows.
+
+    `replan_day` cannot do this: it drops, keeps and re-times, but nothing in it
+    pulls a fresh candidate into a day, so dropping an item leaves a gap rather
+    than a substitution.
+
+    The substitute is chosen the same way the builder chooses anything - places
+    the trip has already researched, filtered to the same slot kind, never one
+    already scheduled or rejected, ranked by `_fits` so a venue confirmed open
+    in that window beats one whose hours nobody knows.
+
+    When nothing qualifies it returns an empty proposal explaining why. Leaving
+    a hole in the day, or inventing a place to fill it, would both be worse than
+    saying "there is nothing here to swap in".
+    """
+    locked = _locked_item_ids(state)
+
+    found = next(
+        ((day, item) for day, item in state.itinerary.iter_items() if item.item_id == item_id),
+        None,
+    )
+    if found is None:
+        return ItineraryProposal(
+            trip_id=state.trip_id,
+            base_revision=state.revision,
+            summary=f"no item {item_id!r} on this itinerary.",
+            warnings=[f"unknown item {item_id!r}"],
+        )
+
+    day, item = found
+    if item_id in locked:
+        return ItineraryProposal(
+            trip_id=state.trip_id,
+            base_revision=state.revision,
+            summary=f"{item.title} is locked.",
+            warnings=[
+                f"{item.title!r} is locked; unlock it first if you want it replaced"
+            ],
+        )
+
+    current = state.entities.get(item.entity_id or "")
+    kind: SlotKind = slot_kind_for(current) if current else "activity"
+    minutes = (
+        int((item.end_at - item.start_at).total_seconds() // 60)
+        if item.start_at and item.end_at
+        else 90
+    )
+    slot = Slot(kind, (item.start_at or datetime.combine(day.date, time(10, 0))).time(), minutes)
+
+    scheduled = {other.entity_id for _d, other in state.itinerary.iter_items() if other.entity_id}
+    rejected = {
+        rejection.target_id
+        for rejection in state.rejections
+        if rejection.target_kind == "entity"
+    }
+
+    candidates = [
+        entity
+        for entity in state.entities.values()
+        if entity.entity_id not in scheduled
+        and entity.entity_id not in rejected
+        and slot_kind_for(entity) == kind
+        # Known-closed is filtered, not ranked last: swapping in a venue we can
+        # see is shut would replace one problem with another.
+        and _openness(entity, slot, day.date) != OpenState.CLOSED
+    ]
+
+    if not candidates:
+        return ItineraryProposal(
+            trip_id=state.trip_id,
+            base_revision=state.revision,
+            summary=f"nothing to swap in for {item.title}.",
+            warnings=[
+                f"no alternative among the {len(state.entities)} place(s) this trip knows is "
+                f"a {kind} that is free and open at {slot.start.strftime('%H:%M')}. "
+                f"Ask the agent to research more options for this slot."
+            ],
+        )
+
+    best = min(candidates, key=lambda entity: (*_fits(entity, slot, day.date), entity.entity_id))
+    start, end = slot.window(day.date)
+    replacement = ItineraryItem(
+        type=item_type_for(kind),
+        entity_id=best.entity_id,
+        title=best.name,
+        start_at=start,
+        end_at=end,
+        time_flexibility=item.time_flexibility,
+        status="proposed",
+    )
+
+    items = [replacement if other.item_id == item_id else other for other in day.items]
+    day_index = next(
+        index for index, existing in enumerate(state.itinerary.days) if existing.date == day.date
+    )
+
+    candidate_state = state.model_copy(deep=True)
+    candidate_state.itinerary.days[day_index] = day.model_copy(update={"items": items})
+    validation = validate_itinerary(candidate_state, travel=travel, target_date=day.date)
+
+    return ItineraryProposal(
+        trip_id=state.trip_id,
+        base_revision=state.revision,
+        scope=PatchScope(kind="itinerary_day", target_id=day.date.isoformat()),
+        operations=[
+            PatchOperation(
+                op="set",
+                path=f"/itinerary/days/{day_index}/items",
+                value=[entry.model_dump(mode="json") for entry in items],
+            )
+        ],
+        days=[_planned_day(candidate_state.itinerary.days[day_index], candidate_state, locked)],
+        days_changed=[day.date],
+        summary=f"{item.title} replaced with {best.name}",
+        validation=validation,
+        warnings=[
+            f"{len(candidates) - 1} other alternative(s) were available"
+            if len(candidates) > 1
+            else "this was the only alternative the trip knows"
+        ],
+    )
+
+
 def _drop_order(item: ItineraryItem, locked: set[str]) -> tuple:
     """Which items go first when a day has to shed load.
 

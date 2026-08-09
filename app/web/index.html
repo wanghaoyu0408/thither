@@ -5,94 +5,66 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Travel Agent</title>
 <style>
-/* The palette is deliberately quiet. This tool's job is to be believed, and a
-   loud interface makes an honest answer look like a sales pitch. */
+/* Quiet on purpose. Travel information should be easier to scan than chat text,
+   and a loud interface makes an honest answer look like a sales pitch. */
 :root {
-  --bg: #f6f6f4;
-  --panel: #ffffff;
-  --panel-2: #fbfbfa;
-  --ink: #17181b;
-  --ink-2: #565961;
-  --ink-3: #8b8f98;
-  --line: #e3e3df;
-  --accent: #2f5d50;
-  --accent-soft: #e7efeb;
-  --user: #eceae4;
-  --error: #a3352b;
-  --error-soft: #fbeceb;
-  --warn: #8a5a12;
-  --warn-soft: #fbf3e4;
-  --info: #3d5878;
-  --info-soft: #eaeff5;
-  --ok: #2f6d4f;
-  --radius: 10px;
+  --bg: #f6f6f4; --panel: #fff; --panel-2: #fbfbfa; --sunk: #f1f1ee;
+  --ink: #17181b; --ink-2: #565961; --ink-3: #8b8f98;
+  --line: #e3e3df; --line-2: #d3d3ce;
+  --accent: #2f5d50; --accent-soft: #e7efeb;
+  --error: #a3352b; --error-soft: #fbeceb;
+  --warn: #8a5a12; --warn-soft: #fbf3e4;
+  --info: #3d5878; --info-soft: #eaeff5;
+  --r: 10px;
   --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #14151a;
-    --panel: #1b1d23;
-    --panel-2: #202329;
-    --ink: #e9eaee;
-    --ink-2: #a9adb7;
-    --ink-3: #767b86;
-    --line: #2b2e36;
-    --accent: #7fd0b4;
-    --accent-soft: #1e2f2a;
-    --user: #262a32;
-    --error: #f2938a;
-    --error-soft: #2e1e1e;
-    --warn: #e8bd7a;
-    --warn-soft: #2c2418;
-    --info: #9dbbdd;
-    --info-soft: #1c2531;
-    --ok: #7fd0b4;
+    --bg: #14151a; --panel: #1b1d23; --panel-2: #202329; --sunk: #16181d;
+    --ink: #e9eaee; --ink-2: #a9adb7; --ink-3: #767b86;
+    --line: #2b2e36; --line-2: #3a3e48;
+    --accent: #7fd0b4; --accent-soft: #1e2f2a;
+    --error: #f2938a; --error-soft: #2e1e1e;
+    --warn: #e8bd7a; --warn-soft: #2c2418;
+    --info: #9dbbdd; --info-soft: #1c2531;
   }
 }
-
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--ink);
+  margin: 0; background: var(--bg); color: var(--ink);
   font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans",
         "Hiragino Sans", "Microsoft YaHei", sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 button, input, select, textarea { font: inherit; color: inherit; }
-button { cursor: pointer; }
-h1, h2, h3 { margin: 0; font-weight: 600; }
+button { cursor: pointer; background: none; border: none; padding: 0; }
+h1,h2,h3,h4 { margin: 0; font-weight: 600; }
+p { margin: 0; }
 
-/* --- shell --------------------------------------------------------------- */
 .app { display: flex; flex-direction: column; height: 100vh; }
-
 header {
-  display: flex; align-items: center; gap: 14px;
-  padding: 12px 18px; border-bottom: 1px solid var(--line);
-  background: var(--panel); flex: none;
+  display: flex; align-items: center; gap: 12px; flex: none;
+  padding: 10px 18px; border-bottom: 1px solid var(--line); background: var(--panel);
 }
-.brand { display: flex; align-items: baseline; gap: 9px; }
-.brand h1 { font-size: 15px; letter-spacing: -0.01em; }
-.brand span { font-size: 12px; color: var(--ink-3); }
+.brand { font-size: 15px; letter-spacing: -0.01em; }
+.brand span { font-size: 12px; color: var(--ink-3); font-weight: 400; margin-left: 8px; }
 .spacer { flex: 1; }
-
-.pill {
-  font: 11px/1 var(--mono); padding: 5px 9px; border-radius: 999px;
+.chip {
+  font-size: 11.5px; padding: 4px 9px; border-radius: 999px; white-space: nowrap;
   background: var(--panel-2); border: 1px solid var(--line); color: var(--ink-2);
-  white-space: nowrap;
 }
-.pill.live { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+.chip.good { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+.chip.bad  { background: var(--error-soft); border-color: transparent; color: var(--error); }
+.chip.warn { background: var(--warn-soft);  border-color: transparent; color: var(--warn); }
+.chip.mono { font: 11px var(--mono); }
+button.chip:hover { border-color: var(--line-2); }
 
-main { flex: 1; display: grid; grid-template-columns: 236px 1fr 340px; min-height: 0; }
-@media (max-width: 1100px) { main { grid-template-columns: 200px 1fr; } aside.right { display: none; } }
-@media (max-width: 780px) {
-  main { grid-template-columns: 1fr; }
-  aside.left { display: none; }
-}
-
-aside, section.chat { min-height: 0; display: flex; flex-direction: column; }
-aside.left { border-right: 1px solid var(--line); background: var(--panel); }
+main { flex: 1; display: grid; grid-template-columns: 216px 1fr 348px; min-height: 0; }
+@media (max-width: 1180px) { main { grid-template-columns: 200px 1fr; } aside.right { display: none; } }
+@media (max-width: 820px)  { main { grid-template-columns: 1fr; } aside.left { display: none; } }
+aside, section.work { min-height: 0; display: flex; flex-direction: column; }
+aside.left  { border-right: 1px solid var(--line); background: var(--panel); }
 aside.right { border-left: 1px solid var(--line); background: var(--panel); }
 .scroll { overflow-y: auto; flex: 1; padding: 14px; }
 
@@ -100,161 +72,201 @@ aside.right { border-left: 1px solid var(--line); background: var(--panel); }
   font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em;
   color: var(--ink-3); font-weight: 600; margin: 0 0 8px;
 }
-.eyebrow + .eyebrow, .block + .block { margin-top: 20px; }
+.block { margin-top: 22px; }
 
-/* --- trips list ---------------------------------------------------------- */
+/* --- trips ---------------------------------------------------------------- */
 .trip {
-  width: 100%; text-align: left; background: transparent; border: 1px solid transparent;
-  border-radius: var(--radius); padding: 9px 10px; margin-bottom: 3px; color: var(--ink);
+  display: block; width: 100%; text-align: left; border-radius: var(--r);
+  padding: 9px 10px; margin-bottom: 2px; color: var(--ink);
+  border: 1px solid transparent;
 }
 .trip:hover { background: var(--panel-2); }
-.trip.on { background: var(--accent-soft); border-color: transparent; }
+.trip.on { background: var(--accent-soft); }
 .trip b { display: block; font-weight: 550; font-size: 13.5px; }
 .trip small { color: var(--ink-3); font-size: 11.5px; }
 
 form.new { display: grid; gap: 7px; }
-form.new input {
+input, select {
   width: 100%; padding: 7px 9px; border-radius: 8px;
-  border: 1px solid var(--line); background: var(--panel-2);
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--ink);
 }
-form.new input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
-
 .btn {
-  padding: 8px 12px; border-radius: 8px; border: 1px solid transparent;
-  background: var(--accent); color: var(--bg); font-weight: 550; font-size: 13.5px;
+  padding: 8px 12px; border-radius: 8px; background: var(--accent);
+  color: var(--bg); font-weight: 550; font-size: 13.5px; text-align: center;
 }
 @media (prefers-color-scheme: dark) { .btn { color: #10221d; } }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.btn.ghost { background: transparent; border-color: var(--line); color: var(--ink-2); }
+.btn.ghost { background: transparent; border: 1px solid var(--line); color: var(--ink-2); }
+.btn.sm { padding: 5px 9px; font-size: 12px; border-radius: 7px; }
 
-/* --- chat ---------------------------------------------------------------- */
-section.chat { background: var(--bg); }
-.msgs { overflow-y: auto; flex: 1; padding: 22px 26px; }
-.msg { max-width: 760px; margin: 0 auto 20px; }
-.who {
-  font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em;
-  color: var(--ink-3); font-weight: 600; margin-bottom: 6px;
+/* --- workspace ------------------------------------------------------------ */
+section.work { background: var(--bg); }
+.tabs {
+  display: flex; gap: 2px; padding: 8px 20px 0; border-bottom: 1px solid var(--line);
+  background: var(--panel); flex: none;
 }
-.bubble {
+.tab {
+  padding: 8px 13px; font-size: 13.5px; color: var(--ink-3);
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.tab:hover { color: var(--ink); }
+.tab.on { color: var(--ink); border-bottom-color: var(--accent); font-weight: 550; }
+.work-scroll { overflow-y: auto; flex: 1; padding: 22px 24px 28px; }
+.sheet { max-width: 780px; margin: 0 auto; }
+
+/* --- overview: editable facts --------------------------------------------- */
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+.fact {
   background: var(--panel); border: 1px solid var(--line);
-  border-radius: var(--radius); padding: 13px 15px; white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  border-radius: var(--r); padding: 11px 12px;
 }
-.msg.user .bubble { background: var(--user); border-color: transparent; }
-.bubble strong { font-weight: 650; }
+.fact label { display: block; font-size: 11px; color: var(--ink-3); margin-bottom: 5px;
+  text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+.fact .val { font-size: 14.5px; }
+.fact input, .fact select { margin-top: 2px; }
+.metrics { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.metric {
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r);
+  padding: 9px 12px; font-size: 13px;
+}
+.metric b { display: block; font-size: 18px; font-weight: 600; }
+.metric span { color: var(--ink-3); font-size: 11.5px; }
 
-/* the tool trace - what the agent actually did, not what it says it did */
-.trace { margin-top: 8px; }
-.trace summary {
-  cursor: pointer; font: 11.5px/1 var(--mono); color: var(--ink-3);
-  padding: 5px 0; list-style: none;
-}
-.trace summary::-webkit-details-marker { display: none; }
-.trace summary::before { content: "▸ "; }
-.trace[open] summary::before { content: "▾ "; }
-.trace ol { margin: 6px 0 0; padding: 0 0 0 18px; }
-.trace li { font: 11.5px/1.7 var(--mono); color: var(--ink-2); }
-.trace li.bad { color: var(--error); }
+/* --- itinerary ------------------------------------------------------------ */
+.day { margin-bottom: 26px; }
+.day-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 9px; }
+.day-head h3 { font-size: 14.5px; }
+.day-head small { color: var(--ink-3); font-size: 12px; }
+.day-head .spacer { flex: 1; }
 
-.composer {
-  flex: none; border-top: 1px solid var(--line); background: var(--panel);
-  padding: 12px 26px 16px;
+.slot { display: flex; gap: 12px; padding: 3px 0; }
+.slot time {
+  flex: none; width: 48px; text-align: right; padding-top: 12px;
+  font: 12px var(--mono); color: var(--ink-3);
 }
-.composer .inner { max-width: 760px; margin: 0 auto; display: flex; gap: 9px; align-items: flex-end; }
-.composer textarea {
-  flex: 1; resize: none; min-height: 44px; max-height: 190px;
-  padding: 11px 13px; border-radius: var(--radius);
-  border: 1px solid var(--line); background: var(--panel-2);
-}
-.composer textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-.hint { max-width: 760px; margin: 7px auto 0; font-size: 11.5px; color: var(--ink-3); }
-
-.thinking {
-  display: flex; align-items: center; gap: 9px;
-  font: 12px/1 var(--mono); color: var(--ink-2);
-}
-.dot {
-  width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
-  animation: pulse 1.15s ease-in-out infinite;
-}
-@keyframes pulse { 0%,100% { opacity: 0.25; } 50% { opacity: 1; } }
-
-/* --- right rail ---------------------------------------------------------- */
 .card {
-  background: var(--panel-2); border: 1px solid var(--line);
-  border-radius: var(--radius); padding: 11px 12px; margin-bottom: 9px;
+  flex: 1; background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--r); padding: 11px 13px;
 }
-.card h3 { font-size: 12.5px; margin-bottom: 5px; }
-.card p { margin: 0; font-size: 12.5px; color: var(--ink-2); }
-.kv { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; padding: 3px 0; }
-.kv span:first-child { color: var(--ink-3); }
-.kv span:last-child { text-align: right; }
+.card.locked { border-color: var(--line-2); background: var(--panel-2); }
+.card.attention { border-left: 3px solid var(--warn); }
+.card-top { display: flex; align-items: flex-start; gap: 8px; }
+.card-top h4 { font-size: 14px; flex: 1; }
+.meta { font-size: 12px; color: var(--ink-3); margin-top: 3px; }
+.acts { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+.acts button {
+  font-size: 12px; padding: 4px 8px; border-radius: 6px;
+  border: 1px solid var(--line); color: var(--ink-2);
+}
+.acts button:hover { border-color: var(--line-2); color: var(--ink); }
+.acts button.danger:hover { color: var(--error); border-color: var(--error); }
 
-.day { margin-bottom: 14px; }
-.day > b { font-size: 12.5px; display: block; }
-.day > small { color: var(--ink-3); font-size: 11.5px; }
-.item {
-  display: flex; gap: 9px; padding: 5px 0 5px 10px; margin-top: 5px;
-  border-left: 2px solid var(--line); font-size: 12.5px;
-}
-.item time { color: var(--ink-3); font: 11.5px/1.5 var(--mono); flex: none; width: 42px; }
-.item .t { color: var(--ink); }
-.flag {
-  display: inline-block; margin-top: 2px; font-size: 11px;
-  color: var(--warn); background: var(--warn-soft);
-  padding: 1px 6px; border-radius: 5px;
-}
+.status { font-size: 11.5px; white-space: nowrap; color: var(--ink-3); }
+.status.locked { color: var(--ink-2); }
+.status.selected { color: var(--accent); }
+.status.verify { color: var(--warn); }
 
+/* --- validation / conflicts ----------------------------------------------- */
 .issue {
-  border-left: 3px solid var(--line); padding: 5px 0 5px 9px;
-  margin-bottom: 7px; font-size: 12.5px;
+  border: 1px solid var(--line); border-left-width: 3px;
+  border-radius: var(--r); padding: 10px 12px; margin-bottom: 8px; background: var(--panel);
 }
-.issue.error { border-color: var(--error); }
-.issue.warning { border-color: var(--warn); }
-.issue.info { border-color: var(--info); }
-.issue b { font: 11px/1.4 var(--mono); display: block; color: var(--ink-3); }
-.issue p { margin: 2px 0 0; color: var(--ink-2); }
-.issue .fix { color: var(--ink-3); font-size: 11.5px; margin-top: 3px; }
+.issue.error { border-left-color: var(--error); }
+.issue.warning { border-left-color: var(--warn); }
+.issue.info { border-left-color: var(--info); }
+.issue p { font-size: 13px; }
+.issue .fix { color: var(--ink-3); font-size: 12px; margin-top: 4px; }
+.issue .acts { margin-top: 8px; }
 
-.conflict { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 11px; margin-bottom: 9px; }
+.conflict { border-radius: var(--r); padding: 11px 12px; margin-bottom: 8px;
+  border: 1px solid var(--line); background: var(--panel); }
 .conflict.blocking { border-color: var(--error); background: var(--error-soft); }
 .conflict.material { background: var(--warn-soft); border-color: transparent; }
-.conflict .head { display: flex; gap: 7px; align-items: center; margin-bottom: 5px; }
-.tag {
-  font: 10px/1 var(--mono); text-transform: uppercase; letter-spacing: 0.05em;
-  padding: 3px 6px; border-radius: 4px; background: var(--panel); color: var(--ink-2);
-}
-.conflict > p { font-size: 12.5px; margin: 0; color: var(--ink); }
-/* Each person's stance, listed separately. Never merged into one number. */
-.stance { display: flex; gap: 7px; font-size: 12px; margin-top: 5px; }
-.stance b { flex: none; min-width: 44px; font-weight: 600; }
+.stance { display: flex; gap: 8px; font-size: 12.5px; margin-top: 5px; }
+.stance b { flex: none; min-width: 46px; }
 .stance span { color: var(--ink-2); }
-.ways { margin: 7px 0 0; padding-left: 16px; font-size: 12px; color: var(--ink-2); }
+.ways { margin: 7px 0 0; padding-left: 17px; font-size: 12.5px; color: var(--ink-2); }
 
-.empty { color: var(--ink-3); font-size: 12.5px; }
-.banner {
-  padding: 9px 11px; border-radius: var(--radius); font-size: 12.5px;
-  background: var(--error-soft); color: var(--error); margin-bottom: 12px;
-  border: 1px solid var(--error);
+/* --- diff ----------------------------------------------------------------- */
+.diff { background: var(--sunk); border-radius: var(--r); padding: 12px 14px; margin-bottom: 16px; }
+.diff h4 { font-size: 12.5px; margin-bottom: 7px; }
+.diff .grp { margin-top: 8px; }
+.diff .grp > b {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--ink-3);
 }
-.welcome { max-width: 560px; margin: 8vh auto; text-align: center; color: var(--ink-2); }
+.diff ul { margin: 3px 0 0; padding-left: 16px; }
+.diff li { font-size: 12.5px; color: var(--ink-2); }
+
+/* --- why ------------------------------------------------------------------ */
+.modal-bg {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.42);
+  display: flex; align-items: center; justify-content: center; padding: 24px; z-index: 40;
+}
+.modal {
+  background: var(--panel); border-radius: 14px; max-width: 560px; width: 100%;
+  max-height: 82vh; overflow-y: auto; padding: 20px 22px;
+  border: 1px solid var(--line);
+}
+.modal h3 { font-size: 16px; margin-bottom: 3px; }
+.modal .sub { color: var(--ink-3); font-size: 12.5px; margin-bottom: 14px; }
+.why-sec { margin-top: 15px; }
+.why-sec > b { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--ink-3); }
+.why-sec ul { margin: 5px 0 0; padding-left: 17px; font-size: 13px; }
+.why-sec li { margin-bottom: 3px; }
+.src { border-left: 2px solid var(--line); padding: 3px 0 3px 9px; margin-top: 6px; font-size: 12.5px; }
+.src b { font-size: 11.5px; color: var(--ink-2); }
+.src p { color: var(--ink-2); margin-top: 1px; }
+.src a { color: var(--accent); font-size: 11.5px; text-decoration: none; }
+.incomplete {
+  background: var(--warn-soft); color: var(--warn); border-radius: 8px;
+  padding: 9px 11px; font-size: 12.5px; margin-bottom: 12px;
+}
+
+/* --- chat ----------------------------------------------------------------- */
+.composer { flex: none; border-top: 1px solid var(--line); background: var(--panel); padding: 10px 20px 14px; }
+.composer .inner { max-width: 780px; margin: 0 auto; }
+.transcript { max-height: 30vh; overflow-y: auto; margin-bottom: 10px; }
+.msg { margin-bottom: 12px; font-size: 13.5px; }
+.msg .who { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.07em;
+  color: var(--ink-3); font-weight: 600; margin-bottom: 3px; }
+.msg .body { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); }
+.msg.user .body { color: var(--ink); }
+.ask { display: flex; gap: 8px; align-items: flex-end; }
+.ask textarea {
+  flex: 1; resize: none; min-height: 42px; max-height: 150px; padding: 10px 12px;
+  border-radius: var(--r); border: 1px solid var(--line); background: var(--panel-2); color: var(--ink);
+}
+.ask textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.hint { font-size: 11.5px; color: var(--ink-3); margin-top: 6px; }
+.thinking { display: flex; align-items: center; gap: 8px; font: 12px var(--mono); color: var(--ink-2); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pulse 1.15s infinite; }
+@keyframes pulse { 0%,100% { opacity: .25 } 50% { opacity: 1 } }
+
+.empty { color: var(--ink-3); font-size: 13px; }
+.banner { padding: 9px 11px; border-radius: var(--r); font-size: 12.5px;
+  background: var(--error-soft); color: var(--error); border: 1px solid var(--error); margin-bottom: 12px; }
+.toast {
+  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+  background: var(--ink); color: var(--bg); padding: 9px 15px; border-radius: 999px;
+  font-size: 13px; z-index: 60; box-shadow: 0 4px 18px rgba(0,0,0,.2);
+}
+.welcome { max-width: 520px; margin: 10vh auto; text-align: center; color: var(--ink-2); }
 .welcome h2 { font-size: 19px; color: var(--ink); margin-bottom: 10px; }
-.welcome ul { text-align: left; display: inline-block; margin: 16px 0 0; padding-left: 18px; }
-.welcome li { margin-bottom: 5px; font-size: 13.5px; }
-.welcome code {
-  font: 12px var(--mono); background: var(--panel); padding: 2px 5px;
-  border-radius: 4px; border: 1px solid var(--line);
-}
+.welcome code { font: 12px var(--mono); background: var(--panel);
+  padding: 2px 5px; border-radius: 4px; border: 1px solid var(--line); }
+details.debug summary { cursor: pointer; font: 11.5px var(--mono); color: var(--ink-3); }
+details.debug li { font: 11.5px/1.7 var(--mono); color: var(--ink-3); }
 </style>
 </head>
 <body>
 <div class="app">
   <header>
-    <div class="brand"><h1>Travel Agent</h1><span id="sub">no trip selected</span></div>
+    <h1 class="brand">Travel Agent<span id="sub">no trip selected</span></h1>
     <div class="spacer"></div>
-    <div class="pill" id="revPill" hidden></div>
-    <div class="pill" id="validPill" hidden></div>
+    <button class="chip" id="validChip" hidden></button>
+    <span class="chip mono" id="revChip" hidden></span>
   </header>
 
   <main>
@@ -262,16 +274,12 @@ section.chat { background: var(--bg); }
       <div class="scroll">
         <p class="eyebrow">Trips</p>
         <div id="tripList"><p class="empty">None yet.</p></div>
-
         <div class="block">
           <p class="eyebrow">New trip</p>
           <form class="new" id="newTrip">
-            <input name="title" placeholder="Title, e.g. Tokyo with friends" required>
+            <input name="title" placeholder="Title" required>
             <input name="city" placeholder="Destination city" required>
-            <div class="row2">
-              <input name="start" type="date" required>
-              <input name="end" type="date" required>
-            </div>
+            <div class="row2"><input name="start" type="date" required><input name="end" type="date" required></div>
             <div class="row2">
               <input name="adults" type="number" min="1" max="16" value="2" title="Adults">
               <input name="rooms" type="number" min="1" max="8" value="1" title="Rooms">
@@ -282,363 +290,658 @@ section.chat { background: var(--bg); }
       </div>
     </aside>
 
-    <section class="chat">
-      <div class="msgs" id="msgs">
-        <div class="welcome">
-          <h2>Plan a trip by talking about it</h2>
-          <p>Create a trip on the left, then ask for what you want. Everything the agent
-             claims comes from a real tool call — you can see every one of them.</p>
-          <ul>
-            <li><code>Plan 5 days in Tokyo, we care about food</code></li>
-            <li><code>Day 3 is too busy, make it easier</code></li>
-            <li><code>Where should we stay?</code></li>
-            <li><code>Compare flights from SFO, SJC and OAK</code></li>
-          </ul>
-        </div>
+    <section class="work">
+      <div class="tabs" id="tabs" hidden>
+        <button class="tab" data-view="overview">Overview</button>
+        <button class="tab" data-view="itinerary">Itinerary</button>
+        <button class="tab" data-view="research">Research</button>
       </div>
+      <div class="work-scroll"><div class="sheet" id="work">
+        <div class="welcome">
+          <h2>A trip you can see, not just read about</h2>
+          <p>Create a trip on the left, then tell the agent what you want. Everything it
+             claims comes from a real tool call, and everything you see here is the
+             trip as it is actually stored.</p>
+          <p style="margin-top:14px"><code>Plan 5 days in Tokyo, we care about food</code></p>
+        </div>
+      </div></div>
       <div class="composer">
         <div class="inner">
-          <textarea id="input" rows="1" placeholder="Ask for a plan, or a change to one…"
-                    disabled></textarea>
-          <button class="btn" id="send" disabled>Send</button>
+          <div class="transcript" id="transcript" hidden></div>
+          <div class="ask">
+            <textarea id="input" rows="1" placeholder="Tell the agent what to change…" disabled></textarea>
+            <button class="btn" id="send" disabled>Send</button>
+          </div>
+          <p class="hint" id="hint">Create or pick a trip to start.</p>
         </div>
-        <p class="hint" id="hint">Create or pick a trip to start.</p>
       </div>
     </section>
 
-    <aside class="right">
-      <div class="scroll" id="rail">
-        <p class="empty">Pick a trip to see its state.</p>
-      </div>
-    </aside>
+    <aside class="right"><div class="scroll" id="rail">
+      <p class="empty">Pick a trip.</p>
+    </div></aside>
   </main>
 </div>
 
 <script>
 "use strict";
-
 const $ = (id) => document.getElementById(id);
-const state = { tripId: null, trip: null, overview: null, busy: false };
-
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
-  (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 
-async function api(path, options) {
-  const res = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
+const S = { tripId: null, trip: null, over: null, view: "itinerary", busy: false, lastDiff: null };
+
+async function api(path, opts) {
+  const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
   if (!res.ok) {
     let detail = res.statusText;
-    try { detail = (await res.json()).detail ?? detail; } catch { /* not json */ }
+    try { detail = (await res.json()).detail ?? detail; } catch {}
     throw new Error(detail);
   }
   return res.status === 204 ? null : res.json();
 }
 
-/* --- trips --------------------------------------------------------------- */
+function toast(text) {
+  const el = document.createElement("div");
+  el.className = "toast"; el.textContent = text;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 3200);
+}
+
+/* --- trips ---------------------------------------------------------------- */
 
 async function loadTrips() {
   const trips = await api("/trips?limit=50");
   const list = $("tripList");
   if (!trips.length) { list.innerHTML = '<p class="empty">None yet.</p>'; return; }
+  // One row per trip. Revision is an audit concept, not navigation - it lives
+  // in the header chip, not here.
   list.innerHTML = trips.map((t) => `
-    <button class="trip ${t.trip_id === state.tripId ? "on" : ""}" data-id="${t.trip_id}">
+    <button class="trip ${t.trip_id === S.tripId ? "on" : ""}" data-id="${esc(t.trip_id)}">
       <b>${esc(t.title || "Untitled")}</b>
-      <small>${esc(t.destination || "—")} · rev ${t.revision}</small>
+      <small>${esc(t.destination || "—")}${t.start_date ? " · " + esc(t.start_date) : ""}</small>
     </button>`).join("");
-  list.querySelectorAll(".trip").forEach((el) =>
-    el.onclick = () => selectTrip(el.dataset.id));
+  list.querySelectorAll(".trip").forEach((el) => el.onclick = () => selectTrip(el.dataset.id));
 }
 
-$("newTrip").onsubmit = async (event) => {
-  event.preventDefault();
-  const form = new FormData(event.target);
-  const button = event.target.querySelector("button");
-  button.disabled = true;
+$("newTrip").onsubmit = async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target), btn = e.target.querySelector("button");
+  btn.disabled = true;
   try {
-    const trip = await api("/trips", {
-      method: "POST",
-      body: JSON.stringify({
-        title: form.get("title"),
-        brief: {
-          destination: { city: form.get("city"), flexible: false },
-          dates: { start: form.get("start"), end: form.get("end") },
-          party: {
-            adults: Number(form.get("adults")) || 2,
-            rooms: Number(form.get("rooms")) || 1,
-          },
-        },
-      }),
-    });
-    event.target.reset();
+    const trip = await api("/trips", { method: "POST", body: JSON.stringify({
+      title: f.get("title"),
+      brief: {
+        destination: { city: f.get("city"), flexible: false },
+        dates: { start: f.get("start"), end: f.get("end") },
+        party: { adults: +f.get("adults") || 2, rooms: +f.get("rooms") || 1 },
+      },
+    })});
+    e.target.reset();
     await loadTrips();
     await selectTrip(trip.trip_id);
-  } catch (error) {
-    alert("Could not create the trip: " + error.message);
-  } finally {
-    button.disabled = false;
-  }
+  } catch (err) { toast("Could not create: " + err.message); }
+  finally { btn.disabled = false; }
 };
 
 async function selectTrip(id) {
-  state.tripId = id;
-  await Promise.all([loadTrips(), loadMessages(), refresh()]);
-  $("input").disabled = false;
-  $("send").disabled = false;
+  S.tripId = id; S.lastDiff = null;
+  await refresh();
+  S.view = (S.trip.itinerary.days || []).length ? "itinerary" : "overview";
+  await loadMessages();
+  await loadTrips();
+  $("tabs").hidden = false;
+  $("input").disabled = false; $("send").disabled = false;
   $("hint").textContent = "Enter to send · Shift+Enter for a new line";
-  $("input").focus();
+  render();
 }
 
 async function refresh() {
-  const data = await api(`/trips/${state.tripId}/overview`);
-  state.trip = data.trip;
-  state.overview = data;
+  S.over = await api(`/trips/${S.tripId}/overview`);
+  S.trip = S.over.trip;
+  paintHeader();
+}
 
-  $("sub").textContent =
-    `${data.trip.brief.destination.city || "somewhere"} · ${data.trip.status}`;
-  const rev = $("revPill");
-  rev.hidden = false;
-  rev.textContent = `revision ${data.trip.revision}`;
+/** Adopt the state an action already handed back, instead of re-fetching. */
+function adopt(result) {
+  S.trip = result.trip;
+  S.over = {
+    trip: result.trip, validation: result.validation,
+    conflicts: result.conflicts, blocking: result.blocking,
+  };
+  S.lastDiff = result.diff && result.diff.length ? result.diff : null;
+  paintHeader();
+  render();
+}
 
-  const valid = $("validPill");
-  valid.hidden = false;
-  const blocking = data.blocking.length;
-  valid.textContent = blocking
-    ? `${blocking} blocking`
-    : `validation ${data.validation.status}`;
-  valid.className = "pill" + (blocking ? "" : " live");
+function paintHeader() {
+  const t = S.trip;
+  $("sub").textContent = `${t.brief.destination.city || "somewhere"} · ${t.status}`;
+  $("revChip").hidden = false; $("revChip").textContent = `rev ${t.revision}`;
 
+  const chip = $("validChip"), issues = S.over.validation.issues || [];
+  const errors = issues.filter((i) => i.severity === "error").length;
+  const warns = issues.filter((i) => i.severity === "warning").length;
+  chip.hidden = false;
+  chip.className = "chip " + (errors ? "bad" : warns ? "warn" : "good");
+  chip.textContent = errors ? `${errors} to resolve` : warns ? `${warns} to check` : "no conflicts";
+  chip.onclick = () => { S.view = "itinerary"; render(); document.querySelector(".issue")?.scrollIntoView({behavior:"smooth", block:"center"}); };
+}
+
+/* --- action plumbing ------------------------------------------------------ */
+
+/** Every mutation goes through here: the server validates, commits atomically,
+ *  reloads, and only then do we render. Nothing is ever applied optimistically. */
+async function act(path, opts, okMessage) {
+  if (S.busy) return null;
+  S.busy = true;
+  try {
+    const result = await api(`/trips/${S.tripId}${path}`, opts);
+    adopt(result);
+    if (!result.applied) {
+      toast(result.warnings?.[0] || result.errors?.[0]?.message || result.summary || "Nothing changed");
+    } else if (okMessage) {
+      toast(okMessage(result));
+    }
+    await loadTrips();
+    return result;
+  } catch (err) {
+    toast(err.message);
+    // The server refused; re-read so the screen matches the store.
+    await refresh(); render();
+    return null;
+  } finally { S.busy = false; }
+}
+
+/** Fetch options for a POST. Takes the body and nothing else — the path is
+ *  `act`'s and `api`'s business. An earlier `(path, body)` signature meant
+ *  every call site, which passes the body first, silently sent `{}`. */
+const post = (body) => ({ method: "POST", body: JSON.stringify(body || {}) });
+
+/* --- rendering ------------------------------------------------------------ */
+
+function render() {
+  document.querySelectorAll(".tab").forEach((el) =>
+    el.classList.toggle("on", el.dataset.view === S.view));
+  const out = [];
+  if (S.view === "overview") out.push(overviewHtml());
+  else if (S.view === "itinerary") out.push(itineraryHtml());
+  else out.push(researchHtml());
+  $("work").innerHTML = out.join("");
+  wireWorkspace();
   renderRail();
 }
 
-/* --- messages ------------------------------------------------------------ */
+document.querySelectorAll(".tab").forEach((el) =>
+  el.onclick = () => { S.view = el.dataset.view; render(); });
 
-async function loadMessages() {
-  const messages = await api(`/trips/${state.tripId}/messages?limit=200`);
-  const box = $("msgs");
-  box.innerHTML = messages.length
-    ? messages.map((m) => bubble(m.role, m.content)).join("")
-    : `<div class="welcome"><h2>Nothing said yet</h2>
-       <p>Tell the agent what you want. It will search real places, check real
-          opening hours and real travel times before it answers.</p></div>`;
-  box.scrollTop = box.scrollHeight;
+/* Overview -- the trip's own facts, editable in place. */
+function overviewHtml() {
+  const b = S.trip.brief, days = S.trip.itinerary.days || [];
+  const stops = days.reduce((n, d) => n + d.items.length, 0);
+  const locked = (S.trip.locks || []).filter((l) => l.target_kind === "itinerary_item").length;
+  const open = (S.trip.open_questions || []).filter((q) => !q.answered).length;
+
+  const metrics = [
+    days.length && [days.length, "days planned"],
+    stops && [stops, "places scheduled"],
+    [Object.keys(S.trip.entities).length, "places researched"],
+    locked && [locked, "locked"],
+    open && [open, "open questions"],
+  ].filter(Boolean);
+
+  return `
+    <p class="eyebrow">Trip facts</p>
+    <div class="facts">
+      ${fact("City", `<input data-field="/brief/destination/city" value="${esc(b.destination.city || "")}">`)}
+      ${fact("Dates", `<div class="row2">
+        <input type="date" data-field="/brief/dates/start" value="${esc(b.dates.start || "")}">
+        <input type="date" data-field="/brief/dates/end" value="${esc(b.dates.end || "")}"></div>`)}
+      ${fact("Travellers", `<div class="row2">
+        <input type="number" min="1" max="16" data-field="/brief/party/adults" value="${b.party.adults}" title="Adults">
+        <input type="number" min="0" max="16" data-field="/brief/party/children" value="${b.party.children}" title="Children"></div>`)}
+      ${fact("Rooms", `<input type="number" min="1" max="8" data-field="/brief/party/rooms" value="${b.party.rooms}">`)}
+      ${fact("Pace", `<select data-field="/brief/pace">
+        ${["relaxed","balanced","packed"].map((p) =>
+          `<option value="${p}" ${b.pace === p ? "selected" : ""}>${p}</option>`).join("")}</select>`)}
+      ${fact("Hotel budget / night", `<input type="number" min="0" step="10"
+        data-field="/brief/budget/hotel_per_night" value="${b.budget.hotel_per_night ?? ""}">`)}
+    </div>
+    <p class="hint">Changes save when you leave a field, through the same validated
+       pipeline the agent uses. If the server refuses, nothing changes.</p>
+
+    ${metrics.length ? `<div class="metrics">${metrics.map(([n, label]) =>
+      `<div class="metric"><b>${n}</b><span>${label}</span></div>`).join("")}</div>` : ""}
+
+    ${(S.trip.travelers || []).length ? `
+      <div class="block"><p class="eyebrow">Travellers</p>
+      ${S.trip.travelers.map((t) => {
+        const diet = t.preferences?.food?.dietary_restrictions || [];
+        return `<div class="fact" style="margin-bottom:6px">
+          <div class="val">${esc(t.name)}${t.role === "organizer" ? " · organiser" : ""}</div>
+          <p class="meta">${diet.length ? "Hard constraint: " + esc(diet.join(", "))
+            : (t.preferences ? "no dietary restrictions" : "preferences not set")}</p>
+        </div>`;
+      }).join("")}</div>` : ""}
+
+    ${openQuestionsHtml()}`;
 }
 
-function bubble(role, content, trace) {
-  return `<div class="msg ${role}">
-    <div class="who">${role === "user" ? "You" : "Agent"}</div>
-    <div class="bubble">${esc(content)}</div>
-    ${trace || ""}
-  </div>`;
+function fact(label, control) {
+  return `<div class="fact"><label>${esc(label)}</label>${control}</div>`;
 }
 
-function traceHtml(response) {
-  const tools = response.tools_called || [];
+function openQuestionsHtml() {
+  const open = (S.trip.open_questions || []).filter((q) => !q.answered);
+  if (!open.length) return "";
+  return `<div class="block"><p class="eyebrow">Needs your input</p>
+    ${open.map((q) => `<div class="issue warning"><p>${esc(q.question)}</p></div>`).join("")}</div>`;
+}
+
+/* Itinerary -- structured, from TripState, never markdown. */
+function itineraryHtml() {
+  const days = S.trip.itinerary.days || [];
+  const out = [diffHtml(), validationHtml()];
+
+  if (!days.length) {
+    out.push(`<div class="welcome"><h2>Nothing planned yet</h2>
+      <p>Ask the agent for a plan and it will appear here as something you can edit.</p></div>`);
+    return out.join("");
+  }
+
+  for (const day of days) {
+    const label = new Date(day.date + "T00:00:00").toLocaleDateString(undefined,
+      { weekday: "long", month: "short", day: "numeric" });
+    out.push(`<div class="day">
+      <div class="day-head">
+        <h3>${esc(label)}</h3>
+        ${day.theme ? `<small>${esc(day.theme)}</small>` : ""}
+        <div class="spacer"></div>
+        <small>${day.items.length} stop(s)</small>
+        <button class="chip" data-replan="${day.date}">Make this day easier</button>
+      </div>
+      ${day.items.length
+        ? day.items.map(itemHtml).join("")
+        : '<p class="empty">Nothing scheduled.</p>'}
+    </div>`);
+  }
+  return out.join("");
+}
+
+/** Which items a blocking conflict points at - "needs verification". */
+function needsVerification() {
+  const ids = new Set();
+  for (const c of (S.over.blocking || [])) (c.affects || []).forEach((a) => ids.add(a));
+  return ids;
+}
+
+function itemHtml(item) {
+  const locked = (S.trip.locks || []).some(
+    (l) => l.target_kind === "itinerary_item" && l.target_id === item.item_id);
+  const unverified = needsVerification().has(item.item_id);
+  const entity = S.trip.entities[item.entity_id];
+
+  const status = locked
+    ? '<span class="status locked">🔒 Locked</span>'
+    : item.status === "selected" ? '<span class="status selected">✓ Selected</span>'
+    : '<span class="status">◇ Proposed</span>';
+
   const bits = [];
-  if (response.changed_state) {
-    bits.push(`revision ${response.revision_before} → ${response.revision_after}`);
-  } else {
-    bits.push("nothing changed");
-  }
-  bits.push(`${response.iterations} round(s)`);
-  if (response.patches_applied) bits.push(`${response.patches_applied} patch(es)`);
-  if (response.hit_iteration_limit) bits.push("cut short");
+  if (entity?.rating) bits.push(`★ ${entity.rating}${entity.rating_count ? ` · ${entity.rating_count.toLocaleString()} reviews` : ""}`);
+  bits.push(item.type);
+  if (item.reservation_booked) bits.push("booked");
 
-  const steps = tools.map((t) =>
-    `<li class="${t.ok ? "" : "bad"}">${esc(t.name)} · ${t.milliseconds}ms${
-      t.detail ? " · " + esc(t.detail) : ""}</li>`).join("");
-
-  return `<details class="trace">
-    <summary>${esc(bits.join(" · "))}${tools.length ? ` · ${tools.length} tool call(s)` : ""}</summary>
-    <ol>${steps || "<li>no tools were needed</li>"}</ol>
-  </details>`;
-}
-
-async function send(text) {
-  if (state.busy || !text.trim()) return;
-  state.busy = true;
-  $("input").disabled = true;
-  $("send").disabled = true;
-
-  const box = $("msgs");
-  if (box.querySelector(".welcome")) box.innerHTML = "";
-  box.insertAdjacentHTML("beforeend", bubble("user", text));
-
-  // A turn genuinely takes minutes - it is calling Google, Duffel, SerpApi and
-  // an LLM. Showing the clock is the difference between "working" and "stuck".
-  const started = Date.now();
-  box.insertAdjacentHTML("beforeend",
-    `<div class="msg" id="pending"><div class="who">Agent</div>
-     <div class="bubble"><div class="thinking"><span class="dot"></span>
-     <span id="elapsed">searching, checking and planning… 0s</span></div></div></div>`);
-  box.scrollTop = box.scrollHeight;
-  const ticker = setInterval(() => {
-    const el = $("elapsed");
-    if (el) el.textContent =
-      `searching, checking and planning… ${Math.round((Date.now() - started) / 1000)}s`;
-  }, 1000);
-
-  try {
-    const response = await api(`/trips/${state.tripId}/messages`, {
-      method: "POST",
-      body: JSON.stringify({ message: text, history_turns: 6 }),
-    });
-    $("pending")?.remove();
-    box.insertAdjacentHTML("beforeend",
-      bubble("assistant", response.reply, traceHtml(response)));
-    if (response.error) {
-      box.insertAdjacentHTML("beforeend",
-        `<div class="msg"><div class="banner">${esc(response.error)}</div></div>`);
-    }
-    await refresh();
-    await loadTrips();
-  } catch (error) {
-    $("pending")?.remove();
-    box.insertAdjacentHTML("beforeend",
-      `<div class="msg"><div class="banner">${esc(error.message)}</div></div>`);
-  } finally {
-    clearInterval(ticker);
-    state.busy = false;
-    $("input").disabled = false;
-    $("send").disabled = false;
-    $("input").focus();
-    box.scrollTop = box.scrollHeight;
-  }
-}
-
-$("send").onclick = () => { const box = $("input"); const v = box.value; box.value = ""; autosize(); send(v); };
-$("input").addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && !event.shiftKey) {
-    event.preventDefault();
-    $("send").click();
-  }
-});
-function autosize() {
-  const box = $("input");
-  box.style.height = "auto";
-  box.style.height = Math.min(box.scrollHeight, 190) + "px";
-}
-$("input").addEventListener("input", autosize);
-
-/* --- the right rail ------------------------------------------------------ */
-
-function nameOf(travelerId) {
-  const person = (state.trip.travelers || []).find((t) => t.traveler_id === travelerId);
-  return person ? person.name : travelerId;
+  return `<div class="slot">
+    <time>${esc(clock(item.start_at))}</time>
+    <div class="card ${locked ? "locked" : ""} ${unverified ? "attention" : ""}">
+      <div class="card-top">
+        <h4>${esc(item.title)}</h4>
+        ${status}
+      </div>
+      <p class="meta">${esc(bits.join(" · "))}</p>
+      ${unverified ? '<p class="meta" style="color:var(--warn)">? Needs verification — a stated requirement could not be confirmed for this place</p>' : ""}
+      <div class="acts">
+        <button data-why="${esc(item.item_id)}">Why?</button>
+        ${locked
+          ? `<button data-unlock="${esc(item.item_id)}">Unlock</button>`
+          : `<button data-replace="${esc(item.item_id)}">Replace</button>
+             <button data-move="${esc(item.item_id)}">Move</button>
+             <button data-lock="${esc(item.item_id)}">Lock</button>
+             <button class="danger" data-remove="${esc(item.item_id)}">Remove</button>`}
+        ${item.entity_id && !locked ? `<button class="danger" data-reject="${esc(item.entity_id)}">Not interested</button>` : ""}
+        ${entity ? `<button data-maps="${esc(entity.name)}">Open in Maps</button>` : ""}
+      </div>
+    </div>
+  </div>`;
 }
 
 function clock(iso) {
   if (!iso) return "";
-  const at = new Date(iso);
-  return String(at.getHours()).padStart(2, "0") + ":" +
-         String(at.getMinutes()).padStart(2, "0");
+  const d = new Date(iso);
+  return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
 }
 
-function renderRail() {
-  const { trip, validation, conflicts, blocking } = state.overview;
-  const out = [];
+/* The structured change summary, shown only after a committed change. */
+function diffHtml() {
+  if (!S.lastDiff) return "";
+  return S.lastDiff.map((day) => {
+    const grp = (name, rows, fmt) => rows.length
+      ? `<div class="grp"><b>${name}</b><ul>${rows.map(fmt).join("")}</ul></div>` : "";
+    const plain = (c) => `<li>${esc(c.at || "")} ${esc(c.title)}</li>`;
+    const lockedOnly = day.unchanged.filter((c) => c.locked);
+    return `<div class="diff">
+      <h4>${esc(day.day)} updated</h4>
+      ${grp("Removed", day.removed, plain)}
+      ${grp("Moved", day.moved, (c) => `<li>${esc(c.title)} · ${esc(c.from_time)} → ${esc(c.at)}</li>`)}
+      ${grp("Added", day.added, plain)}
+      ${grp("Unchanged", lockedOnly, (c) => `<li>${esc(c.at || "")} ${esc(c.title)} 🔒</li>`)}
+    </div>`;
+  }).join("");
+}
 
+/* Validation, made actionable: each issue offers the button that fixes it. */
+function validationHtml() {
+  const issues = (S.over.validation.issues || []).filter((i) => i.severity !== "info");
+  if (!issues.length) return "";
+  return `<p class="eyebrow">Needs attention</p>` + issues.map((issue) => {
+    const day = dayOfItem(issue.item_ids?.[0]);
+    const acts = [];
+    if (issue.item_ids?.length === 1 && itemById(issue.item_ids[0])) {
+      acts.push(`<button data-move="${esc(issue.item_ids[0])}">Move it</button>`);
+      acts.push(`<button data-replace="${esc(issue.item_ids[0])}">Replace it</button>`);
+    }
+    if (day) acts.push(`<button data-replan="${day}">Rework ${esc(day)}</button>`);
+    return `<div class="issue ${esc(issue.severity)}">
+      <p>${esc(issue.message)}</p>
+      ${issue.suggested_fix ? `<p class="fix">Suggested: ${esc(issue.suggested_fix)}</p>` : ""}
+      ${acts.length ? `<div class="acts">${acts.join("")}</div>` : ""}
+    </div>`;
+  }).join("");
+}
+
+function itemById(itemId) {
+  for (const day of S.trip.itinerary.days || [])
+    for (const item of day.items) if (item.item_id === itemId) return item;
+  return null;
+}
+function dayOfItem(itemId) {
+  for (const day of S.trip.itinerary.days || [])
+    if (day.items.some((i) => i.item_id === itemId)) return day.date;
+  return null;
+}
+
+/* Research -- normalized evidence, never raw pages. */
+function researchHtml() {
+  const evidence = Object.values(S.trip.evidence || {});
+  if (!evidence.length) {
+    return `<div class="welcome"><h2>No research stored yet</h2>
+      <p>When the agent looks places up, what it found is kept here with its sources —
+         so a recommendation can always be traced back.</p></div>`;
+  }
+  const byEntity = {};
+  for (const record of evidence)
+    for (const entityId of record.entity_ids || [])
+      (byEntity[entityId] ||= []).push(record);
+
+  return Object.entries(byEntity).map(([entityId, records]) => {
+    const entity = S.trip.entities[entityId];
+    return `<div class="day">
+      <div class="day-head"><h3>${esc(entity?.name || entityId)}</h3>
+        <div class="spacer"></div>
+        <button class="chip" data-whyentity="${esc(entityId)}">Why?</button></div>
+      ${records.map(sourceHtml).join("")}
+    </div>`;
+  }).join("");
+}
+
+function sourceHtml(record) {
+  return `<div class="src">
+    <b>${esc(record.source_type)} · ${esc(record.source_authority)}</b>
+    <p>${esc(record.summary)}</p>
+    ${record.quote ? `<p>“${esc(record.quote)}”</p>` : ""}
+    <a href="${esc(record.url)}" target="_blank" rel="noopener">source</a>
+  </div>`;
+}
+
+/* --- right rail ----------------------------------------------------------- */
+
+function renderRail() {
+  const out = [];
+  const blocking = S.over.blocking || [];
   if (blocking.length) {
     out.push(`<div class="banner">This trip cannot be called ready:
       ${blocking.length} unresolved blocking conflict(s).</div>`);
   }
 
-  out.push('<p class="eyebrow">Trip</p><div class="card">');
-  out.push(kv("Destination", trip.brief.destination.city || "—"));
-  out.push(kv("Dates", `${trip.brief.dates.start || "?"} → ${trip.brief.dates.end || "?"}`));
-  out.push(kv("Party", `${trip.brief.party.adults} adult(s), ${trip.brief.party.rooms} room(s)`));
-  out.push(kv("Places known", String(Object.keys(trip.entities).length)));
-  out.push("</div>");
-
-  if ((trip.travelers || []).length) {
-    out.push('<p class="eyebrow">Travellers</p><div class="card">');
-    out.push(trip.travelers.map((t) => {
-      const diet = t.preferences?.food?.dietary_restrictions || [];
-      return kv(t.name, diet.length ? diet.join(", ") : (t.preferences ? "no restrictions" : "no preferences set"));
-    }).join(""));
-    out.push("</div>");
-  }
-
-  // Itinerary
-  out.push('<p class="eyebrow">Itinerary</p>');
-  const days = trip.itinerary.days || [];
-  if (!days.length) {
-    out.push('<p class="empty">Nothing planned yet. Ask for a plan.</p>');
-  } else {
-    for (const day of days) {
-      out.push(`<div class="day"><b>${esc(day.date)}</b>`);
-      if (day.theme) out.push(`<small>${esc(day.theme)}</small>`);
-      for (const item of day.items || []) {
-        const entity = trip.entities[item.entity_id];
-        // The tri-state, shown as it is stored: unknown is not a denial.
-        const diet = entity && entity.serves_vegetarian === "unknown"
-          && anyoneIsRestricted()
-          ? '<span class="flag">diet unverified</span>' : "";
-        out.push(`<div class="item">
-          <time>${clock(item.start_at)}</time>
-          <div><div class="t">${esc(item.title)}</div>${diet}</div>
-        </div>`);
-      }
-      out.push("</div>");
-    }
-  }
-
-  // Conflicts, each side stated separately.
+  const conflicts = S.over.conflicts || [];
   if (conflicts.length) {
     out.push('<p class="eyebrow">Where you disagree</p>');
-    for (const conflict of conflicts) {
-      out.push(`<div class="conflict ${esc(conflict.severity)}">
-        <div class="head"><span class="tag">${esc(conflict.kind)}</span>
-        <span class="tag">${esc(conflict.severity)}</span></div>
-        <p>${esc(conflict.summary)}</p>
-        ${Object.entries(conflict.positions || {}).map(([id, stance]) =>
-          `<div class="stance"><b>${esc(nameOf(id))}</b><span>${esc(stance)}</span></div>`).join("")}
-        ${(conflict.resolution_options || []).length
-          ? `<ul class="ways">${conflict.resolution_options.map((o) =>
-              `<li>${esc(o)}</li>`).join("")}</ul>` : ""}
+    for (const c of conflicts) {
+      out.push(`<div class="conflict ${esc(c.severity)}">
+        <p style="font-size:12.5px">${esc(c.summary)}</p>
+        ${Object.entries(c.positions || {}).map(([id, stance]) =>
+          `<div class="stance"><b>${esc(travelerName(id))}</b><span>${esc(stance)}</span></div>`).join("")}
+        ${(c.resolution_options || []).length
+          ? `<ul class="ways">${c.resolution_options.map((o) => `<li>${esc(o)}</li>`).join("")}</ul>` : ""}
       </div>`);
     }
   }
 
-  // Validation. Errors and warnings first; the info tail is collapsed.
-  const issues = validation.issues || [];
-  const loud = issues.filter((i) => i.severity !== "info");
-  const quiet = issues.filter((i) => i.severity === "info");
+  const notes = (S.over.validation.issues || []).filter((i) => i.severity === "info");
   out.push('<p class="eyebrow">Checks</p>');
-  if (!issues.length) {
-    out.push('<p class="empty">Nothing to flag.</p>');
-  } else {
-    out.push(loud.map(issueHtml).join(""));
-    if (quiet.length) {
-      out.push(`<details class="trace"><summary>${quiet.length} note(s)</summary>
-        <div style="margin-top:7px">${quiet.map(issueHtml).join("")}</div></details>`);
-    }
+  const loud = (S.over.validation.issues || []).filter((i) => i.severity !== "info");
+  if (!loud.length && !notes.length) out.push('<p class="empty">Nothing to flag.</p>');
+  if (loud.length) out.push(`<p class="empty">${loud.length} shown in the itinerary.</p>`);
+  if (notes.length) {
+    out.push(`<details class="debug"><summary>${notes.length} note(s)</summary>
+      ${notes.map((i) => `<div class="issue info" style="margin-top:7px"><p>${esc(i.message)}</p></div>`).join("")}
+    </details>`);
   }
-
   $("rail").innerHTML = out.join("");
 }
 
-function anyoneIsRestricted() {
-  return (state.trip.travelers || []).some(
-    (t) => (t.preferences?.food?.dietary_restrictions || []).length);
+function travelerName(id) {
+  return (S.trip.travelers || []).find((t) => t.traveler_id === id)?.name || id;
 }
 
-function issueHtml(issue) {
-  return `<div class="issue ${esc(issue.severity)}">
-    <b>${esc(issue.type)}</b>
-    <p>${esc(issue.message)}</p>
-    ${issue.suggested_fix ? `<p class="fix">→ ${esc(issue.suggested_fix)}</p>` : ""}
-  </div>`;
+/* --- wiring --------------------------------------------------------------- */
+
+function wireWorkspace() {
+  const on = (attr, handler) =>
+    $("work").querySelectorAll(`[data-${attr}]`).forEach((el) =>
+      el.onclick = () => handler(el.dataset[attr]));
+
+  on("why", (id) => showWhy(`/items/${id}/why`));
+  on("whyentity", (id) => showWhy(`/entities/${id}/why`));
+  on("lock", (id) => act(`/items/${id}/lock`, post({}), () => "Locked"));
+  on("unlock", (id) => act(`/items/${id}/unlock`, post({}), () => "Unlocked"));
+  on("remove", (id) => act(`/items/${id}`, { method: "DELETE" }, (r) => r.summary));
+  on("replace", (id) => act(`/items/${id}/replace`, post({}), (r) => r.summary));
+  on("replan", (date) => act(`/days/${date}/replan`, post({ intensity: "relaxed" }), (r) => r.summary));
+  on("reject", (id) => {
+    const entity = S.trip.entities[id];
+    if (confirm(`Not interested in ${entity?.name || "this place"}? It will be removed and not suggested again.`))
+      act(`/entities/${id}/reject`, post({}), (r) => r.summary);
+  });
+  on("move", (id) => {
+    const item = itemById(id);
+    const to = prompt("Move to what time? (HH:MM)", clock(item?.start_at) || "10:00");
+    if (to) act(`/items/${id}/move`, post({ to_time: to }), (r) => r.summary);
+  });
+  on("maps", (name) =>
+    window.open(`https://www.google.com/maps/search/${encodeURIComponent(name)}`, "_blank", "noopener"));
+
+  // Trip facts save on blur, through the ordinary patch endpoint.
+  $("work").querySelectorAll("[data-field]").forEach((el) => {
+    el.dataset.was = el.value;
+    el.onblur = () => saveFact(el);
+  });
 }
 
-function kv(label, value) {
-  return `<div class="kv"><span>${esc(label)}</span><span>${esc(value)}</span></div>`;
+async function saveFact(el) {
+  const value = el.value;
+  if (value === el.dataset.was) return;
+  const numeric = el.type === "number";
+  const parsed = numeric ? (value === "" ? null : Number(value)) : (value === "" ? null : value);
+
+  try {
+    const result = await api(`/trips/${S.tripId}/patch`, post({
+      base_revision: S.trip.revision,
+      reason: `set ${el.dataset.field.split("/").pop()}`,
+      actor: "user",
+      operations: [{ op: "set", path: el.dataset.field, value: parsed }],
+    }));
+    if (!result.applied) {
+      toast(result.errors?.[0]?.message || "The server refused that change");
+      el.value = el.dataset.was;   // never leave the screen ahead of the store
+      return;
+    }
+    el.dataset.was = value;
+    await refresh(); render(); await loadTrips();
+    toast("Saved");
+  } catch (err) {
+    toast(err.message);
+    el.value = el.dataset.was;
+  }
 }
 
-/* --- boot ---------------------------------------------------------------- */
-loadTrips().catch((error) =>
-  $("tripList").innerHTML = `<p class="empty">Could not reach the server: ${esc(error.message)}</p>`);
+/* --- why ------------------------------------------------------------------ */
+
+async function showWhy(path) {
+  let why;
+  try { why = await api(`/trips/${S.tripId}${path}`); }
+  catch (err) { return toast(err.message); }
+
+  const sec = (title, body) => body ? `<div class="why-sec"><b>${title}</b>${body}</div>` : "";
+  const list = (rows) => rows.length ? `<ul>${rows.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>` : "";
+  const sources = (rows) => rows.length ? rows.map(sourceHtml).join("") : "";
+
+  const body = `
+    <h3>${esc(why.name)}</h3>
+    <p class="sub">${why.purpose ? esc(why.purpose) + " · " : ""}${why.status ? esc(why.status) : "not part of a stored decision"}</p>
+
+    ${why.complete ? "" : `<div class="incomplete">
+      <b>Explanation incomplete.</b><br>${why.missing.map(esc).join("<br>")}
+    </div>`}
+
+    ${sec("Why it was chosen", list(why.pros))}
+    ${sec("Trade-off", list(why.cons))}
+    ${why.rating ? sec("Rating", `<p style="font-size:13px">${why.rating} / 5${
+        why.rating_count ? ` from ${why.rating_count.toLocaleString()} reviews` : ""}${
+        why.rating_count && why.rating_count < 50
+          ? ' <span style="color:var(--warn)">— limited evidence</span>'
+          : why.rating_count >= 500 ? ' <span style="color:var(--ink-3)">— strong review signal</span>' : ""}</p>`) : ""}
+
+    ${why.per_traveler?.length ? sec("How each traveller scores it",
+      why.per_traveler.map((t) => `<div class="stance"><b>${esc(t.name)}</b><span>${t.score.toFixed(2)}</span></div>`).join("")
+      + (why.group_is_split ? `<p class="fix" style="color:var(--warn)">Major preference split — ${esc(why.worst_served)} is worst served.</p>` : "")) : ""}
+
+    ${sec("Verified facts", sources(why.official))}
+    ${sec("Editorial", sources(why.editorial))}
+    ${sec("Community signals", sources(why.community))}
+    ${why.evidence_count === 0 && why.complete
+      ? '<p class="fix" style="margin-top:12px">Chosen on Google data alone; no community sources were stored.</p>' : ""}
+  `;
+
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  bg.innerHTML = `<div class="modal">${body}
+    <div class="acts" style="margin-top:18px"><button class="btn ghost sm" data-close>Close</button></div></div>`;
+  bg.onclick = (e) => { if (e.target === bg || e.target.dataset.close !== undefined) bg.remove(); };
+  document.body.appendChild(bg);
+}
+
+/* --- chat ----------------------------------------------------------------- */
+
+async function loadMessages() {
+  const messages = await api(`/trips/${S.tripId}/messages?limit=60`);
+  const box = $("transcript");
+  box.hidden = !messages.length;
+  box.innerHTML = messages.slice(-8).map((m) =>
+    `<div class="msg ${m.role}"><div class="who">${m.role === "user" ? "You" : "Agent"}</div>
+     <div class="body">${esc(m.content)}</div></div>`).join("");
+  box.scrollTop = box.scrollHeight;
+}
+
+async function send(text) {
+  if (S.busy || !text.trim()) return;
+  S.busy = true; $("input").disabled = true; $("send").disabled = true;
+
+  const box = $("transcript"); box.hidden = false;
+  box.insertAdjacentHTML("beforeend",
+    `<div class="msg user"><div class="who">You</div><div class="body">${esc(text)}</div></div>`);
+  const started = Date.now();
+  box.insertAdjacentHTML("beforeend",
+    `<div class="msg" id="pending"><div class="who">Agent</div><div class="body">
+     <span class="thinking"><span class="dot"></span><span id="elapsed">searching and planning… 0s</span></span></div></div>`);
+  box.scrollTop = box.scrollHeight;
+  const tick = setInterval(() => {
+    const el = $("elapsed");
+    if (el) el.textContent = `searching and planning… ${Math.round((Date.now()-started)/1000)}s`;
+  }, 1000);
+
+  const before = S.trip;
+  try {
+    const res = await api(`/trips/${S.tripId}/messages`, post({ message: text, history_turns: 6 }));
+    $("pending")?.remove();
+    box.insertAdjacentHTML("beforeend",
+      `<div class="msg"><div class="who">Agent</div><div class="body">${esc(res.reply)}</div>
+       <details class="debug"><summary>${res.tools_called.length} tool call(s) · ${res.iterations} round(s)</summary>
+       <ul>${res.tools_called.map((t) => `<li>${esc(t.name)} · ${t.milliseconds}ms</li>`).join("")}</ul></details></div>`);
+    await refresh();
+    // A conversational change gets the same structured diff a button does.
+    S.lastDiff = res.changed_state ? await diffSince(before) : null;
+    if (res.changed_state && S.view === "overview") S.view = "itinerary";
+    render(); await loadTrips();
+  } catch (err) {
+    $("pending")?.remove();
+    box.insertAdjacentHTML("beforeend", `<div class="banner">${esc(err.message)}</div>`);
+  } finally {
+    clearInterval(tick);
+    S.busy = false; $("input").disabled = false; $("send").disabled = false;
+    $("input").focus(); box.scrollTop = box.scrollHeight;
+  }
+}
+
+/** Client-side diff for the chat path, computed from two persisted snapshots. */
+async function diffSince(before) {
+  const days = [];
+  const oldDays = Object.fromEntries((before.itinerary.days || []).map((d) => [d.date, d]));
+  for (const day of S.trip.itinerary.days || []) {
+    const prev = oldDays[day.date];
+    if (!prev) continue;
+    const was = Object.fromEntries(prev.items.map((i) => [i.item_id, i]));
+    const now = Object.fromEntries(day.items.map((i) => [i.item_id, i]));
+    const lockedIds = new Set((S.trip.locks || [])
+      .filter((l) => l.target_kind === "itinerary_item").map((l) => l.target_id));
+    const at = (i) => clock(i.start_at);
+    const diff = {
+      day: day.date,
+      added: day.items.filter((i) => !was[i.item_id]).map((i) => ({ title: i.title, at: at(i) })),
+      removed: prev.items.filter((i) => !now[i.item_id]).map((i) => ({ title: i.title, at: at(i) })),
+      moved: day.items.filter((i) => was[i.item_id] && was[i.item_id].start_at !== i.start_at)
+        .map((i) => ({ title: i.title, at: at(i), from_time: at(was[i.item_id]) })),
+      unchanged: day.items.filter((i) => was[i.item_id] && was[i.item_id].start_at === i.start_at)
+        .map((i) => ({ title: i.title, at: at(i), locked: lockedIds.has(i.item_id) })),
+    };
+    if (diff.added.length || diff.removed.length || diff.moved.length) days.push(diff);
+  }
+  return days.length ? days : null;
+}
+
+$("send").onclick = () => { const box = $("input"); const v = box.value; box.value = ""; autosize(); send(v); };
+$("input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("send").click(); }
+});
+function autosize() {
+  const box = $("input");
+  box.style.height = "auto";
+  box.style.height = Math.min(box.scrollHeight, 150) + "px";
+}
+$("input").addEventListener("input", autosize);
+
+loadTrips().catch((err) =>
+  $("tripList").innerHTML = `<p class="empty">Cannot reach the server: ${esc(err.message)}</p>`);
 </script>
 </body>
 </html>

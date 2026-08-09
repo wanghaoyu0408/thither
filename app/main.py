@@ -5,7 +5,13 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 
-from app.api import chat_router, profiles_router, tools_router, trips_router
+from app.api import (
+    actions_router,
+    chat_router,
+    profiles_router,
+    tools_router,
+    trips_router,
+)
 from app.config import get_settings
 from app.db.session import create_all, dispose_engine
 
@@ -36,6 +42,9 @@ app.include_router(profiles_router)
 app.include_router(trips_router)
 app.include_router(tools_router)
 app.include_router(chat_router)
+# Registered after trips so the more specific /trips/{id}/items/... routes are
+# matched before the catch-all trip routes.
+app.include_router(actions_router)
 
 
 @app.get("/health", tags=["meta"])
