@@ -41,6 +41,11 @@ class PlaceEntity(BaseModel):
     # from before the tri-state carry true/null/false here and are coerced on
     # validation - see as_attestation in app/models/common.py.
     serves_vegetarian: AttestationField = "unknown"
+
+    # Google's `parkingOptions`, as published. Positives only: an absent key is
+    # Google saying nothing, never Google saying no. Read by
+    # app/services/parking_service.py, which keeps that rule.
+    parking_options: dict[str, Any] | None = None
     accessibility: AttestationMap = {}
 
     # IANA zone, e.g. "Asia/Tokyo".

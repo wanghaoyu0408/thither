@@ -184,6 +184,14 @@ section.work { background: var(--bg); }
 .card-top { display: flex; align-items: flex-start; gap: 8px; }
 .card-top h4 { font-size: 14px; flex: 1; }
 .meta { font-size: 12px; color: var(--ink-3); margin-top: 3px; }
+.arrive { font-size: 12px; color: var(--ink-2); margin-top: 5px; }
+.arrive.warn { color: var(--warn); }
+.arrive.bad { color: var(--error); }
+.arrive .warn { color: var(--warn); }
+.linkish {
+  font-size: 11.5px; color: var(--accent); border: 0; background: none;
+  padding: 0 0 0 4px; text-decoration: underline; cursor: pointer;
+}
 .acts { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
 .acts button {
   font-size: 12px; padding: 4px 8px; border-radius: 6px;
@@ -740,10 +748,14 @@ function itineraryHtml() {
   const days = S.trip.itinerary.days || [];
   const out = [diffHtml(), validationHtml()];
 
+  const pending = [];
   if (days.length && !days.some((day) => day.weather)) {
-    out.push(`<p class="daymetrics none">No weather looked up yet.
-      <button class="chip" id="getWeather">Check the weather</button></p>`);
+    pending.push('<button class="chip" id="getWeather">Check the weather</button>');
   }
+  if (days.length && !Object.keys(S.trip.arrival || {}).length) {
+    pending.push('<button class="chip" id="getParking">Check parking</button>');
+  }
+  if (pending.length) out.push(`<p class="daymetrics none">${pending.join(" ")}</p>`);
 
   if (!days.length) {
     out.push(`<div class="welcome"><h2>Nothing planned yet</h2>
@@ -915,6 +927,7 @@ function itemHtml(item) {
         ${status}
       </div>
       <p class="meta">${esc(bits.join(" · "))}</p>
+      ${arrivalHtml(item)}
       ${unverified ? '<p class="meta" style="color:var(--warn)">? Needs verification — a stated requirement could not be confirmed for this place</p>' : ""}
       <div class="acts">
         <button data-why="${esc(item.item_id)}">Why?</button>
@@ -929,6 +942,50 @@ function itemHtml(item) {
       </div>
     </div>
   </div>`;
+}
+
+/** Where you leave the car and how far it is from there.
+ *
+ *  "Parking needs verification" is a first-class outcome and looks different
+ *  from both "free on-site" and "no parking" - nobody having checked is not the
+ *  same fact as somewhere having nowhere to park. */
+function arrivalHtml(item) {
+  const arrival = (S.trip.arrival || {})[item.entity_id];
+  if (!arrival) return "";
+  const p = arrival.parking;
+  const spot = bestSpot(p);
+
+  if (p.availability === "unavailable") {
+    return `<p class="arrive bad">🅿 No parking here</p>`;
+  }
+  if (p.availability === "unknown") {
+    return `<p class="arrive warn">🅿 Parking needs verification</p>`;
+  }
+
+  const bits = [];
+  const cost = { free: "Free", paid: "Paid", unknown: "Cost unknown" }[spot?.cost || "unknown"];
+  bits.push(`🅿 ${cost} ${(spot?.kind || "parking").replace(/_/g, " ")}`);
+  if (spot && spot.walking_minutes !== null && spot.walking_minutes !== undefined) {
+    bits.push(`🚶 ${Math.round(spot.walking_minutes)} min walk`);
+  } else {
+    bits.push("🚶 walk not measured");
+  }
+  const flags = [];
+  if (p.permit_required) flags.push("⚠ permit required");
+  if (p.reservation_required) flags.push("⚠ must be booked");
+
+  return `<p class="arrive">${esc(bits.join(" · "))}${
+    flags.length ? ` <span class="warn">${esc(flags.join(" · "))}</span>` : ""}${
+    spot && spot.location
+      ? ` <button class="linkish" data-parkto="${item.item_id}">Directions to parking</button>`
+      : ""}</p>`;
+}
+
+function bestSpot(parking) {
+  const measured = (parking.spots || []).filter((s) => s.walking_minutes !== null &&
+                                                       s.walking_minutes !== undefined);
+  if (measured.length) return measured.reduce((a, b) => a.walking_minutes <= b.walking_minutes ? a : b);
+  return (parking.spots || [])[0] || null;
 }
 
 function dayLabel(date) {
@@ -1226,7 +1283,7 @@ function sourceHtml(record) {
  *  every way it can fail has to be a sentence the user can act on rather than
  *  a grey rectangle. `status` is that sentence's subject. */
 const M = { status: "idle", pending: null, shared: false, map: null, info: null,
-            markers: [], line: null };
+            markers: [], parking: [], line: null };
 
 async function mapsReady() {
   if (M.status !== "idle") return M.status === "loading" ? M.pending : M.status;
@@ -1371,6 +1428,8 @@ function drawDay(day) {
     M.markers.push(marker);
   });
 
+  drawParking(stops);
+
   // Straight lines until the real geometry arrives, and labelled as such. A
   // line between two pins is not a route, and a map that lets it be read as one
   // is claiming a road it has never looked at.
@@ -1427,6 +1486,49 @@ async function drawRealRoute(day, tail) {
 
 /** Clicking a card points at its marker, so the list and the map agree about
  *  which stop is being discussed. */
+/** Where the car goes, marked apart from where you are going.
+ *  One pin for the attraction and one for the car park, because they are not
+ *  the same place and the difference is often a walk. */
+function drawParking(stops) {
+  M.parking.forEach((marker) => marker.setMap(null));
+  M.parking = [];
+
+  for (const { item } of stops) {
+    const arrival = (S.trip.arrival || {})[item.entity_id];
+    // `availability`, not a derived flag: `is_known` is a server-side property
+    // and never appears in the JSON.
+    const known = arrival && arrival.parking &&
+      (arrival.parking.availability === "confirmed" || arrival.parking.availability === "likely");
+    if (!known) continue;
+    const spot = bestSpot(arrival.parking);
+    if (!spot || !spot.location) continue;
+
+    const marker = new google.maps.Marker({
+      map: M.map,
+      position: { lat: spot.location.lat, lng: spot.location.lng },
+      title: `Parking for ${item.title}`,
+      label: { text: "P", color: "#fff", fontSize: "11px", fontWeight: "600" },
+      icon: {
+        path: google.maps.SymbolPath.CIRCLE,
+        scale: 9,
+        fillColor: "#565961",
+        fillOpacity: 1,
+        strokeColor: "#fff",
+        strokeWeight: 2,
+      },
+    });
+    marker.addListener("click", () => {
+      const walk = spot.walking_minutes !== null && spot.walking_minutes !== undefined
+        ? `${Math.round(spot.walking_minutes)} min walk to ${esc(item.title)}`
+        : "walk not measured";
+      M.info.setContent(`<div class="iw"><b>${esc(spot.name || "Parking")}</b>
+        <span>${esc(walk)}</span></div>`);
+      M.info.open({ map: M.map, anchor: marker });
+    });
+    M.parking.push(marker);
+  }
+}
+
 function focusStop(itemId) {
   const day = mappableDays().find((d) => d.items.some((i) => i.item_id === itemId));
   if (!day) return;
@@ -1538,6 +1640,20 @@ function wireWorkspace() {
     act(`/decisions/${name}/booked`, post({ booked: true }), (r) => r.summary));
   on("decunbooked", (name) =>
     act(`/decisions/${name}/booked`, post({ booked: false }), (r) => r.summary));
+
+  on("parkto", (itemId) => {
+    // Navigation targets the car park, not the attraction's centroid - routing
+    // to the middle of a beach can mean routing into the sea.
+    const item = [...S.trip.itinerary.days.flatMap((d) => d.items)]
+      .find((i) => i.item_id === itemId);
+    const spot = item && bestSpot((S.trip.arrival[item.entity_id] || {}).parking || {});
+    if (!spot || !spot.location) return toast("No parking location stored");
+    window.open(`https://www.google.com/maps/dir/?api=1&destination=${
+      spot.location.lat},${spot.location.lng}&travelmode=driving`, "_blank", "noopener");
+  });
+
+  const parkingBtn = $("getParking");
+  if (parkingBtn) parkingBtn.onclick = () => act("/parking", post({}), (r) => r.summary);
 
   const weatherBtn = $("getWeather");
   if (weatherBtn) weatherBtn.onclick = () => act("/weather", post({}), (r) => r.summary);

@@ -24,6 +24,7 @@ from app.services.discovery_service import DiscoveryService
 from app.services.flight_service import FlightService
 from app.services.hotel_area_service import HotelAreaService
 from app.services.hotel_service import HotelService
+from app.services.parking_service import ParkingService
 from app.services.place_service import PlaceService
 from app.services.research_service import ResearchService
 from app.services.route_service import RouteService
@@ -81,6 +82,8 @@ class Toolbox:
             )
 
         self.discovery = DiscoveryService(self.places, self.research)
+        # Parking needs only Google, like the neighbourhood half of hotels.
+        self.parking = ParkingService(self.places, self.routes)
         self.airports = AirportService(self.places, self.routes)
 
         # Flights need their own credential. Without one the agent says flights

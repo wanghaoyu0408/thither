@@ -670,6 +670,106 @@ def _sun_local(moment: datetime | None, state: TripState) -> datetime | None:
     return aware.astimezone(zone).replace(tzinfo=None)
 
 
+def _check_arrival(
+    day: ItineraryDay, state: TripState, travel: TravelLookup
+) -> list[ValidationIssue]:
+    """Getting there is not the same as being there.
+
+    A 10:00 activity reached by a 09:55 arrival is feasible only if the car park
+    is at the door. Twelve minutes of walking from the lot makes it 10:07, and
+    nothing in the driving time says so - which is the gap this check exists to
+    close.
+    """
+    if not state.arrival:
+        return []
+
+    issues: list[ValidationIssue] = []
+    ordered = _timed(day.items)
+    driving = long_haul_mode(state) == "driving"
+
+    for position, item in enumerate(ordered):
+        arrival = state.arrival.get(item.entity_id) if item.entity_id else None
+        if arrival is None:
+            continue
+        parking = arrival.parking
+
+        if parking.availability == "unavailable":
+            issues.append(
+                ValidationIssue(
+                    severity="error" if driving else "warning",
+                    type="parking_unavailable",
+                    item_ids=[item.item_id],
+                    message=f"{item.title} has no parking, and this trip arrives by car",
+                    suggested_fix="park elsewhere and add the walk, or go another way",
+                )
+            )
+        elif parking.availability == "unknown" and driving:
+            # A warning, never a filter. Nobody having checked is not a reason
+            # to drop a place - it is a reason to say so.
+            issues.append(
+                ValidationIssue(
+                    severity="warning",
+                    type="parking_unverified",
+                    item_ids=[item.item_id],
+                    message=f"nobody has checked parking at {item.title}",
+                    suggested_fix="look up parking for this stop before the day",
+                )
+            )
+
+        if parking.permit_required:
+            issues.append(
+                ValidationIssue(
+                    severity="warning",
+                    type="parking_permit_required",
+                    item_ids=[item.item_id],
+                    message=f"{item.title} needs a parking permit",
+                    suggested_fix="get the permit in advance, or plan another way there",
+                )
+            )
+        if parking.reservation_required:
+            issues.append(
+                ValidationIssue(
+                    severity="warning",
+                    type="parking_reservation_required",
+                    item_ids=[item.item_id],
+                    message=f"parking at {item.title} has to be booked",
+                    suggested_fix="reserve the space, or arrive expecting to be turned away",
+                )
+            )
+
+        overhead = arrival.overhead_minutes
+        if overhead is None or position == 0 or not item.start_at:
+            continue
+
+        previous = ordered[position - 1]
+        if not previous.entity_id or not _end_of(previous):
+            continue
+        mode = mode_between(
+            state, state.entities.get(previous.entity_id), state.entities.get(item.entity_id)
+        )
+        minutes = travel.duration(previous.entity_id, item.entity_id, mode)
+        if minutes is None:
+            continue
+
+        gap = (item.start_at - _end_of(previous)).total_seconds() / 60.0
+        needed = minutes + overhead + TRANSFER_BUFFER_MINUTES
+        if gap < needed:
+            issues.append(
+                ValidationIssue(
+                    severity="error" if gap < minutes + overhead else "warning",
+                    type="parking_access_time",
+                    item_ids=[previous.item_id, item.item_id],
+                    message=(
+                        f"{gap:.0f} min between {previous.title} and {item.title}, but it is "
+                        f"{minutes:.0f} min to drive plus {overhead:.0f} min from the car park "
+                        "on foot"
+                    ),
+                    suggested_fix="start later, or park closer",
+                )
+            )
+    return issues
+
+
 # --- entry point -------------------------------------------------------------
 
 
@@ -695,6 +795,7 @@ def validate_itinerary(
         issues.extend(_check_day_load(day, state, travel, limits))
         issues.extend(_check_backtracking(day, state, limits))
         issues.extend(_check_weather(day, state))
+        issues.extend(_check_arrival(day, state, travel))
 
     if target_date is None:
         issues.extend(_check_trip_wide(state))

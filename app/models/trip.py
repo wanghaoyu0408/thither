@@ -3,6 +3,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.models.arrival import ArrivalContext
 from app.models.common import Pace, new_id, utcnow
 from app.models.constraint import TripConstraint
 from app.models.decision import TripDecisions
@@ -246,6 +247,11 @@ class TripState(BaseModel):
     # What we still need to ask before researching, and whether the traveller
     # has confirmed the brief. Gate lives in app/services/intake_service.py.
     intake: TripIntake = TripIntake()
+
+    # How you reach each place and where you leave the car, keyed by entity.
+    # A registry like `entities` and `evidence`: facts about places, shared by
+    # every day that visits one, and additive under a day-scoped patch.
+    arrival: dict[str, ArrivalContext] = {}
 
     validation: ValidationState = ValidationState()
 

@@ -46,6 +46,8 @@ _FIELDS_BY_TIER: dict[PlaceFieldSet, tuple[str, ...]] = {
         "websiteUri",
         "servesVegetarianFood",
         "accessibilityOptions",
+        # Where you leave the car. Same SKU as the rest of this tier.
+        "parkingOptions",
     ),
 }
 
@@ -128,6 +130,7 @@ def normalize_place(raw: dict[str, Any]) -> PlaceSummary:
         price_level=_PRICE_LEVELS.get(raw.get("priceLevel", "")),
         opening_hours=opening,
         serves_vegetarian=_attested(raw.get("servesVegetarianFood")),
+        parking_options=raw.get("parkingOptions"),
         accessibility=_accessibility(raw),
         website_url=raw.get("websiteUri"),
         maps_url=raw.get("googleMapsUri"),

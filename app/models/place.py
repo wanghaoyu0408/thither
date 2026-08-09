@@ -101,6 +101,7 @@ class PlaceSummary(BaseModel):
     # app/models/common.py for the measured evidence. Old bool|None values in
     # cached JSON are coerced (True -> confirmed_true, False/None -> unknown).
     serves_vegetarian: AttestationField = "unknown"
+    parking_options: dict[str, Any] | None = None
 
     # Same asymmetry, per accessibility option.
     accessibility: AttestationMap = {}

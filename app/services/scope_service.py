@@ -115,7 +115,7 @@ def _check_siblings(before: dict[str, Any], after: dict[str, Any]) -> list[Patch
 
         # Registries a scoped patch may grow but not rewrite. Both obey the same
         # rule, so both go through the same check rather than a copy of it.
-        if key in ("entities", "evidence"):
+        if key in ("entities", "evidence", "arrival"):
             errors.extend(_check_additive(key, before.get(key) or {}, after.get(key) or {}))
             continue
 

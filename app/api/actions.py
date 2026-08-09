@@ -42,7 +42,12 @@ from app.services.intake_service import today_at
 from app.services.itinerary_diff import DayDiff, changed_days
 from app.services.itinerary_service import replan_day, substitute_item
 from app.services.toolbox import MissingCredentials, Toolbox
-from app.services.validation_service import TravelLookup, mode_between, validate_itinerary
+from app.services.validation_service import (
+    TravelLookup,
+    long_haul_mode,
+    mode_between,
+    validate_itinerary,
+)
 
 router = APIRouter(prefix="/trips/{trip_id}", tags=["actions"])
 
@@ -430,6 +435,60 @@ async def refresh_weather(trip_id: str, session: SessionDep) -> ActionResult:
             )
         ],
         summary=f"weather updated ({', '.join(sorted(kinds))})",
+    )
+
+
+@router.post("/parking", response_model=ActionResult)
+async def refresh_parking(trip_id: str, session: SessionDep) -> ActionResult:
+    """Work out where to park at each scheduled place, and how far the walk is.
+
+    Scheduled places only. Parking for somewhere the trip is not going is a
+    lookup nobody asked for, and each one costs a Places search and a Routes
+    call.
+    """
+    state = await _load(session, trip_id)
+    scheduled = {
+        item.entity_id
+        for _day, item in state.itinerary.iter_items()
+        if item.entity_id in state.entities
+    }
+    if not scheduled:
+        return _view(state, state, applied=False, summary="nothing scheduled to park at")
+
+    try:
+        toolbox = Toolbox(sessions=get_sessionmaker())
+    except MissingCredentials:
+        return _view(state, state, applied=False, summary="parking lookup is not configured")
+
+    mode = long_haul_mode(state)
+    contexts = []
+    async with toolbox:
+        for entity_id in sorted(scheduled):
+            contexts.append(
+                await toolbox.parking.context_for(state, state.entities[entity_id], mode=mode)
+            )
+
+    operations = [
+        {
+            "op": "set" if context.entity_id in state.arrival else "add",
+            "path": f"/arrival/{context.entity_id}",
+            "value": context.model_dump(mode="json"),
+        }
+        for context in contexts
+    ]
+    known = sum(1 for context in contexts if context.parking.is_known)
+    return await _commit(
+        session,
+        state,
+        [
+            TripPatch(
+                base_revision=state.revision,
+                reason="parking looked up",
+                actor="user",
+                operations=operations,
+            )
+        ],
+        summary=f"parking found for {known} of {len(contexts)} stop(s)",
     )
 
 

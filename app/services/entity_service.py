@@ -88,6 +88,14 @@ def resolve_place(
         serves_vegetarian=keep_attested(
             summary.serves_vegetarian, known.serves_vegetarian if known else "unknown"
         ),
+        # A cheap search does not ask for parking, so an absent value there must
+        # not wipe what a details fetch already established - the same rule the
+        # attestations follow.
+        parking_options=(
+            summary.parking_options
+            if summary.parking_options is not None
+            else (known.parking_options if known else None)
+        ),
         accessibility=_merge_attestations(
             summary.accessibility, known.accessibility if known else {}
         ),
