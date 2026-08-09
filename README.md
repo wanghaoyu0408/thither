@@ -44,6 +44,9 @@ billing on:
 - **Places API (New)** — the legacy "Places API" will not work; the field-mask header is
   a New-API concept
 - **Routes API**
+- **Weather API** — only for forecasts. Another separate API. Without it the
+  forecast half simply does not run and the historical half still does, because
+  Open-Meteo needs no credential at all.
 - **Maps JavaScript API** — only for the map in the web UI. It is a *separate* API, so a
   key that plans trips perfectly well can still be refused by the map. If it is, the map
   panel says so rather than showing a grey box.

@@ -330,6 +330,18 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "type": "function",
+        "name": "get_weather_context",
+        "description": (
+            "Weather for the trip's days, saved onto the trip. Each day comes back as one "
+            "of two kinds and they are not interchangeable: a 'forecast' is about that "
+            "date and you may plan around it; a 'historical_norm' says what the season is "
+            "usually like and can never tell anyone what a date will do. Call this before "
+            "planning outdoor days, and again if the dates move."
+        ),
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "type": "function",
         "name": "search_airports",
         "description": (
             "Airports near a place, with the real driving time to each from the Routes API. "
@@ -1327,6 +1339,64 @@ async def _ask_clarifications(context: ToolContext, args: dict[str, Any]) -> dic
     )
 
 
+async def _get_weather_context(context: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    """Weather for the trip's days, each labelled with what kind of claim it is."""
+    state = _working_state(context)
+    days = state.itinerary.days
+    if not days:
+        return {"error": "this trip has no days yet"}
+
+    anchor = next(
+        (
+            state.entities[item.entity_id]
+            for _day, item in state.itinerary.iter_items()
+            if item.entity_id in state.entities
+        ),
+        next(iter(state.entities.values()), None),
+    )
+    if anchor is None:
+        return {"error": "this trip knows of no places yet, so there is nowhere to look up"}
+
+    contexts = await context.toolbox.weather.context_for(
+        [day.date for day in days],
+        lat=anchor.lat,
+        lng=anchor.lng,
+        today=today_at(state),
+    )
+
+    for index, day in enumerate(days):
+        found = contexts.get(day.date)
+        if found is not None:
+            context.pending_brief_ops.append(
+                {
+                    "op": "set",
+                    "path": f"/itinerary/days/{index}/weather",
+                    "value": found.model_dump(mode="json"),
+                }
+            )
+
+    return {
+        "days": [
+            {
+                "date": day.date.isoformat(),
+                "kind": contexts[day.date].kind,
+                "summary": contexts[day.date].headline(),
+                "method": (
+                    contexts[day.date].norm.describe() if contexts[day.date].norm else None
+                ),
+            }
+            for day in days
+            if day.date in contexts
+        ],
+        "rule": (
+            "A 'forecast' is about that date and you may plan around it. A "
+            "'historical_norm' is about the season - say what is typical and suggest a "
+            "backup, but never tell the traveller what the weather will do on a date."
+        ),
+        "note": "Saved with the trip. Nothing else to do.",
+    }
+
+
 async def _search_airports(context: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
     if context.toolbox.airports is None:
         return {"error": "airport search is not configured"}
@@ -2243,6 +2313,7 @@ HANDLERS = {
     "review_group_preferences": _review_group_preferences,
     "refresh_traveler_preferences": _refresh_traveler_preferences,
     "discover_restaurants": _discover_restaurants,
+    "get_weather_context": _get_weather_context,
     "search_airports": _search_airports,
     "search_flights": _search_flights,
     "recommend_hotel_areas": _recommend_hotel_areas,
@@ -2273,6 +2344,7 @@ RESEARCH_TOOLS = frozenset(
         "discover_restaurants",
         "search_airports",
         "search_flights",
+        "get_weather_context",
         "recommend_hotel_areas",
         "search_hotels",
         "generate_itinerary",

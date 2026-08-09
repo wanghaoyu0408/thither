@@ -38,6 +38,7 @@ from app.models.trip import TripState
 from app.services import json_pointer as jp
 from app.services.conflict_service import detect_conflicts, unresolved_blocking
 from app.services.explanation_service import Explanation, explain, explain_item
+from app.services.intake_service import today_at
 from app.services.itinerary_diff import DayDiff, changed_days
 from app.services.itinerary_service import replan_day, substitute_item
 from app.services.toolbox import MissingCredentials, Toolbox
@@ -370,6 +371,82 @@ async def day_route(trip_id: str, when: date_type, session: SessionDep) -> DayRo
             else f"of {len(legs)} legs, " + " and ".join(reasons) + "; those stay straight lines"
         ),
     )
+
+
+@router.post("/weather", response_model=ActionResult)
+async def refresh_weather(trip_id: str, session: SessionDep) -> ActionResult:
+    """Fetch weather for every day and store it on the days.
+
+    Stored rather than fetched on read: validation is pure and a GET should not
+    make a network call. `observed_at` travels with each context, so an old
+    forecast can be shown as old rather than passed off as current.
+    """
+    state = await _load(session, trip_id)
+    days = state.itinerary.days
+    if not days:
+        return _view(state, state, applied=False, summary="no days to look up")
+
+    anchor = _anchor(state)
+    if anchor is None:
+        return _view(
+            state,
+            state,
+            applied=False,
+            summary="this trip has no place to look weather up for yet",
+        )
+
+    try:
+        toolbox = Toolbox(sessions=get_sessionmaker())
+    except MissingCredentials:
+        return _view(state, state, applied=False, summary="weather is not configured")
+
+    async with toolbox:
+        contexts = await toolbox.weather.context_for(
+            [day.date for day in days],
+            lat=anchor[0],
+            lng=anchor[1],
+            today=today_at(state),
+        )
+
+    operations = [
+        {
+            "op": "set",
+            "path": f"/itinerary/days/{index}/weather",
+            "value": contexts[day.date].model_dump(mode="json"),
+        }
+        for index, day in enumerate(days)
+        if day.date in contexts
+    ]
+    kinds = {contexts[day.date].kind for day in days if day.date in contexts}
+    return await _commit(
+        session,
+        state,
+        [
+            TripPatch(
+                base_revision=state.revision,
+                reason="weather refreshed",
+                actor="user",
+                operations=operations,
+            )
+        ],
+        summary=f"weather updated ({', '.join(sorted(kinds))})",
+    )
+
+
+def _anchor(state: TripState) -> tuple[float, float] | None:
+    """A point to look weather up at: the first place the trip actually knows.
+
+    Weather is looked up once per trip rather than per stop. A five-stop day on
+    one island shares its weather, and asking five times would spend five calls
+    to produce the same answer.
+    """
+    for _day, item in state.itinerary.iter_items():
+        entity = state.entities.get(item.entity_id) if item.entity_id else None
+        if entity is not None:
+            return entity.lat, entity.lng
+    for entity in state.entities.values():
+        return entity.lat, entity.lng
+    return None
 
 
 # --- locking -----------------------------------------------------------------

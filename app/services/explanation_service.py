@@ -30,6 +30,7 @@ from app.models.decision import (
 from app.models.evidence import Authority, EvidenceRecord
 from app.models.group import GroupScore
 from app.models.trip import TripState
+from app.models.weather import WeatherContext
 from app.services.decision_service import label_for
 from app.services.option_metrics import Metric, metrics_for, unscored_for
 from app.services.scoring import ranking_value
@@ -130,6 +131,12 @@ class Explanation(BaseModel):
     unscored: list[str] = []
 
     alternative: Alternative | None = None
+
+    # The weather on the day this is scheduled, when it is scheduled at all.
+    # Context, not a reason: no ranker scores on weather, so presenting it as
+    # why something was chosen would be a rationale invented after the fact -
+    # which is the one thing this module exists to prevent.
+    day_weather: WeatherContext | None = None
 
     @property
     def evidence_count(self) -> int:
@@ -341,7 +348,7 @@ def explain(state: TripState, entity_id: str) -> Explanation:
 
 def explain_item(state: TripState, item_id: str) -> Explanation | None:
     """The explanation behind a scheduled item, via the place it points at."""
-    for _day, item in state.itinerary.iter_items():
+    for day, item in state.itinerary.iter_items():
         if item.item_id != item_id:
             continue
         if not item.entity_id:
@@ -351,5 +358,7 @@ def explain_item(state: TripState, item_id: str) -> Explanation | None:
                 name=item.title,
                 missing=["this item is not a place, so there is nothing to explain"],
             )
-        return explain(state, item.entity_id)
+        explanation = explain(state, item.entity_id)
+        explanation.day_weather = day.weather
+        return explanation
     return None

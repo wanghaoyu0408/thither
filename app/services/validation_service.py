@@ -11,8 +11,10 @@ which spec section 21 forbids.
 """
 
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import UTC, date, datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from app.config import get_settings
 from app.models.common import utcnow
 from app.models.entity import PlaceEntity
 from app.models.itinerary import ItineraryDay, ItineraryItem
@@ -524,6 +526,150 @@ def _check_trip_wide(state: TripState) -> list[ValidationIssue]:
     return issues
 
 
+# Places whose whole point is being outside. Deliberately narrow: a warning
+# attached to an indoor museum because the category list was generous is a
+# warning people learn to ignore.
+OUTDOOR_CATEGORIES = frozenset(
+    {
+        "beach",
+        "campground",
+        "national_park",
+        "park",
+        "hiking_area",
+        "garden",
+        "botanical_garden",
+        "zoo",
+        "amusement_park",
+        "water_park",
+        "marina",
+        "ski_resort",
+        "golf_course",
+    }
+)
+
+
+def _is_outdoor(state: TripState, item: ItineraryItem) -> bool:
+    entity = state.entities.get(item.entity_id) if item.entity_id else None
+    if entity is None:
+        return False
+    return bool(OUTDOOR_CATEGORIES.intersection(entity.categories))
+
+
+def _names(state: TripState, item: ItineraryItem) -> str:
+    entity = state.entities.get(item.entity_id) if item.entity_id else None
+    return f"{item.title} {entity.name if entity else ''}".lower()
+
+
+def _check_weather(day: ItineraryDay, state: TripState) -> list[ValidationIssue]:
+    """Weather, and only the claims the data supports.
+
+    A **forecast** is about this date, so it can warn. A **historical norm** is
+    about the season: it may tell someone to keep an indoor option in mind, and
+    it may never say what this day will do. Everything below turns on that, and
+    a norm never produces anything above `info`.
+    """
+    weather = day.weather
+    if weather is None or weather.kind == "unavailable":
+        return []
+
+    settings = get_settings()
+    issues: list[ValidationIssue] = []
+    outdoor = [item for item in day.items if _is_outdoor(state, item)]
+
+    if weather.kind == "historical_norm":
+        frequency = weather.precipitation_day_frequency
+        if outdoor and frequency is not None and frequency >= settings.rain_warning_probability:
+            issues.append(
+                ValidationIssue(
+                    severity="info",
+                    type="weather_seasonal_risk",
+                    item_ids=[item.item_id for item in outdoor],
+                    message=(
+                        f"{day.date} is outdoors-heavy and it rained on "
+                        f"{frequency * 100:.0f}% of comparable days in past years. This is "
+                        "seasonal context, not a forecast for this date."
+                    ),
+                    suggested_fix="keep an indoor option in mind for this day",
+                )
+            )
+        return issues
+
+    # From here on it is a forecast, and may warn.
+    chance = weather.precipitation_probability
+    if outdoor and chance is not None and chance >= settings.rain_warning_probability:
+        issues.append(
+            ValidationIssue(
+                severity="warning",
+                type="weather_rain_risk",
+                item_ids=[item.item_id for item in outdoor],
+                message=(
+                    f"{chance * 100:.0f}% chance of rain on {day.date}, with "
+                    f"{len(outdoor)} outdoor stop(s)"
+                ),
+                suggested_fix="move the outdoor stops to a drier day, or have an indoor backup",
+            )
+        )
+
+    if outdoor and weather.wind_kph and weather.wind_kph >= settings.wind_warning_kph:
+        issues.append(
+            ValidationIssue(
+                severity="warning",
+                type="weather_wind_risk",
+                item_ids=[item.item_id for item in outdoor],
+                message=f"wind around {weather.wind_kph:.0f} km/h on {day.date}",
+                suggested_fix="check whether the outdoor stops run in this wind",
+            )
+        )
+
+    # A thing named for the sunset, scheduled after it. Narrow on purpose: this
+    # reads the item's own name rather than guessing at intent, and it runs only
+    # when the trip knows its timezone - comparing a UTC sun event against a
+    # naive local itinerary time would be wrong by whole hours.
+    for word, moment, kind in (
+        ("sunset", weather.sunset, "scheduled_after_sunset"),
+        ("sunrise", weather.sunrise, "scheduled_after_sunrise"),
+    ):
+        local = _sun_local(moment, state)
+        if local is None:
+            continue
+        for item in day.items:
+            if word not in _names(state, item) or not item.start_at:
+                continue
+            if item.start_at.time() <= local.time():
+                continue
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    type=kind,
+                    item_ids=[item.item_id],
+                    message=(
+                        f"{item.title} starts at {item.start_at:%H:%M}, after {word} at "
+                        f"{local:%H:%M}"
+                    ),
+                    suggested_fix=f"move it earlier than {word}",
+                )
+            )
+    return issues
+
+
+def _sun_local(moment: datetime | None, state: TripState) -> datetime | None:
+    """A sun event as local wall-clock at the destination, or None.
+
+    Itinerary times are naive local at the destination. A sun event arrives with
+    an offset, usually UTC, so without the trip's timezone there is nothing to
+    compare it against - and guessing the server's zone would put sunset in
+    Maui at whatever hour this machine happens to be in.
+    """
+    if moment is None or not state.brief.timezone:
+        return None
+    try:
+        zone = ZoneInfo(state.brief.timezone)
+    except ZoneInfoNotFoundError:
+        return None
+    aware = moment if moment.tzinfo else moment.replace(tzinfo=UTC)
+    return aware.astimezone(zone).replace(tzinfo=None)
+
+
 # --- entry point -------------------------------------------------------------
 
 
@@ -548,6 +694,7 @@ def validate_itinerary(
         issues.extend(_check_travel(day, state, travel))
         issues.extend(_check_day_load(day, state, travel, limits))
         issues.extend(_check_backtracking(day, state, limits))
+        issues.extend(_check_weather(day, state))
 
     if target_date is None:
         issues.extend(_check_trip_wide(state))

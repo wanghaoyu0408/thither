@@ -73,8 +73,26 @@ class Settings(BaseSettings):
     # having one.
     serpapi_api_key: str | None = None
 
-    # Placeholder for a later milestone.
+    # Google Weather is a separate API from Places and Routes and needs
+    # enabling on its own. Unset, the forecast half simply does not run and the
+    # historical half still does - Open-Meteo needs no credential.
     weather_api_key: str | None = None
+
+    # Weather thresholds. Deliberately conservative and configurable: this
+    # project does not pretend to know when a hike becomes unsafe, only when a
+    # traveller would want to be told.
+    rain_warning_probability: float = 0.5
+    wind_warning_kph: float = 40.0
+
+    @property
+    def weather_key(self) -> str | None:
+        """The key Google Weather is called with.
+
+        Weather is a Google Maps Platform API, so the same key serves it once
+        the Weather API is enabled on the project. The separate setting exists
+        for the case where it is not, or where weather should be billed apart.
+        """
+        return self.weather_api_key or self.google_maps_api_key
 
     @property
     def maps_browser_key(self) -> str | None:

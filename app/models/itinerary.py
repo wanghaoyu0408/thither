@@ -4,6 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 from app.models.common import Money, TimeFlexibility, new_id
+from app.models.weather import WeatherContext
 
 ItemType = Literal[
     "flight",
@@ -110,6 +111,11 @@ class ItineraryDay(BaseModel):
     items: list[ItineraryItem] = []
 
     summary: DaySummary | None = None
+
+    # Stored rather than fetched at read time, so validating a trip never makes
+    # a network call and an old forecast is visibly old rather than quietly
+    # absent. `observed_at` on the context is what makes staleness legible.
+    weather: WeatherContext | None = None
 
 
 class TripItinerary(BaseModel):

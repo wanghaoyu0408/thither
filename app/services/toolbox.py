@@ -14,6 +14,8 @@ from app.providers.base import build_client
 from app.providers.duffel import DuffelProvider
 from app.providers.google_places import GooglePlacesProvider
 from app.providers.google_routes import GoogleRoutesProvider
+from app.providers.google_weather import GoogleWeatherProvider
+from app.providers.open_meteo import OpenMeteoHistoricalProvider
 from app.providers.openai_research import OpenAIResearchProvider
 from app.providers.serpapi_hotels import SerpApiGoogleHotelsProvider
 from app.services.airport_service import AirportService
@@ -25,6 +27,7 @@ from app.services.hotel_service import HotelService
 from app.services.place_service import PlaceService
 from app.services.research_service import ResearchService
 from app.services.route_service import RouteService
+from app.services.weather_service import WeatherService
 
 
 class MissingCredentials(RuntimeError):
@@ -105,6 +108,19 @@ class Toolbox:
                 self._cache,
                 self._deduper,
             )
+
+        # Weather has two halves and they fail independently. Google answers
+        # about dates inside its horizon; Open-Meteo needs no credential at all,
+        # so a trip months out still gets its seasonal context even on a machine
+        # with no weather key.
+        self.weather = WeatherService(
+            GoogleWeatherProvider(self._settings.weather_key, self._client)
+            if self._settings.weather_key
+            else None,
+            OpenMeteoHistoricalProvider(self._client),
+            self._cache,
+            self._deduper,
+        )
 
     async def aclose(self) -> None:
         await self._client.aclose()

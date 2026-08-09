@@ -44,6 +44,11 @@ class ContentClass(StrEnum):
     # Maps Content, so the terms constraining place data do not reach it - but
     # page text is still never stored, only what we wrote about it.
     RESEARCH = "research"
+    # A climatology we computed from Open-Meteo reanalysis. Not Google Maps
+    # Content, and stable by nature - what August did over the last fifteen
+    # years does not change - so it is worth keeping rather than re-deriving
+    # from a few hundred observations on every read.
+    CLIMATE = "climate"
 
 
 # Hard ceilings. A caller may ask for less, never for more.
@@ -52,9 +57,12 @@ MAX_TTL: dict[ContentClass, timedelta | None] = {
     ContentClass.LAT_LNG: timedelta(days=30),
     ContentClass.VOLATILE: timedelta(hours=1),
     ContentClass.RESEARCH: timedelta(days=14),
+    ContentClass.CLIMATE: timedelta(days=180),
 }
 
-PERSISTABLE = frozenset({ContentClass.PLACE_ID, ContentClass.LAT_LNG, ContentClass.RESEARCH})
+PERSISTABLE = frozenset(
+    {ContentClass.PLACE_ID, ContentClass.LAT_LNG, ContentClass.RESEARCH, ContentClass.CLIMATE}
+)
 
 
 class CachePolicyError(RuntimeError):
@@ -85,6 +93,7 @@ PLACE_ID_POLICY = CachePolicy(ContentClass.PLACE_ID)
 LAT_LNG_POLICY = CachePolicy(ContentClass.LAT_LNG)
 VOLATILE_POLICY = CachePolicy(ContentClass.VOLATILE)
 RESEARCH_POLICY = CachePolicy(ContentClass.RESEARCH)
+CLIMATE_POLICY = CachePolicy(ContentClass.CLIMATE)
 
 
 def naive_utc(value: datetime) -> datetime:

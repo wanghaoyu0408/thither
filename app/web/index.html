@@ -136,6 +136,31 @@ section.work { background: var(--bg); }
 
 /* --- itinerary ------------------------------------------------------------ */
 .day { margin-bottom: 26px; }
+/* Forecast and typical weather must never be mistakable for one another, so
+   they differ in colour, border and label - not just in wording. */
+.wx {
+  display: inline-flex; align-items: center; gap: 7px; margin: 0 0 9px;
+  font-size: 12.5px; padding: 5px 10px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--line);
+}
+.wx.forecast { background: var(--info-soft); border-color: var(--info); color: var(--info); }
+.wx.norm {
+  background: transparent; border-style: dashed; border-color: var(--line-2);
+  color: var(--ink-3);
+}
+.wx.none { color: var(--ink-3); }
+.wx b { font-weight: 600; }
+.wx .kind { text-transform: uppercase; letter-spacing: .06em; font-size: 10px; }
+.wxrows { margin-top: 4px; }
+.wxrow { display: flex; gap: 10px; font-size: 13px; padding: 3px 0; }
+.wxrow b { flex: none; width: 45%; font-weight: 500; color: var(--ink-3); }
+.wxbasis {
+  margin-top: 14px; padding: 10px 12px; border-radius: var(--r);
+  background: var(--sunk); font-size: 12px; color: var(--ink-2);
+}
+.wxbasis b { color: var(--ink); }
+.attribution { margin-top: 8px; font-size: 11.5px; color: var(--ink-3); }
+
 .daymetrics { font-size: 12px; color: var(--ink-2); margin: -3px 0 11px; }
 .daymetrics.none { color: var(--ink-3); }
 .daymetrics .ok { color: var(--accent); }
@@ -715,6 +740,11 @@ function itineraryHtml() {
   const days = S.trip.itinerary.days || [];
   const out = [diffHtml(), validationHtml()];
 
+  if (days.length && !days.some((day) => day.weather)) {
+    out.push(`<p class="daymetrics none">No weather looked up yet.
+      <button class="chip" id="getWeather">Check the weather</button></p>`);
+  }
+
   if (!days.length) {
     out.push(`<div class="welcome"><h2>Nothing planned yet</h2>
       <p>Ask the agent for a plan and it will appear here as something you can edit.</p></div>`);
@@ -729,6 +759,7 @@ function itineraryHtml() {
         <div class="spacer"></div>
         <button class="chip" data-replan="${day.date}">Make this day easier</button>
       </div>
+      ${weatherChipHtml(day)}
       ${dayMetricsHtml(day)}
       ${day.items.length
         ? day.items.map(itemHtml).join("")
@@ -736,6 +767,92 @@ function itineraryHtml() {
     </div>`);
   }
   return out.join("");
+}
+
+/** Weather, with the kind of claim it is on the face of it.
+ *
+ *  A forecast and a seasonal norm carry the same-looking numbers and mean
+ *  entirely different things, so they never share a treatment: the forecast is
+ *  solid and coloured, the norm is dashed and grey and says outright that it is
+ *  not a forecast. */
+function weatherChipHtml(day) {
+  const w = day.weather;
+  if (!w || w.kind === "unavailable") {
+    return `<p class="wx none" data-wx="${day.date}">Weather unavailable</p>`;
+  }
+  const forecast = w.kind === "forecast";
+  return `<p class="wx ${forecast ? "forecast" : "norm"}" data-wx="${day.date}">
+    <span class="kind">${forecast ? "Forecast" : "Typical"}</span>
+    <b>${esc(weatherLine(w))}</b>
+    ${forecast ? "" : '<span class="kind">not a forecast</span>'}
+  </p>`;
+}
+
+function weatherLine(w) {
+  const bits = [];
+  if (w.high_c !== null && w.low_c !== null) bits.push(`${Math.round(w.high_c)}–${Math.round(w.low_c)}°C`);
+  const chance = w.kind === "forecast" ? w.precipitation_probability : w.precipitation_day_frequency;
+  if (chance !== null && chance !== undefined) {
+    bits.push(w.kind === "forecast"
+      ? `Rain ${Math.round(chance * 100)}%`
+      : `Rain on ~${Math.round(chance * 100)}% of comparable days`);
+  }
+  if (w.wind_kph) bits.push(`Wind ${Math.round(w.wind_kph)} km/h`);
+  return bits.join(" · ") || "no figures";
+}
+
+/** The detail behind the chip. For a norm this is where the method lives: the
+ *  years, the window and the dataset, so the number can be argued with. */
+function showWeather(day) {
+  const w = day.weather;
+  if (!w || w.kind === "unavailable") return;
+  const forecast = w.kind === "forecast";
+  const row = (label, value) => value === null || value === undefined || value === ""
+    ? "" : `<div class="wxrow"><b>${label}</b><span>${esc(String(value))}</span></div>`;
+  const pct = (v) => (v === null || v === undefined ? null : `${Math.round(v * 100)}%`);
+  // Sun events arrive in UTC. Rendering them in the *browser's* zone put
+  // sunset in Maui at 21:57, so without the destination's timezone they are
+  // not shown at all rather than shown wrong.
+  const zone = S.trip.brief.timezone;
+  const time = (iso) => (iso && zone)
+    ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: zone })
+    : null;
+
+  const body = `
+    <h3>${esc(dayLabel(day.date))}</h3>
+    <p class="sub">${forecast ? "Forecast" : "Typical weather — historical pattern, not a forecast"}</p>
+    <div class="wxrows">
+      ${row(forecast ? "High" : "Typical high", w.high_c !== null ? `${Math.round(w.high_c)}°C` : null)}
+      ${row(forecast ? "Low" : "Typical low", w.low_c !== null ? `${Math.round(w.low_c)}°C` : null)}
+      ${row("Condition", w.condition)}
+      ${forecast
+        ? row("Chance of rain", pct(w.precipitation_probability))
+        : row("Rain frequency", pct(w.precipitation_day_frequency))}
+      ${row(forecast ? "Rain" : "Typical rain when it rains",
+            w.precipitation_mm ? `${w.precipitation_mm} mm` : null)}
+      ${row("Wind", w.wind_kph ? `${Math.round(w.wind_kph)} km/h` : null)}
+      ${forecast ? row("UV index", w.uv_index) : ""}
+      ${forecast ? row("Sunrise", time(w.sunrise)) : ""}
+      ${forecast ? row("Sunset", time(w.sunset)) : ""}
+    </div>
+    ${w.norm ? `<div class="wxbasis">
+      <b>Based on</b><br>
+      ${w.norm.sample_year_start}–${w.norm.sample_year_end},
+      ±${w.norm.calendar_window_days} days around ${esc(dayLabel(day.date))},
+      ${w.norm.sample_count} observations.<br><br>
+      This is historical context, not a forecast for ${esc(day.date)}.
+    </div>
+    <p class="attribution">Historical weather: Open-Meteo / ${esc(w.norm.dataset)}</p>`
+    : `<p class="attribution">Source: ${esc(w.source || "unknown")}${
+        w.observed_at ? ` · looked up ${new Date(w.observed_at).toLocaleString()}` : ""}</p>`}
+  `;
+
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  bg.innerHTML = `<div class="modal">${body}
+    <div class="acts" style="margin-top:18px"><button class="btn ghost sm" data-close>Close</button></div></div>`;
+  bg.onclick = (e) => { if (e.target === bg || e.target.dataset.close !== undefined) bg.remove(); };
+  document.body.appendChild(bg);
 }
 
 /** The day's load, with every partial labelled as one. Rendered from the stored
@@ -1422,6 +1539,14 @@ function wireWorkspace() {
   on("decunbooked", (name) =>
     act(`/decisions/${name}/booked`, post({ booked: false }), (r) => r.summary));
 
+  const weatherBtn = $("getWeather");
+  if (weatherBtn) weatherBtn.onclick = () => act("/weather", post({}), (r) => r.summary);
+
+  on("wx", (date) => {
+    const day = (S.trip.itinerary.days || []).find((d) => d.date === date);
+    if (day) showWeather(day);
+  });
+
   on("why", (id) => showWhy(`/items/${id}/why`));
   on("whyentity", (id) => showWhy(`/entities/${id}/why`));
   on("lock", (id) => act(`/items/${id}/lock`, post({}), () => "Locked"));
@@ -1495,6 +1620,13 @@ async function showWhy(path) {
       <b>Explanation incomplete.</b><br>${why.missing.map(esc).join("<br>")}
     </div>`}
 
+    ${why.day_weather && why.day_weather.kind !== "unavailable" ? sec(
+      "Weather on the day", `<div class="versus">
+        <b>${why.day_weather.kind === "forecast" ? "Forecast" : "Typical for the season"}</b> ·
+        ${esc(weatherLine(why.day_weather))}
+        <br><span class="empty" style="font-size:11.5px">Context for the day. Nothing here was
+        ranked on the weather.</span>
+      </div>`) : ""}
     ${sec("The figures", figuresHtml(why.metrics))}
     ${sec("Why it was chosen", list(why.pros))}
     ${sec("Trade-off", list(why.cons))}
