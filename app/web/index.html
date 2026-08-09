@@ -2038,10 +2038,18 @@ async function send(text) {
        <details class="debug"><summary>${res.tools_called.length} tool call(s) · ${res.iterations} round(s)</summary>
        <ul>${res.tools_called.map((t) => `<li>${esc(t.name)} · ${t.milliseconds}ms</li>`).join("")}</ul></details></div>`);
     await refresh();
+    // Intake and decisions are derived state, and an agent turn is precisely
+    // the thing that changes them - recording a fact closes a gap, booking
+    // settles a decision. The button path (adopt) already reloads both; this
+    // path forgot, so a turn that made the brief confirmable left the screen
+    // showing a disabled confirm button the server would have honoured.
+    S.decisions = null;
+    await loadIntake();
     // A conversational change gets the same structured diff a button does.
     S.lastDiff = res.changed_state ? await diffSince(before) : null;
     if (res.changed_state && S.view === "overview") S.view = "itinerary";
     render(); await loadTrips();
+    if (S.view === "decisions") loadDecisions().then(render);
   } catch (err) {
     $("pending")?.remove();
     box.insertAdjacentHTML("beforeend", `<div class="banner">${esc(err.message)}</div>`);
