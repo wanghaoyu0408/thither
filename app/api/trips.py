@@ -8,6 +8,8 @@ from app.db.repository import TripNotFound, TripRepository
 from app.db.session import get_session
 from app.models.patch import PatchResult, TripPatch
 from app.models.trip import TripBrief, TripState, TripSummary, TripTraveler
+from app.services.conflict_service import detect_conflicts, unresolved_blocking
+from app.services.validation_service import validate_itinerary
 
 router = APIRouter(prefix="/trips", tags=["trips"])
 
@@ -88,6 +90,35 @@ async def patch_trip(
 @router.get("/{trip_id}/state", response_model=TripState)
 async def get_trip_state(trip_id: str, session: SessionDep) -> TripState:
     return await _load(session, trip_id)
+
+
+@router.get("/{trip_id}/overview")
+async def get_trip_overview(trip_id: str, session: SessionDep) -> dict[str, Any]:
+    """The trip plus everything derived from it, in one call.
+
+    Validation and preference conflicts are computed at read time rather than
+    stored (so they can never drift from the state behind them), which means a
+    client cannot get them by reading the trip. Rather than have the UI
+    reimplement either rule, they are derived here - one round trip, one source
+    of truth.
+    """
+    state = await _load(session, trip_id)
+    validation = validate_itinerary(state)
+
+    return {
+        "trip": state.model_dump(mode="json"),
+        "validation": {
+            "status": validation.status,
+            "issues": [issue.model_dump(mode="json") for issue in validation.issues],
+        },
+        "conflicts": [
+            conflict.model_dump(mode="json") for conflict in detect_conflicts(state)
+        ],
+        # What the trip is not allowed to claim yet, and why.
+        "blocking": [
+            conflict.model_dump(mode="json") for conflict in unresolved_blocking(state)
+        ],
+    }
 
 
 @router.get("/{trip_id}/events")

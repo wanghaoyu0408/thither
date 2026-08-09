@@ -1,0 +1,644 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Travel Agent</title>
+<style>
+/* The palette is deliberately quiet. This tool's job is to be believed, and a
+   loud interface makes an honest answer look like a sales pitch. */
+:root {
+  --bg: #f6f6f4;
+  --panel: #ffffff;
+  --panel-2: #fbfbfa;
+  --ink: #17181b;
+  --ink-2: #565961;
+  --ink-3: #8b8f98;
+  --line: #e3e3df;
+  --accent: #2f5d50;
+  --accent-soft: #e7efeb;
+  --user: #eceae4;
+  --error: #a3352b;
+  --error-soft: #fbeceb;
+  --warn: #8a5a12;
+  --warn-soft: #fbf3e4;
+  --info: #3d5878;
+  --info-soft: #eaeff5;
+  --ok: #2f6d4f;
+  --radius: 10px;
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14151a;
+    --panel: #1b1d23;
+    --panel-2: #202329;
+    --ink: #e9eaee;
+    --ink-2: #a9adb7;
+    --ink-3: #767b86;
+    --line: #2b2e36;
+    --accent: #7fd0b4;
+    --accent-soft: #1e2f2a;
+    --user: #262a32;
+    --error: #f2938a;
+    --error-soft: #2e1e1e;
+    --warn: #e8bd7a;
+    --warn-soft: #2c2418;
+    --info: #9dbbdd;
+    --info-soft: #1c2531;
+    --ok: #7fd0b4;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans",
+        "Hiragino Sans", "Microsoft YaHei", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+h1, h2, h3 { margin: 0; font-weight: 600; }
+
+/* --- shell --------------------------------------------------------------- */
+.app { display: flex; flex-direction: column; height: 100vh; }
+
+header {
+  display: flex; align-items: center; gap: 14px;
+  padding: 12px 18px; border-bottom: 1px solid var(--line);
+  background: var(--panel); flex: none;
+}
+.brand { display: flex; align-items: baseline; gap: 9px; }
+.brand h1 { font-size: 15px; letter-spacing: -0.01em; }
+.brand span { font-size: 12px; color: var(--ink-3); }
+.spacer { flex: 1; }
+
+.pill {
+  font: 11px/1 var(--mono); padding: 5px 9px; border-radius: 999px;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--ink-2);
+  white-space: nowrap;
+}
+.pill.live { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+
+main { flex: 1; display: grid; grid-template-columns: 236px 1fr 340px; min-height: 0; }
+@media (max-width: 1100px) { main { grid-template-columns: 200px 1fr; } aside.right { display: none; } }
+@media (max-width: 780px) {
+  main { grid-template-columns: 1fr; }
+  aside.left { display: none; }
+}
+
+aside, section.chat { min-height: 0; display: flex; flex-direction: column; }
+aside.left { border-right: 1px solid var(--line); background: var(--panel); }
+aside.right { border-left: 1px solid var(--line); background: var(--panel); }
+.scroll { overflow-y: auto; flex: 1; padding: 14px; }
+
+.eyebrow {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em;
+  color: var(--ink-3); font-weight: 600; margin: 0 0 8px;
+}
+.eyebrow + .eyebrow, .block + .block { margin-top: 20px; }
+
+/* --- trips list ---------------------------------------------------------- */
+.trip {
+  width: 100%; text-align: left; background: transparent; border: 1px solid transparent;
+  border-radius: var(--radius); padding: 9px 10px; margin-bottom: 3px; color: var(--ink);
+}
+.trip:hover { background: var(--panel-2); }
+.trip.on { background: var(--accent-soft); border-color: transparent; }
+.trip b { display: block; font-weight: 550; font-size: 13.5px; }
+.trip small { color: var(--ink-3); font-size: 11.5px; }
+
+form.new { display: grid; gap: 7px; }
+form.new input {
+  width: 100%; padding: 7px 9px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--panel-2);
+}
+form.new input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+
+.btn {
+  padding: 8px 12px; border-radius: 8px; border: 1px solid transparent;
+  background: var(--accent); color: var(--bg); font-weight: 550; font-size: 13.5px;
+}
+@media (prefers-color-scheme: dark) { .btn { color: #10221d; } }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn.ghost { background: transparent; border-color: var(--line); color: var(--ink-2); }
+
+/* --- chat ---------------------------------------------------------------- */
+section.chat { background: var(--bg); }
+.msgs { overflow-y: auto; flex: 1; padding: 22px 26px; }
+.msg { max-width: 760px; margin: 0 auto 20px; }
+.who {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em;
+  color: var(--ink-3); font-weight: 600; margin-bottom: 6px;
+}
+.bubble {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 13px 15px; white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.msg.user .bubble { background: var(--user); border-color: transparent; }
+.bubble strong { font-weight: 650; }
+
+/* the tool trace - what the agent actually did, not what it says it did */
+.trace { margin-top: 8px; }
+.trace summary {
+  cursor: pointer; font: 11.5px/1 var(--mono); color: var(--ink-3);
+  padding: 5px 0; list-style: none;
+}
+.trace summary::-webkit-details-marker { display: none; }
+.trace summary::before { content: "▸ "; }
+.trace[open] summary::before { content: "▾ "; }
+.trace ol { margin: 6px 0 0; padding: 0 0 0 18px; }
+.trace li { font: 11.5px/1.7 var(--mono); color: var(--ink-2); }
+.trace li.bad { color: var(--error); }
+
+.composer {
+  flex: none; border-top: 1px solid var(--line); background: var(--panel);
+  padding: 12px 26px 16px;
+}
+.composer .inner { max-width: 760px; margin: 0 auto; display: flex; gap: 9px; align-items: flex-end; }
+.composer textarea {
+  flex: 1; resize: none; min-height: 44px; max-height: 190px;
+  padding: 11px 13px; border-radius: var(--radius);
+  border: 1px solid var(--line); background: var(--panel-2);
+}
+.composer textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.hint { max-width: 760px; margin: 7px auto 0; font-size: 11.5px; color: var(--ink-3); }
+
+.thinking {
+  display: flex; align-items: center; gap: 9px;
+  font: 12px/1 var(--mono); color: var(--ink-2);
+}
+.dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
+  animation: pulse 1.15s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100% { opacity: 0.25; } 50% { opacity: 1; } }
+
+/* --- right rail ---------------------------------------------------------- */
+.card {
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 11px 12px; margin-bottom: 9px;
+}
+.card h3 { font-size: 12.5px; margin-bottom: 5px; }
+.card p { margin: 0; font-size: 12.5px; color: var(--ink-2); }
+.kv { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; padding: 3px 0; }
+.kv span:first-child { color: var(--ink-3); }
+.kv span:last-child { text-align: right; }
+
+.day { margin-bottom: 14px; }
+.day > b { font-size: 12.5px; display: block; }
+.day > small { color: var(--ink-3); font-size: 11.5px; }
+.item {
+  display: flex; gap: 9px; padding: 5px 0 5px 10px; margin-top: 5px;
+  border-left: 2px solid var(--line); font-size: 12.5px;
+}
+.item time { color: var(--ink-3); font: 11.5px/1.5 var(--mono); flex: none; width: 42px; }
+.item .t { color: var(--ink); }
+.flag {
+  display: inline-block; margin-top: 2px; font-size: 11px;
+  color: var(--warn); background: var(--warn-soft);
+  padding: 1px 6px; border-radius: 5px;
+}
+
+.issue {
+  border-left: 3px solid var(--line); padding: 5px 0 5px 9px;
+  margin-bottom: 7px; font-size: 12.5px;
+}
+.issue.error { border-color: var(--error); }
+.issue.warning { border-color: var(--warn); }
+.issue.info { border-color: var(--info); }
+.issue b { font: 11px/1.4 var(--mono); display: block; color: var(--ink-3); }
+.issue p { margin: 2px 0 0; color: var(--ink-2); }
+.issue .fix { color: var(--ink-3); font-size: 11.5px; margin-top: 3px; }
+
+.conflict { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 11px; margin-bottom: 9px; }
+.conflict.blocking { border-color: var(--error); background: var(--error-soft); }
+.conflict.material { background: var(--warn-soft); border-color: transparent; }
+.conflict .head { display: flex; gap: 7px; align-items: center; margin-bottom: 5px; }
+.tag {
+  font: 10px/1 var(--mono); text-transform: uppercase; letter-spacing: 0.05em;
+  padding: 3px 6px; border-radius: 4px; background: var(--panel); color: var(--ink-2);
+}
+.conflict > p { font-size: 12.5px; margin: 0; color: var(--ink); }
+/* Each person's stance, listed separately. Never merged into one number. */
+.stance { display: flex; gap: 7px; font-size: 12px; margin-top: 5px; }
+.stance b { flex: none; min-width: 44px; font-weight: 600; }
+.stance span { color: var(--ink-2); }
+.ways { margin: 7px 0 0; padding-left: 16px; font-size: 12px; color: var(--ink-2); }
+
+.empty { color: var(--ink-3); font-size: 12.5px; }
+.banner {
+  padding: 9px 11px; border-radius: var(--radius); font-size: 12.5px;
+  background: var(--error-soft); color: var(--error); margin-bottom: 12px;
+  border: 1px solid var(--error);
+}
+.welcome { max-width: 560px; margin: 8vh auto; text-align: center; color: var(--ink-2); }
+.welcome h2 { font-size: 19px; color: var(--ink); margin-bottom: 10px; }
+.welcome ul { text-align: left; display: inline-block; margin: 16px 0 0; padding-left: 18px; }
+.welcome li { margin-bottom: 5px; font-size: 13.5px; }
+.welcome code {
+  font: 12px var(--mono); background: var(--panel); padding: 2px 5px;
+  border-radius: 4px; border: 1px solid var(--line);
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="brand"><h1>Travel Agent</h1><span id="sub">no trip selected</span></div>
+    <div class="spacer"></div>
+    <div class="pill" id="revPill" hidden></div>
+    <div class="pill" id="validPill" hidden></div>
+  </header>
+
+  <main>
+    <aside class="left">
+      <div class="scroll">
+        <p class="eyebrow">Trips</p>
+        <div id="tripList"><p class="empty">None yet.</p></div>
+
+        <div class="block">
+          <p class="eyebrow">New trip</p>
+          <form class="new" id="newTrip">
+            <input name="title" placeholder="Title, e.g. Tokyo with friends" required>
+            <input name="city" placeholder="Destination city" required>
+            <div class="row2">
+              <input name="start" type="date" required>
+              <input name="end" type="date" required>
+            </div>
+            <div class="row2">
+              <input name="adults" type="number" min="1" max="16" value="2" title="Adults">
+              <input name="rooms" type="number" min="1" max="8" value="1" title="Rooms">
+            </div>
+            <button class="btn" type="submit">Create</button>
+          </form>
+        </div>
+      </div>
+    </aside>
+
+    <section class="chat">
+      <div class="msgs" id="msgs">
+        <div class="welcome">
+          <h2>Plan a trip by talking about it</h2>
+          <p>Create a trip on the left, then ask for what you want. Everything the agent
+             claims comes from a real tool call — you can see every one of them.</p>
+          <ul>
+            <li><code>Plan 5 days in Tokyo, we care about food</code></li>
+            <li><code>Day 3 is too busy, make it easier</code></li>
+            <li><code>Where should we stay?</code></li>
+            <li><code>Compare flights from SFO, SJC and OAK</code></li>
+          </ul>
+        </div>
+      </div>
+      <div class="composer">
+        <div class="inner">
+          <textarea id="input" rows="1" placeholder="Ask for a plan, or a change to one…"
+                    disabled></textarea>
+          <button class="btn" id="send" disabled>Send</button>
+        </div>
+        <p class="hint" id="hint">Create or pick a trip to start.</p>
+      </div>
+    </section>
+
+    <aside class="right">
+      <div class="scroll" id="rail">
+        <p class="empty">Pick a trip to see its state.</p>
+      </div>
+    </aside>
+  </main>
+</div>
+
+<script>
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+const state = { tripId: null, trip: null, overview: null, busy: false };
+
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
+  (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+async function api(path, options) {
+  const res = await fetch(path, {
+    headers: { "Content-Type": "application/json" },
+    ...options,
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { detail = (await res.json()).detail ?? detail; } catch { /* not json */ }
+    throw new Error(detail);
+  }
+  return res.status === 204 ? null : res.json();
+}
+
+/* --- trips --------------------------------------------------------------- */
+
+async function loadTrips() {
+  const trips = await api("/trips?limit=50");
+  const list = $("tripList");
+  if (!trips.length) { list.innerHTML = '<p class="empty">None yet.</p>'; return; }
+  list.innerHTML = trips.map((t) => `
+    <button class="trip ${t.trip_id === state.tripId ? "on" : ""}" data-id="${t.trip_id}">
+      <b>${esc(t.title || "Untitled")}</b>
+      <small>${esc(t.destination || "—")} · rev ${t.revision}</small>
+    </button>`).join("");
+  list.querySelectorAll(".trip").forEach((el) =>
+    el.onclick = () => selectTrip(el.dataset.id));
+}
+
+$("newTrip").onsubmit = async (event) => {
+  event.preventDefault();
+  const form = new FormData(event.target);
+  const button = event.target.querySelector("button");
+  button.disabled = true;
+  try {
+    const trip = await api("/trips", {
+      method: "POST",
+      body: JSON.stringify({
+        title: form.get("title"),
+        brief: {
+          destination: { city: form.get("city"), flexible: false },
+          dates: { start: form.get("start"), end: form.get("end") },
+          party: {
+            adults: Number(form.get("adults")) || 2,
+            rooms: Number(form.get("rooms")) || 1,
+          },
+        },
+      }),
+    });
+    event.target.reset();
+    await loadTrips();
+    await selectTrip(trip.trip_id);
+  } catch (error) {
+    alert("Could not create the trip: " + error.message);
+  } finally {
+    button.disabled = false;
+  }
+};
+
+async function selectTrip(id) {
+  state.tripId = id;
+  await Promise.all([loadTrips(), loadMessages(), refresh()]);
+  $("input").disabled = false;
+  $("send").disabled = false;
+  $("hint").textContent = "Enter to send · Shift+Enter for a new line";
+  $("input").focus();
+}
+
+async function refresh() {
+  const data = await api(`/trips/${state.tripId}/overview`);
+  state.trip = data.trip;
+  state.overview = data;
+
+  $("sub").textContent =
+    `${data.trip.brief.destination.city || "somewhere"} · ${data.trip.status}`;
+  const rev = $("revPill");
+  rev.hidden = false;
+  rev.textContent = `revision ${data.trip.revision}`;
+
+  const valid = $("validPill");
+  valid.hidden = false;
+  const blocking = data.blocking.length;
+  valid.textContent = blocking
+    ? `${blocking} blocking`
+    : `validation ${data.validation.status}`;
+  valid.className = "pill" + (blocking ? "" : " live");
+
+  renderRail();
+}
+
+/* --- messages ------------------------------------------------------------ */
+
+async function loadMessages() {
+  const messages = await api(`/trips/${state.tripId}/messages?limit=200`);
+  const box = $("msgs");
+  box.innerHTML = messages.length
+    ? messages.map((m) => bubble(m.role, m.content)).join("")
+    : `<div class="welcome"><h2>Nothing said yet</h2>
+       <p>Tell the agent what you want. It will search real places, check real
+          opening hours and real travel times before it answers.</p></div>`;
+  box.scrollTop = box.scrollHeight;
+}
+
+function bubble(role, content, trace) {
+  return `<div class="msg ${role}">
+    <div class="who">${role === "user" ? "You" : "Agent"}</div>
+    <div class="bubble">${esc(content)}</div>
+    ${trace || ""}
+  </div>`;
+}
+
+function traceHtml(response) {
+  const tools = response.tools_called || [];
+  const bits = [];
+  if (response.changed_state) {
+    bits.push(`revision ${response.revision_before} → ${response.revision_after}`);
+  } else {
+    bits.push("nothing changed");
+  }
+  bits.push(`${response.iterations} round(s)`);
+  if (response.patches_applied) bits.push(`${response.patches_applied} patch(es)`);
+  if (response.hit_iteration_limit) bits.push("cut short");
+
+  const steps = tools.map((t) =>
+    `<li class="${t.ok ? "" : "bad"}">${esc(t.name)} · ${t.milliseconds}ms${
+      t.detail ? " · " + esc(t.detail) : ""}</li>`).join("");
+
+  return `<details class="trace">
+    <summary>${esc(bits.join(" · "))}${tools.length ? ` · ${tools.length} tool call(s)` : ""}</summary>
+    <ol>${steps || "<li>no tools were needed</li>"}</ol>
+  </details>`;
+}
+
+async function send(text) {
+  if (state.busy || !text.trim()) return;
+  state.busy = true;
+  $("input").disabled = true;
+  $("send").disabled = true;
+
+  const box = $("msgs");
+  if (box.querySelector(".welcome")) box.innerHTML = "";
+  box.insertAdjacentHTML("beforeend", bubble("user", text));
+
+  // A turn genuinely takes minutes - it is calling Google, Duffel, SerpApi and
+  // an LLM. Showing the clock is the difference between "working" and "stuck".
+  const started = Date.now();
+  box.insertAdjacentHTML("beforeend",
+    `<div class="msg" id="pending"><div class="who">Agent</div>
+     <div class="bubble"><div class="thinking"><span class="dot"></span>
+     <span id="elapsed">searching, checking and planning… 0s</span></div></div></div>`);
+  box.scrollTop = box.scrollHeight;
+  const ticker = setInterval(() => {
+    const el = $("elapsed");
+    if (el) el.textContent =
+      `searching, checking and planning… ${Math.round((Date.now() - started) / 1000)}s`;
+  }, 1000);
+
+  try {
+    const response = await api(`/trips/${state.tripId}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ message: text, history_turns: 6 }),
+    });
+    $("pending")?.remove();
+    box.insertAdjacentHTML("beforeend",
+      bubble("assistant", response.reply, traceHtml(response)));
+    if (response.error) {
+      box.insertAdjacentHTML("beforeend",
+        `<div class="msg"><div class="banner">${esc(response.error)}</div></div>`);
+    }
+    await refresh();
+    await loadTrips();
+  } catch (error) {
+    $("pending")?.remove();
+    box.insertAdjacentHTML("beforeend",
+      `<div class="msg"><div class="banner">${esc(error.message)}</div></div>`);
+  } finally {
+    clearInterval(ticker);
+    state.busy = false;
+    $("input").disabled = false;
+    $("send").disabled = false;
+    $("input").focus();
+    box.scrollTop = box.scrollHeight;
+  }
+}
+
+$("send").onclick = () => { const box = $("input"); const v = box.value; box.value = ""; autosize(); send(v); };
+$("input").addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    $("send").click();
+  }
+});
+function autosize() {
+  const box = $("input");
+  box.style.height = "auto";
+  box.style.height = Math.min(box.scrollHeight, 190) + "px";
+}
+$("input").addEventListener("input", autosize);
+
+/* --- the right rail ------------------------------------------------------ */
+
+function nameOf(travelerId) {
+  const person = (state.trip.travelers || []).find((t) => t.traveler_id === travelerId);
+  return person ? person.name : travelerId;
+}
+
+function clock(iso) {
+  if (!iso) return "";
+  const at = new Date(iso);
+  return String(at.getHours()).padStart(2, "0") + ":" +
+         String(at.getMinutes()).padStart(2, "0");
+}
+
+function renderRail() {
+  const { trip, validation, conflicts, blocking } = state.overview;
+  const out = [];
+
+  if (blocking.length) {
+    out.push(`<div class="banner">This trip cannot be called ready:
+      ${blocking.length} unresolved blocking conflict(s).</div>`);
+  }
+
+  out.push('<p class="eyebrow">Trip</p><div class="card">');
+  out.push(kv("Destination", trip.brief.destination.city || "—"));
+  out.push(kv("Dates", `${trip.brief.dates.start || "?"} → ${trip.brief.dates.end || "?"}`));
+  out.push(kv("Party", `${trip.brief.party.adults} adult(s), ${trip.brief.party.rooms} room(s)`));
+  out.push(kv("Places known", String(Object.keys(trip.entities).length)));
+  out.push("</div>");
+
+  if ((trip.travelers || []).length) {
+    out.push('<p class="eyebrow">Travellers</p><div class="card">');
+    out.push(trip.travelers.map((t) => {
+      const diet = t.preferences?.food?.dietary_restrictions || [];
+      return kv(t.name, diet.length ? diet.join(", ") : (t.preferences ? "no restrictions" : "no preferences set"));
+    }).join(""));
+    out.push("</div>");
+  }
+
+  // Itinerary
+  out.push('<p class="eyebrow">Itinerary</p>');
+  const days = trip.itinerary.days || [];
+  if (!days.length) {
+    out.push('<p class="empty">Nothing planned yet. Ask for a plan.</p>');
+  } else {
+    for (const day of days) {
+      out.push(`<div class="day"><b>${esc(day.date)}</b>`);
+      if (day.theme) out.push(`<small>${esc(day.theme)}</small>`);
+      for (const item of day.items || []) {
+        const entity = trip.entities[item.entity_id];
+        // The tri-state, shown as it is stored: unknown is not a denial.
+        const diet = entity && entity.serves_vegetarian === "unknown"
+          && anyoneIsRestricted()
+          ? '<span class="flag">diet unverified</span>' : "";
+        out.push(`<div class="item">
+          <time>${clock(item.start_at)}</time>
+          <div><div class="t">${esc(item.title)}</div>${diet}</div>
+        </div>`);
+      }
+      out.push("</div>");
+    }
+  }
+
+  // Conflicts, each side stated separately.
+  if (conflicts.length) {
+    out.push('<p class="eyebrow">Where you disagree</p>');
+    for (const conflict of conflicts) {
+      out.push(`<div class="conflict ${esc(conflict.severity)}">
+        <div class="head"><span class="tag">${esc(conflict.kind)}</span>
+        <span class="tag">${esc(conflict.severity)}</span></div>
+        <p>${esc(conflict.summary)}</p>
+        ${Object.entries(conflict.positions || {}).map(([id, stance]) =>
+          `<div class="stance"><b>${esc(nameOf(id))}</b><span>${esc(stance)}</span></div>`).join("")}
+        ${(conflict.resolution_options || []).length
+          ? `<ul class="ways">${conflict.resolution_options.map((o) =>
+              `<li>${esc(o)}</li>`).join("")}</ul>` : ""}
+      </div>`);
+    }
+  }
+
+  // Validation. Errors and warnings first; the info tail is collapsed.
+  const issues = validation.issues || [];
+  const loud = issues.filter((i) => i.severity !== "info");
+  const quiet = issues.filter((i) => i.severity === "info");
+  out.push('<p class="eyebrow">Checks</p>');
+  if (!issues.length) {
+    out.push('<p class="empty">Nothing to flag.</p>');
+  } else {
+    out.push(loud.map(issueHtml).join(""));
+    if (quiet.length) {
+      out.push(`<details class="trace"><summary>${quiet.length} note(s)</summary>
+        <div style="margin-top:7px">${quiet.map(issueHtml).join("")}</div></details>`);
+    }
+  }
+
+  $("rail").innerHTML = out.join("");
+}
+
+function anyoneIsRestricted() {
+  return (state.trip.travelers || []).some(
+    (t) => (t.preferences?.food?.dietary_restrictions || []).length);
+}
+
+function issueHtml(issue) {
+  return `<div class="issue ${esc(issue.severity)}">
+    <b>${esc(issue.type)}</b>
+    <p>${esc(issue.message)}</p>
+    ${issue.suggested_fix ? `<p class="fix">→ ${esc(issue.suggested_fix)}</p>` : ""}
+  </div>`;
+}
+
+function kv(label, value) {
+  return `<div class="kv"><span>${esc(label)}</span><span>${esc(value)}</span></div>`;
+}
+
+/* --- boot ---------------------------------------------------------------- */
+loadTrips().catch((error) =>
+  $("tripList").innerHTML = `<p class="empty">Could not reach the server: ${esc(error.message)}</p>`);
+</script>
+</body>
+</html>

@@ -1,11 +1,15 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 
 from app.api import chat_router, profiles_router, tools_router, trips_router
 from app.config import get_settings
 from app.db.session import create_all, dispose_engine
+
+WEB_ROOT = Path(__file__).parent / "web"
 
 
 @asynccontextmanager
@@ -37,3 +41,14 @@ app.include_router(chat_router)
 @app.get("/health", tags=["meta"])
 async def health() -> dict[str, str]:
     return {"status": "ok", "milestone": "1"}
+
+
+@app.get("/", include_in_schema=False)
+async def home() -> FileResponse:
+    """The web UI.
+
+    One self-contained file with no CDN, so the interface works on the same
+    terms as the rest of this project: offline, with nothing fetched from
+    somewhere it cannot vouch for.
+    """
+    return FileResponse(WEB_ROOT / "index.html")

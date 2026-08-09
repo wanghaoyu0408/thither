@@ -56,7 +56,13 @@ The offline test suite needs no key at all.
 .venv/Scripts/python.exe -m uvicorn app.main:app --reload
 ```
 
-Then open http://127.0.0.1:8000/docs.
+Then open **http://127.0.0.1:8000** for the web UI, or `/docs` for the raw API.
+
+The UI is one self-contained file (`app/web/index.html`) with no CDN, on the same terms as
+the rest of the project: nothing fetched from a host it cannot vouch for. It shows the trip,
+the itinerary, the validation checks, every preference conflict with each person's position
+stated separately — and, under each reply, the actual tool calls the agent made. A turn takes
+minutes because it is really calling Google, Duffel, SerpApi and an LLM, so it shows a clock.
 
 ### Test
 
@@ -64,7 +70,7 @@ Then open http://127.0.0.1:8000/docs.
 .venv/Scripts/python.exe -m pytest -q
 ```
 
-598 tests, no network, no API keys. The `tests/scenarios/` files map one-to-one onto each
+602 tests, no network, no API keys. The `tests/scenarios/` files map one-to-one onto each
 milestone's acceptance criteria.
 
 Contract tests against the real Google APIs are opt-in, since they cost quota:
