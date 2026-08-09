@@ -11,7 +11,7 @@ from app.models.common import utcnow
 from app.models.trip import TripState, TripTraveler
 from app.services.conflict_service import detect_conflicts
 from app.services.decision_service import label_for
-from app.services.intake_service import missing_blocking, research_allowed
+from app.services.intake_service import missing_blocking, research_allowed, today_at
 from app.services.opening_hours import describe
 
 MAX_ENTITIES = 60
@@ -112,11 +112,14 @@ def summarize(state: TripState) -> dict[str, Any]:
         "trip_id": state.trip_id,
         "revision": state.revision,
         "status": state.status,
-        # What day it is. Without this the model cannot turn "8/10" into a year
-        # or "next October" into a window, and has to ask for dates the
-        # traveller has already given - which is what it did on the first live
-        # run of intake.
-        "today": utcnow().date().isoformat(),
+        # What day it is, read from the clock on every turn - never written into
+        # the prompt, which would freeze it at whatever day the prompt was
+        # edited. Without it the model cannot turn "8/10" into a year, and on
+        # the first live run of intake it asked the traveller which year they
+        # meant about a date two days away.
+        "today": today_at(state).isoformat(),
+        "now_utc": utcnow().isoformat(),
+        "date_zone": state.brief.timezone or "UTC",
         "brief": {
             "destination": state.brief.destination.city or state.brief.destination.country,
             "start": state.brief.dates.start.isoformat() if state.brief.dates.start else None,
@@ -134,7 +137,8 @@ def summarize(state: TripState) -> dict[str, Any]:
             "status": state.intake.status,
             "research_allowed": research_allowed(state),
             "still_needed": [
-                {"field": gap.field, "why": gap.why} for gap in missing_blocking(state)
+                {"requirement_id": gap.requirement_id, "field": gap.field, "why": gap.why}
+                for gap in missing_blocking(state)
             ],
             "scope": state.brief.scope.model_dump(),
             "questions_awaiting_answer": [

@@ -45,7 +45,12 @@ from app.services.hotel_service import (
 from app.services.hotel_service import (
     build_hotel_decision,
 )
-from app.services.intake_service import missing_blocking, research_allowed
+from app.services.intake_service import (
+    missing_blocking,
+    research_allowed,
+    resolve_date,
+    today_at,
+)
 from app.services.itinerary_service import build_itinerary, replan_day
 from app.services.preference_service import (
     diff_profile,
@@ -169,12 +174,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                                 "type": "string",
                                 "enum": ["single_choice", "multi_choice", "text", "dates"],
                             },
-                            "fills": {
-                                "type": ["string", "null"],
+                            "requirement_id": {
+                                "type": "string",
                                 "description": (
-                                    "The brief path this answers, e.g. /brief/dates. Always "
-                                    "set it. A question about anything not currently "
-                                    "blocking planning is dropped."
+                                    "Which outstanding requirement this asks about, copied "
+                                    "from `intake.still_needed` in the state. A question "
+                                    "that does not name one is not asked."
                                 ),
                             },
                             "choices": {
@@ -191,7 +196,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                                 },
                             },
                         },
-                        "required": ["question", "kind"],
+                        "required": ["question", "kind", "requirement_id"],
                         "additionalProperties": False,
                     },
                 }
@@ -1143,9 +1148,23 @@ def _commit_now(operations: list[dict[str, Any]], reason: str) -> dict[str, Any]
     }
 
 
+_DATE_FIELDS = ("start_date", "end_date", "earliest_date", "latest_date")
+
+
 def _brief_ops(state: TripState, args: dict[str, Any]) -> list[dict[str, Any]]:
     """Only the fields actually supplied. Absence is not an instruction to clear."""
     operations: list[dict[str, Any]] = []
+
+    # Dates get their year worked out here, against the clock, so a year the
+    # model was unsure about is never a question the traveller has to answer.
+    today = today_at(state)
+    args = dict(args)
+    for name in _DATE_FIELDS:
+        raw = args.get(name)
+        if isinstance(raw, str) and raw.strip():
+            resolved = resolve_date(raw, today)
+            args[name] = resolved.isoformat() if resolved else None
+
     simple: dict[str, str] = {
         "destination_city": "/brief/destination/city",
         "destination_region": "/brief/destination/region",
@@ -1193,6 +1212,22 @@ async def _update_trip_brief(context: ToolContext, args: dict[str, Any]) -> dict
     brief was only ever editable from the web form - so an intake conversation
     could ask perfect questions and lose every answer at the end of the turn.
     """
+    # A country is not a destination. "United States" was recorded as the
+    # destination of a Maui trip, which leaves nothing for the hotel and area
+    # services - both read brief.destination.city - to work with.
+    named = args.get("destination_city") or args.get("destination_region")
+    already = context.state.brief.destination
+    if args.get("destination_country") and not (named or already.city or already.region):
+        return {
+            "error": "a country on its own is not a destination",
+            "hint": (
+                "Put the place they named in destination_city, or destination_region if it "
+                "is wider than a city - Maui, the Amalfi Coast. Country goes alongside it, "
+                "never instead of it. If they have not named anywhere, leave the "
+                "destination open and set destination_flexible."
+            ),
+        }
+
     operations = _brief_ops(context.state, args)
     if not operations:
         return {"error": "nothing to record", "hint": "pass the facts the traveller gave you"}
@@ -1238,20 +1273,22 @@ async def _ask_clarifications(context: ToolContext, args: dict[str, Any]) -> dic
             ),
         }
 
-    # Drop questions about things we are not actually waiting on. A question
-    # that names the field it fills can be checked against the outstanding gaps;
-    # one that names nothing is kept, because we cannot judge it. The live run
-    # of an undecided-destination trip asked for the party size alongside two
-    # real gaps - reasonable-looking, and exactly the interruption the traveller
-    # was promised they would not get.
-    outstanding = [gap.field for gap in gaps]
-    warranted = [
-        raw
-        for raw in asked
-        if not raw.get("fills")
-        or any(field.startswith(raw["fills"]) or raw["fills"].startswith(field)
-               for field in outstanding)
-    ]
+    # Every question has to name an outstanding requirement. Exact match on a
+    # stable id, not a prefix test on a JSON pointer: a prefix test cannot tell
+    # "/brief/party" from "/brief/party/adults" and is wrong in one direction or
+    # the other. The live run of an undecided-destination trip asked for the
+    # party size alongside two real gaps - reasonable-looking, and exactly the
+    # interruption the traveller was promised they would not get.
+    outstanding = {gap.requirement_id: gap for gap in gaps}
+    warranted = [raw for raw in asked if raw.get("requirement_id") in outstanding]
+    if not warranted:
+        return {
+            "asked": 0,
+            "error": "every question must name an outstanding requirement_id",
+            "outstanding": [
+                {"requirement_id": gap.requirement_id, "why": gap.why} for gap in gaps
+            ],
+        }
 
     existing = {question.question for question in context.state.intake.questions}
     staged: list[dict[str, Any]] = []
@@ -1262,7 +1299,8 @@ async def _ask_clarifications(context: ToolContext, args: dict[str, Any]) -> dic
         question = ClarificationQuestion(
             question=text,
             kind=raw.get("kind", "text"),
-            fills=raw.get("fills"),
+            requirement_id=raw["requirement_id"],
+            fills=outstanding[raw["requirement_id"]].field,
             choices=[
                 ClarificationChoice(
                     value=choice.get("value", choice.get("label", "")),

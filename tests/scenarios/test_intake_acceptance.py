@@ -212,7 +212,9 @@ async def test_nothing_is_asked_once_nothing_is_blocking():
     await fully_specified(context)
 
     reply = await _ask_clarifications(
-        context, {"questions": [{"question": "Which area is your hotel in?", "kind": "text"}]}
+        context,
+        {"questions": [{"question": "Which area is your hotel in?", "kind": "text",
+                       "requirement_id": "lodging_area"}]},
     )
 
     assert reply["asked"] == 0
@@ -230,8 +232,13 @@ async def test_a_question_about_something_not_blocking_is_dropped():
         context,
         {
             "questions": [
-                {"question": "When are you going?", "kind": "dates", "fills": "/brief/dates"},
-                {"question": "How many of you?", "kind": "text", "fills": "/brief/party"},
+                {
+                    "question": "When are you going?",
+                    "kind": "dates",
+                    "requirement_id": "dates",
+                },
+                # Party size is not an outstanding requirement, so this is dropped.
+                {"question": "How many of you?", "kind": "text", "requirement_id": "party"},
             ]
         },
     )
@@ -247,17 +254,27 @@ async def test_questions_are_asked_once_and_capped_at_three():
         context,
         {
             "questions": [
-                {"question": "When are you going?", "kind": "dates", "fills": "/brief/dates"},
                 {
-                    "question": "Are flights and a hotel already booked?",
+                    "question": "When are you going?",
+                    "kind": "dates",
+                    "requirement_id": "dates",
+                },
+                {
+                    "question": "Shall I look for flights?",
                     "kind": "single_choice",
+                    "requirement_id": "scope.flights",
                     "choices": [
-                        {"value": "both", "label": "Both booked"},
-                        {"value": "neither", "label": "Neither - please look"},
+                        {"value": "plan", "label": "Please look"},
+                        {"value": "already_arranged", "label": "Already booked"},
                     ],
                 },
-                {"question": "What is the budget?", "kind": "text"},
-                {"question": "A fourth one", "kind": "text"},
+                {
+                    "question": "And a hotel?",
+                    "kind": "single_choice",
+                    "requirement_id": "scope.lodging",
+                    "choices": [{"value": "plan", "label": "Please look"}],
+                },
+                {"question": "A fourth one", "kind": "text", "requirement_id": "dates"},
             ]
         },
     )
@@ -269,7 +286,9 @@ async def test_questions_are_asked_once_and_capped_at_three():
         ClarificationQuestion.model_validate(op["value"]) for op in staged
     )
     again = await _ask_clarifications(
-        context, {"questions": [{"question": "When are you going?", "kind": "dates"}]}
+        context,
+        {"questions": [{"question": "When are you going?", "kind": "dates",
+                       "requirement_id": "dates"}]},
     )
 
     assert "__patches__" not in again, "the same question must not be asked twice"
@@ -307,7 +326,9 @@ async def test_intake_writes_itself_rather_than_waiting_to_be_applied(session):
         context, {"destination_city": "Maui", "adults": 2, "scope": {"flights": "already_arranged"}}
     )
     asked = await _ask_clarifications(
-        context, {"questions": [{"question": "When are you going?", "kind": "dates"}]}
+        context,
+        {"questions": [{"question": "When are you going?", "kind": "dates",
+                       "requirement_id": "dates"}]},
     )
 
     paths = [op["path"] for op in recorded["__patches__"][0]["operations"]]

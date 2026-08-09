@@ -17,11 +17,14 @@ with a plausible value - an unknown party size stays unknown here, and the
 flight search refuses rather than pricing a trip for an invented passenger.
 """
 
-from datetime import date
+import re
+from datetime import date, datetime
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel
 
+from app.models.common import utcnow
 from app.models.intake import SCOPE_LABELS, SHOPPABLE, ClarificationQuestion
 from app.models.trip import TripState
 
@@ -29,8 +32,15 @@ GapKind = Literal["dates", "scope", "origin"]
 
 
 class Gap(BaseModel):
-    """A missing fact, and why it stops us."""
+    """A missing fact, and why it stops us.
 
+    `requirement_id` is the stable name a question has to cite. Matching on the
+    JSON pointer instead meant guessing whether "/brief/party" overlapped
+    "/brief/party/adults", and a prefix test that is wrong in either direction
+    either drops a real question or lets an unnecessary one through.
+    """
+
+    requirement_id: str
     kind: GapKind
     field: str
     why: str
@@ -76,6 +86,7 @@ def missing_blocking(state: TripState) -> list[Gap]:
     if not (brief.dates.decided or brief.dates.bounded):
         gaps.append(
             Gap(
+                requirement_id="dates",
                 kind="dates",
                 field="/brief/dates",
                 why="nothing can be scheduled, priced or checked for opening hours without dates",
@@ -89,6 +100,7 @@ def missing_blocking(state: TripState) -> list[Gap]:
         if brief.scope.state_of(part) == "unknown":
             gaps.append(
                 Gap(
+                    requirement_id=f"scope.{part}",
                     kind="scope",
                     field=f"/brief/scope/{part}",
                     why=f"we do not know whether to look for {SCOPE_LABELS[part].lower()}",
@@ -102,6 +114,7 @@ def missing_blocking(state: TripState) -> list[Gap]:
     ):
         gaps.append(
             Gap(
+                requirement_id="origin",
                 kind="origin",
                 field="/brief/origin",
                 why="flights cannot be searched without knowing where the trip starts",
@@ -109,6 +122,58 @@ def missing_blocking(state: TripState) -> list[Gap]:
         )
 
     return gaps
+
+
+# --- what day it is ----------------------------------------------------------
+
+
+def today_at(state: TripState) -> date:
+    """The current date the trip is planned against.
+
+    Local at the destination when the trip knows its timezone, UTC otherwise.
+    Read at call time from the clock - never stored, never written into the
+    prompt - so a trip planned on one day and reopened on another resolves
+    "8/10" against the right year both times.
+    """
+    zone = state.brief.timezone
+    if zone:
+        try:
+            return datetime.now(ZoneInfo(zone)).date()
+        except ZoneInfoNotFoundError:
+            pass
+    return utcnow().date()
+
+
+_PARTIAL = re.compile(r"^\s*(\d{1,2})\s*[/-]\s*(\d{1,2})\s*$")
+
+
+def resolve_date(value: str, today: date) -> date | None:
+    """An ISO date, or a month/day with the year worked out from `today`.
+
+    A date without a year is not ambiguous to a person - "8/10" said in August
+    means the one coming up - but it was ambiguous enough to the model that it
+    asked the traveller which year they meant, about a date two days away. The
+    rule is fixed here so nobody has to ask: the next occurrence on or after
+    today.
+    """
+    text = (value or "").strip()
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        pass
+
+    match = _PARTIAL.match(text)
+    if not match:
+        return None
+    month, day = int(match.group(1)), int(match.group(2))
+    for year in (today.year, today.year + 1):
+        try:
+            candidate = date(year, month, day)
+        except ValueError:
+            return None
+        if candidate >= today:
+            return candidate
+    return None
 
 
 def has_research(state: TripState) -> bool:

@@ -89,8 +89,12 @@ class ClarificationQuestion(BaseModel):
     question: str
     kind: QuestionKind = "text"
 
-    # The brief path this fills, e.g. "/brief/dates" or "/brief/party". Used to
-    # show the answer next to what it changed; never used to write blindly.
+    # Which outstanding requirement this is for - "dates", "scope.flights".
+    # A question that does not name one we are waiting on is not asked.
+    requirement_id: str | None = None
+
+    # The brief path it fills, e.g. "/brief/dates". For showing the answer next
+    # to what it changed; never used to write blindly.
     fills: str | None = None
 
     choices: list[ClarificationChoice] = []
