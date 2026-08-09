@@ -7,10 +7,10 @@ check, so two clients patching the same base cannot both win.
 
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import TravelerProfileRow, TripEventRow, TripRow
+from app.db.models import TravelerProfileRow, TripEventRow, TripMessageRow, TripRow
 from app.models.common import utcnow
 from app.models.patch import PatchError, PatchOperation, PatchResult, TripPatch
 from app.models.traveler import TravelerProfile
@@ -146,6 +146,24 @@ class TripRepository:
         if row is None:
             raise TripNotFound(trip_id)
         return TripState.model_validate(row.state)
+
+    async def delete(self, trip_id: str) -> None:
+        """Remove a trip and everything that hangs off it, in one commit.
+
+        The cascade is written out rather than trusted to the schema: SQLite
+        only honours `ON DELETE CASCADE` when a pragma nobody here sets is on,
+        and a delete that silently leaves messages and events behind is worse
+        than one that fails. Events go too - an audit trail for a trip nobody
+        can open any more is not an audit trail.
+        """
+        if await self._session.get(TripRow, trip_id) is None:
+            raise TripNotFound(trip_id)
+        await self._session.execute(
+            delete(TripMessageRow).where(TripMessageRow.trip_id == trip_id)
+        )
+        await self._session.execute(delete(TripEventRow).where(TripEventRow.trip_id == trip_id))
+        await self._session.execute(delete(TripRow).where(TripRow.id == trip_id))
+        await self._session.commit()
 
     async def list_trips(self, limit: int = 50, offset: int = 0) -> list[TripState]:
         result = await self._session.execute(

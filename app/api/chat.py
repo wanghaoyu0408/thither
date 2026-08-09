@@ -11,6 +11,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent import run_control
+from app.agent.run_control import RunInProgress
 from app.agent.runner import AgentRunner
 from app.config import get_settings
 from app.db.models import TripMessageRow
@@ -60,14 +62,29 @@ async def send_message(trip_id: str, payload: ChatRequest, session: SessionDep) 
 
     history = await _load_history(session, trip_id, payload.history_turns)
 
-    async with toolbox:
-        runner = AgentRunner(
-            OpenAIClient(settings.openai_api_key, settings.openai_model),
-            toolbox,
-            session,
-            settings=settings,
-        )
-        run = await runner.run(state, payload.message, history=history)
+    # One turn per trip at a time. Two interleaved turns would race each
+    # other's revisions; the browser's busy flag guards one tab, this guards
+    # the rest. The registry entry is also how a Stop reaches the runner and
+    # how the progress endpoint sees inside the turn.
+    try:
+        control = run_control.begin(trip_id)
+    except RunInProgress:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "a turn is already running for this trip - stop it or wait for it to finish",
+        ) from None
+
+    try:
+        async with toolbox:
+            runner = AgentRunner(
+                OpenAIClient(settings.openai_api_key, settings.openai_model),
+                toolbox,
+                session,
+                settings=settings,
+            )
+            run = await runner.run(state, payload.message, history=history, control=control)
+    finally:
+        run_control.finish(trip_id)
 
     user_message = ChatMessage(role="user", content=payload.message)
     reply_message = ChatMessage(role="assistant", content=run.reply)
@@ -109,10 +126,41 @@ async def send_message(trip_id: str, payload: ChatRequest, session: SessionDep) 
         ],
         iterations=run.iterations,
         hit_iteration_limit=run.hit_iteration_limit,
+        cancelled=run.cancelled,
         input_tokens=run.input_tokens,
         output_tokens=run.output_tokens,
         error=run.error,
     )
+
+
+@router.get("/{trip_id}/run")
+async def read_run(trip_id: str) -> dict[str, Any]:
+    """What the current turn is doing, for the screen to show while it waits.
+
+    Pure telemetry - tool names and timings, never trip state. When nothing is
+    running it says so rather than 404ing, because "no turn right now" is an
+    answer the poller needs, not an error it should handle.
+    """
+    control = run_control.get(trip_id)
+    if control is None:
+        return {"running": False}
+    return control.snapshot()
+
+
+@router.post("/{trip_id}/run/cancel")
+async def cancel_run(trip_id: str) -> dict[str, Any]:
+    """Ask the running turn to stop at its next safe point.
+
+    Not a kill: an in-flight commit is never torn, so the stop lands between
+    model rounds or between tool calls. Cancelling when nothing is running is
+    a no-op that says so - the turn may simply have finished first, and that
+    race is normal, not a fault.
+    """
+    control = run_control.get(trip_id)
+    if control is None:
+        return {"running": False, "cancelling": False}
+    control.cancel()
+    return {"running": True, "cancelling": True}
 
 
 @router.get("/{trip_id}/messages", response_model=list[ChatMessage])

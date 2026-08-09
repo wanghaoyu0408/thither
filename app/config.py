@@ -26,9 +26,9 @@ class Settings(BaseSettings):
 
     # The key the *browser* loads Maps JavaScript with. A page publishes every
     # key it loads, so this is deliberately a separate setting: the server key
-    # above can stay unrestricted for Places and Routes, while this one can be
-    # locked to an HTTP referrer. Left unset it falls back to the server key,
-    # which is fine on localhost and not fine anywhere reachable - a scraped
+    # above stays private for Places and Routes, while this one is meant to be
+    # locked to an HTTP referrer. Left unset the map and place photos simply do
+    # not load - the page never falls back to the server key, because a scraped
     # key spends the same quota. See `maps_browser_key`.
     maps_browser_api_key: str | None = None
 
@@ -98,21 +98,13 @@ class Settings(BaseSettings):
     def maps_browser_key(self) -> str | None:
         """The key to hand the page, or None if the map should not be offered.
 
-        One resolution point, so nothing else has to remember the fallback.
+        This used to fall back to the server key so the map worked on localhost
+        with one key configured. That published the Places and Routes budget to
+        anyone who read the page. Now the page gets a key only when one was set
+        aside for it: no browser key, no map - a dark map is a smaller loss
+        than a spent quota.
         """
-        return self.maps_browser_api_key or self.google_maps_api_key
-
-    @property
-    def maps_key_is_shared_with_the_server(self) -> bool:
-        """True when the page publishes the same key the server plans with.
-
-        Worth naming rather than inferring: it is the difference between a key
-        that leaks a map and a key that leaks the Places and Routes budget.
-        """
-        return bool(
-            self.google_maps_api_key
-            and not self.maps_browser_api_key
-        )
+        return self.maps_browser_api_key
 
     @property
     def sync_database_url(self) -> str:

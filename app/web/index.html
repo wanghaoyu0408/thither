@@ -20,7 +20,7 @@
 
   /* Pane sizes. Written back by the drag handles and restored from
      localStorage on load, so the shape of the window is the user's, not ours. */
-  --left: 250px; --right: 360px; --chat: 260px; --gw: 5px;
+  --left: 250px; --right: 400px; --chat: 260px; --gw: 5px;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -117,9 +117,10 @@ form.new { flex: none; padding: 0 12px 12px; }
 
 /* --- trips ---------------------------------------------------------------- */
 .trip {
-  display: block; width: 100%; text-align: left; border-radius: var(--r-sm);
-  padding: 7px 10px; margin-bottom: 1px; color: var(--ink);
-  border-left: 3px solid transparent; line-height: 1.35;
+  position: relative; display: block; width: 100%; text-align: left;
+  border-radius: var(--r-sm); padding: 7px 26px 7px 10px; margin-bottom: 1px;
+  color: var(--ink); border-left: 3px solid transparent; line-height: 1.35;
+  cursor: pointer;
 }
 .trip:hover { background: var(--panel-2); }
 /* A rule rather than a filled block: with a list this long, twenty filled
@@ -133,6 +134,22 @@ form.new { flex: none; padding: 0 12px 12px; }
   display: block; color: var(--ink-3); font-size: 11.5px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+/* Delete is there when you look for it, not shouting from every row. */
+.trip .del {
+  position: absolute; top: 6px; right: 6px; width: 18px; height: 18px;
+  border-radius: 5px; font-size: 13px; line-height: 1; color: var(--ink-3);
+  display: none; align-items: center; justify-content: center;
+}
+.trip:hover .del { display: flex; }
+.trip .del:hover { color: var(--error); background: var(--error-soft); }
+.trip-confirm {
+  border: 1px solid var(--error); border-radius: var(--r-sm);
+  padding: 8px 10px; margin-bottom: 1px; font-size: 12.5px;
+}
+.trip-confirm b { display: block; font-size: 12.5px; margin-bottom: 6px; }
+.trip-confirm .row { display: flex; gap: 6px; }
+.trip-confirm .yes { background: var(--error); color: var(--bg); }
+@media (prefers-color-scheme: dark) { .trip-confirm .yes { color: #14151a; } }
 
 form.new { display: grid; gap: 7px; }
 input, select {
@@ -149,6 +166,7 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .btn.ghost { background: transparent; border: 1px solid var(--line); color: var(--ink-2); }
 .btn.ghost:hover:not(:disabled) { border-color: var(--line-2); color: var(--ink); }
+.btn.stop { background: var(--error); }
 .btn.sm { padding: 5px 9px; font-size: 12px; }
 
 /* --- workspace ------------------------------------------------------------ */
@@ -202,7 +220,26 @@ section.work { background: var(--bg); }
 .metric span { color: var(--ink-3); font-size: 11.5px; }
 
 /* --- itinerary ------------------------------------------------------------ */
-.day { margin-bottom: 26px; }
+.day { margin-bottom: 30px; scroll-margin-top: 52px; }
+
+/* One pill per day, pinned above the plan. The consumer way to move around a
+   trip is by day, not by scrollbar. */
+.daybar {
+  position: sticky; top: -22px; z-index: 6; display: flex; gap: 6px;
+  padding: 10px 0; margin: -10px 0 12px; background: var(--bg);
+  overflow-x: auto; scrollbar-width: none;
+}
+.daybar button {
+  flex: none; font-size: 12.5px; padding: 5px 12px; border-radius: 999px;
+  border: 1px solid var(--line); color: var(--ink-2); background: var(--panel);
+}
+.daybar button.on { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+@media (prefers-color-scheme: dark) { .daybar button.on { color: #10221d; } }
+
+/* The whole day's context - weather, load - reads as one quiet line. */
+.dayline { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 10px; }
+.dayline .wx { margin: 0; }
+.dayline .daymetrics { margin: 0; }
 /* Forecast and typical weather must never be mistakable for one another, so
    they differ in colour, border and label - not just in wording. */
 .wx {
@@ -232,24 +269,56 @@ section.work { background: var(--bg); }
 .daymetrics.none { color: var(--ink-3); }
 .daymetrics .ok { color: var(--accent); }
 .daymetrics .bad { color: var(--warn); }
-.day-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 9px; }
-.day-head h3 { font-size: 14.5px; }
-.day-head small { color: var(--ink-3); font-size: 12px; }
+.day-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.day-head h3 { font-size: 17px; letter-spacing: -0.01em; }
+.day-head small { color: var(--ink-3); font-size: 12.5px; }
 .day-head .spacer { flex: 1; }
 
-.slot { display: flex; gap: 12px; padding: 3px 0; }
+.slot { display: flex; gap: 12px; padding: 4px 0; }
 .slot time {
-  flex: none; width: 48px; text-align: right; padding-top: 12px;
+  flex: none; width: 48px; text-align: right; padding-top: 14px;
   font: 12px var(--mono); color: var(--ink-3);
 }
 .card {
   flex: 1; background: var(--panel); border: 1px solid var(--line);
-  border-radius: var(--r); padding: 11px 13px;
+  border-radius: var(--r); padding: 12px 14px 12px 12px;
+  display: flex; gap: 12px; align-items: flex-start;
 }
 .card.locked { border-color: var(--line-2); background: var(--panel-2); }
 .card.attention { border-left: 3px solid var(--warn); }
+.card-main { flex: 1; min-width: 0; }
 .card-top { display: flex; align-items: flex-start; gap: 8px; }
-.card-top h4 { font-size: 14px; flex: 1; }
+.card-top h4 { font-size: 15px; flex: 1; }
+
+/* One photo per place, fetched only when the card is actually on screen, and
+   an initial-letter tile whenever there is none - never a broken image. */
+.thumb {
+  flex: none; width: 64px; height: 64px; border-radius: 8px;
+  background: var(--accent-soft) center/cover no-repeat;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px; font-weight: 600; color: var(--accent);
+  overflow: hidden; user-select: none;
+}
+.thumb.loaded { color: transparent; }
+
+/* Everything but Why? lives behind one quiet control. */
+.kebab { position: relative; flex: none; }
+.kebab > button {
+  width: 26px; height: 26px; border-radius: 6px; color: var(--ink-3);
+  font-size: 15px; line-height: 1;
+}
+.kebab > button:hover { background: var(--panel-2); color: var(--ink); }
+.kmenu {
+  position: absolute; right: 0; top: 28px; z-index: 20; min-width: 150px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-sm);
+  box-shadow: 0 6px 24px rgba(0,0,0,0.12); padding: 4px;
+}
+.kmenu button {
+  display: block; width: 100%; text-align: left; font-size: 12.5px;
+  padding: 6px 9px; border-radius: 5px; color: var(--ink-2);
+}
+.kmenu button:hover { background: var(--panel-2); color: var(--ink); }
+.kmenu button.danger:hover { background: var(--error-soft); color: var(--error); }
 .meta { font-size: 12px; color: var(--ink-3); margin-top: 3px; }
 .arrive { font-size: 12px; color: var(--ink-2); margin-top: 5px; }
 .arrive.warn { color: var(--warn); }
@@ -413,13 +482,36 @@ section.work { background: var(--bg); }
 }
 
 /* --- chat ----------------------------------------------------------------- */
-.composer { flex: none; background: var(--panel); padding: 10px 20px 14px; }
+.composer { flex: none; background: var(--panel); padding: 10px 20px 14px; border-top: 1px solid var(--line); }
 .composer .inner { max-width: 780px; margin: 0 auto; }
 .chat {
   flex: none; height: var(--chat); overflow-y: auto;
   background: var(--panel); padding: 14px 20px 4px;
 }
 .chat .inner, .chat > * { max-width: 780px; margin-left: auto; margin-right: auto; }
+
+/* What the agent is doing right now, visible whether or not the conversation
+   pane is open. Nobody should stare at a spinner for two minutes. */
+.busy-strip {
+  flex: none; background: var(--panel); border-top: 1px solid var(--line);
+  padding: 9px 20px; font-size: 12.5px; color: var(--ink-2);
+}
+.busy-strip .inner { max-width: 780px; margin: 0 auto; display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.busy-strip .now { color: var(--ink); font-weight: 550; }
+.busy-strip .done { color: var(--ink-3); }
+.busy-strip .done b { color: var(--accent); font-weight: 600; }
+.busy-strip .done .failed { color: var(--error); }
+
+/* The conversation collapses to one line of the last reply; the input stays. */
+.chatbar {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+  font-size: 12px; color: var(--ink-3); min-width: 0;
+}
+.chatbar .preview {
+  flex: 1; min-width: 0; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; cursor: pointer; color: var(--ink-2);
+}
+.chatbar .preview:hover { color: var(--ink); }
 .msg { margin-bottom: 12px; font-size: 13.5px; }
 .msg .who { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.07em;
   color: var(--ink-3); font-weight: 600; margin-bottom: 3px; }
@@ -444,8 +536,15 @@ section.work { background: var(--bg); }
   color: var(--ink-2); background: var(--panel-2); border: 1px solid var(--line);
   border-radius: 6px; padding: 2px 4px; max-width: 150px;
 }
-#map { height: 236px; border-radius: var(--r); border: 1px solid var(--line); background: var(--sunk); }
+#map {
+  height: clamp(320px, 45vh, 560px);
+  border-radius: var(--r); border: 1px solid var(--line); background: var(--sunk);
+}
 #map.gone { display: none; }
+/* The map is the consumer half of the rail: it stays put while the detail
+   below it scrolls. */
+.mapwrap { position: sticky; top: -10px; z-index: 5; background: var(--panel);
+  padding: 10px 0 8px; margin-top: -10px; }
 .mapnote {
   font-size: 12px; color: var(--ink-2); background: var(--sunk);
   border: 1px solid var(--line); border-radius: var(--r); padding: 11px 12px;
@@ -484,7 +583,6 @@ details.debug li { font: 11.5px/1.7 var(--mono); color: var(--ink-3); }
     <h1 class="brand">Travel Agent<span id="sub">no trip selected</span></h1>
     <div class="spacer"></div>
     <button class="chip" id="validChip" hidden></button>
-    <span class="chip mono" id="revChip" hidden></span>
   </header>
 
   <main>
@@ -538,8 +636,13 @@ details.debug li { font: 11.5px/1.7 var(--mono); color: var(--ink-3); }
            aria-orientation="horizontal" aria-label="Resize the conversation"
            tabindex="0" title="Drag to resize · double-click to reset"></div>
       <div class="chat" id="transcript" hidden></div>
+      <div class="busy-strip" id="busyStrip" hidden><div class="inner"></div></div>
       <div class="composer">
         <div class="inner">
+          <div class="chatbar" id="chatbar" hidden>
+            <button class="chip" id="chatToggle">Chat ▾</button>
+            <span class="preview" id="chatPreview" title="Open the conversation"></span>
+          </div>
           <div class="ask">
             <textarea id="input" rows="1" placeholder="Tell the agent what to change…" disabled></textarea>
             <button class="btn" id="send" disabled>Send</button>
@@ -570,7 +673,12 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
   (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 
 const S = { tripId: null, trip: null, over: null, view: "itinerary", busy: false,
-            lastDiff: null, mapDay: null, decisions: null, intake: null };
+            lastDiff: null, mapDay: null, decisions: null, intake: null,
+            hasMessages: false, pollTimer: null,
+            // The conversation starts folded away: this is a travel plan with
+            // a command bar, not a chat app with a plan attached.
+            chatOpen: (() => { try { return localStorage.getItem("ta.chatOpen") === "1"; }
+                               catch { return false; } })() };
 
 /* --- resizable panes ------------------------------------------------------
    Three handles, one mechanism. Each writes a custom property on :root and
@@ -676,14 +784,66 @@ async function loadTrips() {
   const trips = await api("/trips?limit=50");
   const list = $("tripList");
   if (!trips.length) { list.innerHTML = '<p class="empty">None yet.</p>'; return; }
-  // One row per trip. Revision is an audit concept, not navigation - it lives
-  // in the header chip, not here.
   list.innerHTML = trips.map((t) => `
-    <button class="trip ${t.trip_id === S.tripId ? "on" : ""}" data-id="${esc(t.trip_id)}">
+    <div class="trip ${t.trip_id === S.tripId ? "on" : ""}" data-id="${esc(t.trip_id)}"
+         role="button" tabindex="0">
       <b>${esc(t.title || "Untitled")}</b>
       <small>${esc(t.destination || "—")}${t.start_date ? " · " + esc(t.start_date) : ""}</small>
-    </button>`).join("");
-  list.querySelectorAll(".trip").forEach((el) => el.onclick = () => selectTrip(el.dataset.id));
+      <button class="del" title="Delete this trip" data-del="${esc(t.trip_id)}"
+              data-title="${esc(t.title || "Untitled")}">×</button>
+    </div>`).join("");
+  list.querySelectorAll(".trip").forEach((el) => {
+    el.onclick = (e) => { if (!e.target.closest(".del")) selectTrip(el.dataset.id); };
+    el.onkeydown = (e) => { if (e.key === "Enter") selectTrip(el.dataset.id); };
+  });
+  // Delete asks on the row itself, in place - a real question with the trip's
+  // name in it, not a reflex-clickable browser popup.
+  list.querySelectorAll(".del").forEach((btn) => btn.onclick = () => {
+    const id = btn.dataset.del;
+    const row = btn.closest(".trip");
+    const confirmBox = document.createElement("div");
+    confirmBox.className = "trip-confirm";
+    confirmBox.innerHTML = `<b>Delete “${esc(btn.dataset.title)}”? This cannot be undone.</b>
+      <div class="row">
+        <button class="btn sm yes">Delete</button>
+        <button class="btn ghost sm no">Keep</button>
+      </div>`;
+    row.replaceWith(confirmBox);
+    confirmBox.querySelector(".no").onclick = () => loadTrips();
+    confirmBox.querySelector(".yes").onclick = async () => {
+      if (S.tripId === id && S.busy) {
+        toast("Stop the running turn first");
+        await loadTrips();
+        return;
+      }
+      try { await api(`/trips/${id}`, { method: "DELETE" }); }
+      catch (err) { toast(err.message); await loadTrips(); return; }
+      if (S.tripId === id) resetWorkspace();
+      await loadTrips();
+      toast("Trip deleted");
+    };
+  });
+}
+
+/** Back to the state before any trip was picked - after deleting the one on
+ *  screen, nothing on screen may keep describing it. */
+function resetWorkspace() {
+  S.tripId = null; S.trip = null; S.over = null; S.intake = null;
+  S.decisions = null; S.lastDiff = null; S.mapDay = null;
+  $("tabs").hidden = true;
+  $("intakeTab").hidden = true;
+  $("notice").hidden = true;
+  $("work").innerHTML = `<div class="welcome">
+    <h2>A trip you can see, not just read about</h2>
+    <p>Create a trip on the left, then tell the agent what you want.</p></div>`;
+  $("rail").innerHTML = '<p class="empty">Pick a trip.</p>';
+  $("mapwrap").hidden = true;
+  showChat(false);
+  $("chatbar").hidden = true;
+  $("input").disabled = true; $("send").disabled = true;
+  $("hint").textContent = "Create or pick a trip to start.";
+  $("sub").textContent = "no trip selected";
+  $("validChip").hidden = true;
 }
 
 $("newTrip").onsubmit = async (e) => {
@@ -710,6 +870,8 @@ $("newTrip").onsubmit = async (e) => {
 
 async function selectTrip(id) {
   S.tripId = id; S.lastDiff = null; S.mapDay = null; S.decisions = null; S.intake = null;
+  stopRunPoll();
+  setBusyUI(false);
   await refresh();
   await loadIntake();
   // Open on intake only while it is actually holding something up. A trip that
@@ -724,6 +886,9 @@ async function selectTrip(id) {
   $("input").disabled = false; $("send").disabled = false;
   $("hint").textContent = "Enter to send · Shift+Enter for a new line";
   render();
+  // A turn may already be running for this trip - started before a page
+  // reload, or from another window. Show it running rather than dead.
+  attachIfRunning();
 }
 
 async function refresh() {
@@ -816,8 +981,13 @@ function paintNotice() {
 
 function paintHeader() {
   const t = S.trip;
-  $("sub").textContent = `${t.brief.destination.city || "somewhere"} · ${t.status}`;
-  $("revChip").hidden = false; $("revChip").textContent = `rev ${t.revision}`;
+  // Where and when - the two facts a traveller recognises their trip by.
+  // Raw lifecycle status and revision numbers are workings, not headline.
+  const d = t.brief.dates;
+  const range = d.start && d.end
+    ? ` · ${shortDay(d.start)}–${shortDay(d.end)}` : "";
+  const where = t.brief.destination.city || t.brief.destination.region || "somewhere";
+  $("sub").textContent = `${where}${range}`;
 
   const chip = $("validChip"), issues = S.over.validation.issues || [];
   const errors = issues.filter((i) => i.severity === "error").length;
@@ -966,16 +1136,24 @@ function itineraryHtml() {
     return out.join("");
   }
 
+  // One pill per day, above the plan. Navigation by day is how a person
+  // holds a trip in their head; the scrollbar is how a computer does.
+  if (days.length > 1) {
+    out.push(`<div class="daybar">${days.map((d, i) => `
+      <button data-goday="${esc(d.date)}" class="${
+        (S.mapDay || days[0].date) === d.date ? "on" : ""}">Day ${i + 1} · ${esc(shortDay(d.date))}</button>`).join("")}
+    </div>`);
+  }
+
   for (const day of days) {
-    out.push(`<div class="day">
+    out.push(`<div class="day" id="day-${esc(day.date)}">
       <div class="day-head">
         <h3>${esc(dayLabel(day.date))}</h3>
         ${day.theme ? `<small>${esc(day.theme)}</small>` : ""}
         <div class="spacer"></div>
         <button class="chip" data-replan="${day.date}">Make this day easier</button>
       </div>
-      ${weatherChipHtml(day)}
-      ${dayMetricsHtml(day)}
+      <div class="dayline">${weatherChipHtml(day)}${dayMetricsHtml(day)}</div>
       ${day.items.length
         ? day.items.map(itemHtml).join("")
         : '<p class="empty">Nothing scheduled.</p>'}
@@ -1111,37 +1289,53 @@ function itemHtml(item) {
   const unverified = needsVerification().has(item.item_id);
   const entity = S.trip.entities[item.entity_id];
 
-  const status = locked
-    ? '<span class="status locked">🔒 Locked</span>'
-    : item.status === "selected" ? '<span class="status selected">✓ Selected</span>'
-    : '<span class="status">◇ Proposed</span>';
+  // Only states that say something. "Proposed" and "selected" are workflow
+  // bookkeeping; a lock and an unverified requirement are things a traveller
+  // acts on.
+  const status = locked ? '<span class="status locked">🔒</span>' : "";
 
   const bits = [];
   if (entity?.rating) bits.push(`★ ${entity.rating}${entity.rating_count ? ` · ${entity.rating_count.toLocaleString()} reviews` : ""}`);
   bits.push(item.type);
   if (item.reservation_booked) bits.push("booked");
 
+  // Everything but Why? folds into the ⋯ menu. The buttons keep their exact
+  // data-* names, so the existing wiring binds them wherever they render.
+  const menu = [
+    locked
+      ? `<button data-unlock="${esc(item.item_id)}">Unlock</button>`
+      : `<button data-replace="${esc(item.item_id)}">Replace</button>
+         <button data-move="${esc(item.item_id)}">Move</button>
+         <button data-lock="${esc(item.item_id)}">Lock</button>
+         <button class="danger" data-remove="${esc(item.item_id)}">Remove</button>`,
+    item.entity_id && !locked
+      ? `<button class="danger" data-reject="${esc(item.entity_id)}">Not interested</button>` : "",
+    entity ? `<button data-maps="${esc(entity.name)}">Open in Maps</button>` : "",
+  ].join("");
+
+  const placeId = entity?.provider_refs?.google_place_id || "";
+  const initial = (item.title || "?").trim().charAt(0).toUpperCase();
+
   return `<div class="slot">
     <time>${esc(clock(item.start_at))}</time>
     <div class="card ${locked ? "locked" : ""} ${unverified ? "attention" : ""}"
          data-item="${esc(item.item_id)}">
-      <div class="card-top">
-        <h4>${esc(item.title)}</h4>
-        ${status}
-      </div>
-      <p class="meta">${esc(bits.join(" · "))}</p>
-      ${arrivalHtml(item)}
-      ${unverified ? '<p class="meta" style="color:var(--warn)">? Needs verification — a stated requirement could not be confirmed for this place</p>' : ""}
-      <div class="acts">
-        <button data-why="${esc(item.item_id)}">Why?</button>
-        ${locked
-          ? `<button data-unlock="${esc(item.item_id)}">Unlock</button>`
-          : `<button data-replace="${esc(item.item_id)}">Replace</button>
-             <button data-move="${esc(item.item_id)}">Move</button>
-             <button data-lock="${esc(item.item_id)}">Lock</button>
-             <button class="danger" data-remove="${esc(item.item_id)}">Remove</button>`}
-        ${item.entity_id && !locked ? `<button class="danger" data-reject="${esc(item.entity_id)}">Not interested</button>` : ""}
-        ${entity ? `<button data-maps="${esc(entity.name)}">Open in Maps</button>` : ""}
+      <div class="thumb" data-photo="${esc(placeId)}">${esc(initial)}</div>
+      <div class="card-main">
+        <div class="card-top">
+          <h4>${esc(item.title)}</h4>
+          ${status}
+          <div class="kebab">
+            <button class="kmenu-btn" title="More actions" aria-haspopup="true">⋯</button>
+            <div class="kmenu" hidden>${menu}</div>
+          </div>
+        </div>
+        <p class="meta">${esc(bits.join(" · "))}</p>
+        ${arrivalHtml(item)}
+        ${unverified ? '<p class="meta" style="color:var(--warn)">? Needs verification — a stated requirement could not be confirmed for this place</p>' : ""}
+        <div class="acts">
+          <button data-why="${esc(item.item_id)}">Why?</button>
+        </div>
       </div>
     </div>
   </div>`;
@@ -1194,6 +1388,11 @@ function bestSpot(parking) {
 function dayLabel(date) {
   return new Date(date + "T00:00:00").toLocaleDateString(undefined,
     { weekday: "long", month: "short", day: "numeric" });
+}
+
+function shortDay(date) {
+  return new Date(date + "T00:00:00").toLocaleDateString(undefined,
+    { month: "short", day: "numeric" });
 }
 
 function clock(iso) {
@@ -1458,8 +1657,12 @@ function scoreHtml(option) {
 
 function researchHtml() {
   const evidence = Object.values(S.trip.evidence || {});
+  // Revision lives here, on the audit tab, not in the header: it is a working,
+  // and this is the page for workings.
+  const revLine = `<p class="meta" style="margin-bottom:14px">Trip revision ${
+    S.trip.revision} · status ${esc(S.trip.status)}</p>`;
   if (!evidence.length) {
-    return `<div class="welcome"><h2>No research stored yet</h2>
+    return `${revLine}<div class="welcome"><h2>No research stored yet</h2>
       <p>When the agent looks places up, what it found is kept here with its sources —
          so a recommendation can always be traced back.</p></div>`;
   }
@@ -1468,7 +1671,7 @@ function researchHtml() {
     for (const entityId of record.entity_ids || [])
       (byEntity[entityId] ||= []).push(record);
 
-  return Object.entries(byEntity).map(([entityId, records]) => {
+  return revLine + Object.entries(byEntity).map(([entityId, records]) => {
     const entity = S.trip.entities[entityId];
     return `<div class="day">
       <div class="day-head"><h3>${esc(entity?.name || entityId)}</h3>
@@ -1493,7 +1696,7 @@ function sourceHtml(record) {
 /** Maps JavaScript is the one thing this page loads from outside itself, so
  *  every way it can fail has to be a sentence the user can act on rather than
  *  a grey rectangle. `status` is that sentence's subject. */
-const M = { status: "idle", pending: null, shared: false, map: null, info: null,
+const M = { status: "idle", pending: null, map: null, info: null,
             markers: [], parking: [], line: null };
 
 async function mapsReady() {
@@ -1503,7 +1706,6 @@ async function mapsReady() {
     let cfg;
     try { cfg = await api("/ui-config"); }
     catch { return (M.status = "offline"); }
-    M.shared = !!cfg.maps_key_shared_with_server;
     if (!cfg.maps_key) return (M.status = "nokey");
     try {
       // Wait for Google's callback, not for the script's onload. With
@@ -1535,6 +1737,59 @@ async function mapsReady() {
 // for Places and Routes is reused here, so name it instead of showing nothing.
 window.gm_authFailure = () => { M.status = "rejected"; paintMap(); };
 
+/* --- place photos ----------------------------------------------------------
+   One photo per place, fetched from Google only when its card is actually on
+   screen, remembered for the session. No key or no photo leaves the
+   initial-letter tile - a calm placeholder, never a broken image. */
+
+const PHOTOS = new Map();   // google_place_id -> Promise<string|null>
+
+function photoFor(placeId) {
+  if (!PHOTOS.has(placeId)) {
+    PHOTOS.set(placeId, (async () => {
+      if (await mapsReady() !== "ready") return null;
+      try {
+        const { Place } = await google.maps.importLibrary("places");
+        const place = new Place({ id: placeId });
+        await place.fetchFields({ fields: ["photos"] });
+        return place.photos?.[0]?.getURI({ maxHeight: 176 }) || null;
+      } catch { return null; }
+    })());
+  }
+  return PHOTOS.get(placeId);
+}
+
+let photoWatcher = null;
+
+function hydratePhotos() {
+  const tiles = [...$("work").querySelectorAll(".thumb[data-photo]")]
+    .filter((el) => el.dataset.photo && !el.classList.contains("loaded"));
+  if (!tiles.length) return;
+
+  if (photoWatcher) photoWatcher.disconnect();
+  photoWatcher = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const tile = entry.target;
+      photoWatcher.unobserve(tile);
+      photoFor(tile.dataset.photo).then((url) => {
+        if (url && tile.isConnected) {
+          tile.style.backgroundImage = `url("${url}")`;
+          tile.classList.add("loaded");
+        }
+      });
+    }
+  }, { root: document.querySelector(".work-scroll"), rootMargin: "120px" });
+  tiles.forEach((tile) => photoWatcher.observe(tile));
+}
+
+function closeMenus() {
+  document.querySelectorAll(".kmenu").forEach((menu) => { menu.hidden = true; });
+}
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".kebab")) closeMenus();
+});
+
 const mappableDays = () => (S.trip?.itinerary?.days || []).filter((d) => d.items.length);
 
 /** Split a day into what can be drawn and what cannot. An item whose place has
@@ -1554,8 +1809,9 @@ function stopsFor(day) {
 }
 
 const NOTES = {
-  nokey: `<div class="mapnote">No Maps key is configured, so there is no map.
-    Set <code>MAPS_BROWSER_API_KEY</code> in <code>.env</code> to switch it on.</div>`,
+  nokey: `<div class="mapnote">No browser Maps key is configured, so there is no map and
+    no place photos. Set <code>MAPS_BROWSER_API_KEY</code> in <code>.env</code> — a separate,
+    referrer-restricted key. The server's own key is never given to the page.</div>`,
   rejected: `<div class="mapnote warn"><b>Google refused this key.</b><br>
     Most likely <b>Maps JavaScript API</b> is not enabled on the project — it is a
     separate API from Places and Routes, so a key that plans trips fine can still
@@ -1588,14 +1844,9 @@ function drawDay(day) {
   const { stops, unmapped } = stopsFor(day);
   const canvas = $("map");
 
-  const tail = [
-    unmapped.length
-      ? `<p class="unmapped">${unmapped.length} stop(s) have no stored coordinates and are
-         not drawn: ${esc(unmapped.join(", "))}.</p>` : "",
-    M.shared
-      ? `<p class="unmapped">This page is publishing your server Google key. Fine on
-         localhost; restrict it before this app is reachable from anywhere else.</p>` : "",
-  ].join("");
+  const tail = unmapped.length
+    ? `<p class="unmapped">${unmapped.length} stop(s) have no stored coordinates and are
+       not drawn: ${esc(unmapped.join(", "))}.</p>` : "";
 
   if (!stops.length) {
     canvas.classList.add("gone");
@@ -1812,6 +2063,28 @@ function wireWorkspace() {
       if (!e.target.closest("button")) focusStop(el.dataset.item);
     }));
 
+  // The ⋯ menus: one open at a time, closed by choosing or by clicking away.
+  $("work").querySelectorAll(".kmenu-btn").forEach((btn) =>
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const menu = btn.nextElementSibling;
+      const wasHidden = menu.hidden;
+      closeMenus();
+      menu.hidden = !wasHidden;
+    });
+
+  // Day pills: jump to the day, and point the map at it too.
+  $("work").querySelectorAll("[data-goday]").forEach((btn) =>
+    btn.onclick = () => {
+      const date = btn.dataset.goday;
+      document.getElementById(`day-${date}`)?.scrollIntoView({ behavior: "smooth" });
+      $("work").querySelectorAll("[data-goday]").forEach((b) =>
+        b.classList.toggle("on", b === btn));
+      if (S.mapDay !== date) { S.mapDay = date; paintMap(); }
+    });
+
+  hydratePhotos();
+
   // Intake.
   const answerBtn = $("answerBtn");
   if (answerBtn) answerBtn.onclick = () => submitAnswers();
@@ -1994,10 +2267,19 @@ async function showWhy(path) {
 
 /* --- chat ----------------------------------------------------------------- */
 
-/** The conversation and its handle appear and disappear together. */
-function showChat(on) {
-  $("transcript").hidden = !on;
-  $("chatGrip").hidden = !on;
+/** The conversation pane shows only when there is one *and* the user wants it
+ *  open; the command bar always carries a one-line trace of where it stands. */
+function showChat(hasMessages) {
+  S.hasMessages = hasMessages;
+  const open = hasMessages && S.chatOpen;
+  $("transcript").hidden = !open;
+  $("chatGrip").hidden = !open;
+  $("chatbar").hidden = !hasMessages;
+  $("chatToggle").textContent = S.chatOpen ? "Chat ▴" : "Chat ▾";
+}
+
+function setPreview(text) {
+  $("chatPreview").textContent = (text || "").split("\n")[0];
 }
 
 async function loadMessages() {
@@ -2010,33 +2292,142 @@ async function loadMessages() {
     `<div class="msg ${m.role}"><div class="who">${m.role === "user" ? "You" : "Agent"}</div>
      <div class="body">${esc(m.content)}</div></div>`).join("");
   box.scrollTop = box.scrollHeight;
+  const lastAgent = [...messages].reverse().find((m) => m.role === "assistant");
+  setPreview(lastAgent ? lastAgent.content : "");
+}
+
+/* --- the running turn ------------------------------------------------------
+   While the agent works, the strip above the composer says what it is doing -
+   read from the server's run registry, not invented here. The Send button
+   doubles as Stop, and a page refresh mid-turn reattaches instead of looking
+   dead. */
+
+const TOOL_LABELS = {
+  update_trip_brief: "Recording what you said",
+  ask_clarifications: "Writing down a question",
+  search_places: "Searching places",
+  get_place_details: "Checking a place's details",
+  get_routes: "Measuring travel times",
+  research_web: "Reading travel articles",
+  discover_restaurants: "Searching restaurants",
+  get_weather_context: "Checking the weather",
+  search_airports: "Looking up airports",
+  search_flights: "Searching flights",
+  recommend_hotel_areas: "Ranking hotel areas",
+  search_hotels: "Searching hotels",
+  review_group_preferences: "Reviewing everyone's preferences",
+  refresh_traveler_preferences: "Refreshing traveller profiles",
+  generate_itinerary: "Building the plan",
+  replace_item: "Finding a substitute",
+  replan_day: "Reworking the day",
+  validate_itinerary: "Validating the plan",
+  apply_trip_patch: "Saving changes",
+};
+const toolLabel = (name) => TOOL_LABELS[name] || name.replace(/_/g, " ");
+
+function paintBusy(snap) {
+  const box = $("busyStrip");
+  box.hidden = false;
+  const secs = Math.round((snap?.elapsed_ms ?? 0) / 1000);
+  const now = snap?.cancelled ? "stopping at the next safe point…"
+    : snap?.current_tool
+      ? `${toolLabel(snap.current_tool.name)} · ${Math.round(snap.current_tool.elapsed_ms / 1000)}s`
+      : "thinking…";
+  const done = snap?.tools_done || [];
+  const doneBits = done.map((t) =>
+    `<span class="${t.ok ? "" : "failed"}">${t.ok ? "✓" : "✗"} ${esc(toolLabel(t.name))}</span>`
+  ).join(" · ");
+  box.querySelector(".inner").innerHTML = `
+    <span class="thinking"><span class="dot"></span></span>
+    <span class="now">${esc(now)}</span>
+    <span>round ${snap?.iteration || 1} · ${secs}s</span>
+    ${done.length ? `<span class="done">${doneBits}</span>` : ""}`;
+}
+
+function setBusyUI(on) {
+  S.busy = on;
+  $("input").disabled = on || !S.tripId;
+  const send = $("send");
+  send.disabled = false;
+  send.textContent = on ? "Stop" : "Send";
+  send.classList.toggle("stop", on);
+  if (!on) $("busyStrip").hidden = true;
+}
+
+function startRunPoll(tripId) {
+  stopRunPoll();
+  S.pollTimer = setInterval(async () => {
+    if (S.tripId !== tripId) { stopRunPoll(); return; }
+    try {
+      const snap = await api(`/trips/${tripId}/run`);
+      if (snap.running) paintBusy(snap);
+    } catch {}
+  }, 1200);
+}
+function stopRunPoll() {
+  if (S.pollTimer) { clearInterval(S.pollTimer); S.pollTimer = null; }
+}
+
+async function stopRun() {
+  const send = $("send");
+  send.disabled = true;
+  send.textContent = "Stopping…";
+  // The turn ends at its next safe seam; the fetch that owns it resolves with
+  // an honest reply, so nothing else to do here.
+  try { await api(`/trips/${S.tripId}/run/cancel`, post({})); } catch {}
+}
+
+/** A turn may already be running for this trip - started before a reload, or
+ *  in another window. Reattach to it rather than rendering a dead workspace. */
+async function attachIfRunning() {
+  const tripId = S.tripId;
+  let snap;
+  try { snap = await api(`/trips/${tripId}/run`); } catch { return; }
+  if (!snap.running || S.tripId !== tripId) return;
+
+  setBusyUI(true);
+  paintBusy(snap);
+  startRunPoll(tripId);
+  const wait = setInterval(async () => {
+    if (S.tripId !== tripId) { clearInterval(wait); return; }
+    let now;
+    try { now = await api(`/trips/${tripId}/run`); } catch { return; }
+    if (now.running) return;
+    clearInterval(wait);
+    stopRunPoll();
+    setBusyUI(false);
+    // The turn finished without us holding its response; re-derive everything.
+    await refresh();
+    S.decisions = null;
+    await loadIntake();
+    await loadMessages();
+    render();
+    await loadTrips();
+  }, 1500);
 }
 
 async function send(text) {
   if (S.busy || !text.trim()) return;
-  S.busy = true; $("input").disabled = true; $("send").disabled = true;
+  const tripId = S.tripId;
+  setBusyUI(true);
 
-  const box = $("transcript"); showChat(true);
+  const box = $("transcript");
+  showChat(true);
   box.insertAdjacentHTML("beforeend",
     `<div class="msg user"><div class="who">You</div><div class="body">${esc(text)}</div></div>`);
-  const started = Date.now();
-  box.insertAdjacentHTML("beforeend",
-    `<div class="msg" id="pending"><div class="who">Agent</div><div class="body">
-     <span class="thinking"><span class="dot"></span><span id="elapsed">searching and planning… 0s</span></span></div></div>`);
   box.scrollTop = box.scrollHeight;
-  const tick = setInterval(() => {
-    const el = $("elapsed");
-    if (el) el.textContent = `searching and planning… ${Math.round((Date.now()-started)/1000)}s`;
-  }, 1000);
+  // The strip carries the story from here: what tool is running, what has
+  // finished, how long it has been. The transcript keeps only the words.
+  paintBusy(null);
+  startRunPoll(tripId);
 
   const before = S.trip;
   try {
-    const res = await api(`/trips/${S.tripId}/messages`, post({ message: text, history_turns: 6 }));
-    $("pending")?.remove();
+    const res = await api(`/trips/${tripId}/messages`, post({ message: text, history_turns: 6 }));
+    if (S.tripId !== tripId) return;   // moved to another trip mid-turn
     box.insertAdjacentHTML("beforeend",
-      `<div class="msg"><div class="who">Agent</div><div class="body">${esc(res.reply)}</div>
-       <details class="debug"><summary>${res.tools_called.length} tool call(s) · ${res.iterations} round(s)</summary>
-       <ul>${res.tools_called.map((t) => `<li>${esc(t.name)} · ${t.milliseconds}ms</li>`).join("")}</ul></details></div>`);
+      `<div class="msg"><div class="who">Agent</div><div class="body">${esc(res.reply)}</div></div>`);
+    setPreview(res.reply);
     await refresh();
     // Intake and decisions are derived state, and an agent turn is precisely
     // the thing that changes them - recording a fact closes a gap, booking
@@ -2051,12 +2442,14 @@ async function send(text) {
     render(); await loadTrips();
     if (S.view === "decisions") loadDecisions().then(render);
   } catch (err) {
-    $("pending")?.remove();
     box.insertAdjacentHTML("beforeend", `<div class="banner">${esc(err.message)}</div>`);
   } finally {
-    clearInterval(tick);
-    S.busy = false; $("input").disabled = false; $("send").disabled = false;
-    $("input").focus(); box.scrollTop = box.scrollHeight;
+    stopRunPoll();
+    if (S.tripId === tripId) {
+      setBusyUI(false);
+      $("input").focus();
+      box.scrollTop = box.scrollHeight;
+    }
   }
 }
 
@@ -2086,7 +2479,19 @@ async function diffSince(before) {
   return days.length ? days : null;
 }
 
-$("send").onclick = () => { const box = $("input"); const v = box.value; box.value = ""; autosize(); send(v); };
+// One button, two jobs: it sends when idle and stops when busy.
+$("send").onclick = () => {
+  if (S.busy) { stopRun(); return; }
+  const box = $("input"); const v = box.value; box.value = ""; autosize(); send(v);
+};
+
+$("chatToggle").onclick = () => {
+  S.chatOpen = !S.chatOpen;
+  try { localStorage.setItem("ta.chatOpen", S.chatOpen ? "1" : "0"); } catch {}
+  showChat(S.hasMessages);
+  if (S.chatOpen) { const b = $("transcript"); b.scrollTop = b.scrollHeight; }
+};
+$("chatPreview").onclick = () => { if (!S.chatOpen) $("chatToggle").click(); };
 $("input").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("send").click(); }
 });

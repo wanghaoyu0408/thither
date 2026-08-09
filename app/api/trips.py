@@ -60,6 +60,16 @@ async def get_trip(trip_id: str, session: SessionDep) -> TripState:
     return await _load(session, trip_id)
 
 
+@router.delete("/{trip_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_trip(trip_id: str, session: SessionDep) -> Response:
+    """Remove a trip for good. There is no undo; the UI confirms before calling."""
+    try:
+        await _repo(session).delete(trip_id)
+    except TripNotFound:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"trip {trip_id} not found") from None
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.post("/{trip_id}/patch", response_model=PatchResult)
 async def patch_trip(
     trip_id: str,

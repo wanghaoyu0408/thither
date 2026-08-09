@@ -82,8 +82,8 @@ async def ui_config() -> dict[str, object]:
     """
     settings = get_settings()
     return {
+        # Only ever the dedicated browser key. The server key is never
+        # published, whatever is or is not configured - the fallback that once
+        # shared it with the page is gone.
         "maps_key": settings.maps_browser_key,
-        # The page shows this as a warning. A shared key means anyone reading
-        # the page can also spend the Places and Routes budget.
-        "maps_key_shared_with_server": settings.maps_key_is_shared_with_the_server,
     }

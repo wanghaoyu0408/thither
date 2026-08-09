@@ -46,6 +46,9 @@ class ChatResponse(BaseModel):
     # from `error`: the turn did not fail, it was cut short, and what it applied
     # before that is complete.
     hit_iteration_limit: bool = False
+    # True when the traveller stopped the turn. Same contract as the round cap:
+    # whatever was applied before the stop is complete and stays.
+    cancelled: bool = False
     input_tokens: int = 0
     output_tokens: int = 0
 

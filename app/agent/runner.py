@@ -6,8 +6,10 @@ what happened (spec section 39). All the judgement lives in the prompt; all the
 arithmetic lives in the services.
 """
 
+import asyncio
 import json
 import time
+from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -15,12 +17,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.context import summarize
 from app.agent.prompts import build_instructions
+from app.agent.run_control import RunControl
 from app.agent.tool_registry import TOOL_SCHEMAS, ToolContext, dispatch, serialize
 from app.config import Settings, get_settings
 from app.db.repository import ProfileRepository, TripRepository
 from app.models.patch import PatchResult, TripPatch
 from app.models.trip import TripState
-from app.providers.openai_llm import LLMClient
+from app.providers.openai_llm import LLMClient, LLMTurn
 from app.services.proposal_store import ProposalStore
 from app.services.toolbox import Toolbox
 
@@ -57,6 +60,10 @@ class AgentRun:
     # result - which is how an unfinished plan comes to look like a finished one.
     hit_iteration_limit: bool = False
 
+    # True when the traveller asked for the turn to stop. Same shape as the
+    # iteration cap: whatever committed before the stop is real and stays.
+    cancelled: bool = False
+
     @property
     def changed_state(self) -> bool:
         return self.revision_after != self.revision_before
@@ -67,6 +74,7 @@ class AgentRun:
             "revision_before": self.revision_before,
             "revision_after": self.revision_after,
             "iterations": self.iterations,
+            "cancelled": self.cancelled,
             "tools": [
                 {"name": t.name, "ms": t.milliseconds, "ok": t.ok, "detail": t.detail}
                 for t in self.tools
@@ -105,6 +113,7 @@ class AgentRunner:
         message: str,
         *,
         history: list[dict[str, Any]] | None = None,
+        control: RunControl | None = None,
     ) -> AgentRun:
         run = AgentRun(
             trip_id=state.trip_id,
@@ -133,12 +142,17 @@ class AgentRunner:
 
         for iteration in range(1, self._settings.agent_max_iterations + 1):
             run.iterations = iteration
+            if control is not None:
+                if control.cancelled:
+                    return self._stopped(run)
+                control.begin_iteration(iteration)
 
-            turn = await self._llm.respond(
-                instructions=build_instructions(),
-                conversation=conversation,
-                tools=TOOL_SCHEMAS,
-            )
+            turn = await self._respond(conversation, control)
+            if turn is None:
+                # The traveller pulled the cord mid-round. The model's answer,
+                # whatever it was going to be, was never received and nothing
+                # from it was applied.
+                return self._stopped(run)
             run.input_tokens += turn.input_tokens
             run.output_tokens += turn.output_tokens
             if turn.response_id:
@@ -159,6 +173,14 @@ class AgentRunner:
                 return run
 
             for call in turn.tool_calls:
+                # Between calls, never during one: a dispatch that has started
+                # is allowed to finish, because interrupting `_apply_all` could
+                # tear a commit and "stopped" must never mean "half-applied".
+                if control is not None and control.cancelled:
+                    return self._stopped(run)
+
+                if control is not None:
+                    control.begin_tool(call.name)
                 started = time.perf_counter()
                 result = await dispatch(context, call.name, call.arguments)
                 elapsed = int((time.perf_counter() - started) * 1000)
@@ -168,12 +190,15 @@ class AgentRunner:
                 if "__patches__" in result:
                     result = await self._apply_all(context, run, result["__patches__"])
 
+                ok = "error" not in result
+                if control is not None:
+                    control.end_tool(call.name, elapsed, ok)
                 run.tools.append(
                     ToolRecord(
                         name=call.name,
                         arguments=call.arguments,
                         milliseconds=elapsed,
-                        ok="error" not in result,
+                        ok=ok,
                         detail=str(result.get("error", ""))[:200],
                     )
                 )
@@ -196,6 +221,56 @@ class AgentRunner:
             "had more to do. Tell me which part to focus on and I will do that one thing."
         )
         run.reply = f"{turn.text}\n\n{cut_short}" if turn.text else cut_short
+        return run
+
+    async def _respond(
+        self, conversation: list[Any], control: RunControl | None
+    ) -> LLMTurn | None:
+        """One model round, abandoned the moment a cancel arrives.
+
+        The round is the long pole - thirty to sixty seconds is normal - and a
+        stop that politely waits it out is not a stop. Racing the call against
+        the cancel event and cancelling the task is safe here precisely because
+        this is a read: nothing about the trip changes until the tool loop, and
+        the tool loop never starts for a round that was abandoned.
+        """
+        if control is None:
+            return await self._llm.respond(
+                instructions=build_instructions(), conversation=conversation, tools=TOOL_SCHEMAS
+            )
+
+        respond = asyncio.ensure_future(
+            self._llm.respond(
+                instructions=build_instructions(), conversation=conversation, tools=TOOL_SCHEMAS
+            )
+        )
+        cancelled = asyncio.ensure_future(control.wait_cancelled())
+        try:
+            await asyncio.wait({respond, cancelled}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            cancelled.cancel()
+            with suppress(asyncio.CancelledError):
+                await cancelled
+        if respond.done():
+            return await respond
+        respond.cancel()
+        with suppress(asyncio.CancelledError):
+            await respond
+        return None
+
+    def _stopped(self, run: AgentRun) -> AgentRun:
+        """The turn as it stands at the moment the traveller stopped it."""
+        run.cancelled = True
+        applied = sum(1 for patch in run.patches if patch.applied)
+        run.reply = (
+            "Stopped at your request. "
+            + (
+                f"{applied} change(s) had already been saved and they stand - "
+                if applied
+                else "Nothing had been saved yet - "
+            )
+            + "nothing was left half-applied. Tell me what to do instead."
+        )
         return run
 
     async def _apply_all(
