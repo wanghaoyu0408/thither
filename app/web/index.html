@@ -163,6 +163,29 @@ section.work { background: var(--bg); }
 .acts button:hover { border-color: var(--line-2); color: var(--ink); }
 .acts button.danger:hover { color: var(--error); border-color: var(--error); }
 
+/* --- decisions ------------------------------------------------------------ */
+.dec { margin-bottom: 22px; }
+.dec-head { display: flex; align-items: baseline; gap: 9px; margin-bottom: 8px; }
+.dec-head h3 { font-size: 14.5px; }
+.dec-head .spacer { flex: 1; }
+.dec .why-not { font-size: 12px; color: var(--ink-3); margin-bottom: 7px; }
+.dec .empty-slot {
+  font-size: 12.5px; color: var(--ink-3); background: var(--sunk);
+  border: 1px dashed var(--line-2); border-radius: var(--r); padding: 10px 12px;
+}
+.opt { background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--r); padding: 10px 12px; margin-bottom: 6px; }
+.opt.on { border-color: var(--accent); background: var(--accent-soft); }
+.opt-top { display: flex; align-items: baseline; gap: 8px; }
+.opt-top b { font-size: 13.5px; flex: 1; }
+.opt ul { margin: 6px 0 0 15px; font-size: 12.5px; color: var(--ink-2); }
+.opt ul.cons { color: var(--warn); }
+.booked { background: var(--accent-soft); border: 1px solid var(--accent);
+  border-radius: var(--r); padding: 10px 12px; font-size: 13px; color: var(--accent); }
+.thin { color: var(--warn); }
+.rejected-list { margin-top: 8px; }
+.rejected-list .opt { opacity: .6; }
+
 .status { font-size: 11.5px; white-space: nowrap; color: var(--ink-3); }
 .status.locked { color: var(--ink-2); }
 .status.selected { color: var(--accent); }
@@ -318,6 +341,7 @@ details.debug li { font: 11.5px/1.7 var(--mono); color: var(--ink-3); }
       <div class="tabs" id="tabs" hidden>
         <button class="tab" data-view="overview">Overview</button>
         <button class="tab" data-view="itinerary">Itinerary</button>
+        <button class="tab" data-view="decisions">Decisions</button>
         <button class="tab" data-view="research">Research</button>
       </div>
       <div class="work-scroll"><div class="sheet" id="work">
@@ -359,7 +383,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
   (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 
 const S = { tripId: null, trip: null, over: null, view: "itinerary", busy: false,
-            lastDiff: null, mapDay: null };
+            lastDiff: null, mapDay: null, decisions: null };
 
 async function api(path, opts) {
   const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
@@ -415,7 +439,7 @@ $("newTrip").onsubmit = async (e) => {
 };
 
 async function selectTrip(id) {
-  S.tripId = id; S.lastDiff = null; S.mapDay = null;
+  S.tripId = id; S.lastDiff = null; S.mapDay = null; S.decisions = null;
   await refresh();
   S.view = (S.trip.itinerary.days || []).length ? "itinerary" : "overview";
   await loadMessages();
@@ -440,8 +464,18 @@ function adopt(result) {
     conflicts: result.conflicts, blocking: result.blocking,
   };
   S.lastDiff = result.diff && result.diff.length ? result.diff : null;
+  // The decisions view is derived server-side - relevance, lock state and which
+  // options were refused are not readable off the trip - so anything we hold is
+  // now stale. Rejecting a place from the itinerary changes a shortlist too.
+  S.decisions = null;
   paintHeader();
   render();
+  if (S.view === "decisions") loadDecisions().then(render);
+}
+
+async function loadDecisions() {
+  try { S.decisions = await api(`/trips/${S.tripId}/decisions`); }
+  catch (err) { S.decisions = []; toast(err.message); }
 }
 
 function paintHeader() {
@@ -496,6 +530,7 @@ function render() {
   const out = [];
   if (S.view === "overview") out.push(overviewHtml());
   else if (S.view === "itinerary") out.push(itineraryHtml());
+  else if (S.view === "decisions") out.push(decisionsHtml());
   else out.push(researchHtml());
   $("work").innerHTML = out.join("");
   wireWorkspace();
@@ -504,7 +539,11 @@ function render() {
 }
 
 document.querySelectorAll(".tab").forEach((el) =>
-  el.onclick = () => { S.view = el.dataset.view; render(); });
+  el.onclick = () => {
+    S.view = el.dataset.view;
+    render();
+    if (S.view === "decisions" && S.decisions === null) loadDecisions().then(render);
+  });
 
 /* Overview -- the trip's own facts, editable in place. */
 function overviewHtml() {
@@ -706,6 +745,106 @@ function dayOfItem(itemId) {
 }
 
 /* Research -- normalized evidence, never raw pages. */
+/* Decisions -- rendered wholly from the server's projection. There is no
+   frontend idea of what a decision is: relevance, lock state and which options
+   were refused are all decided in one place, and that place is not here. */
+function decisionsHtml() {
+  const views = S.decisions;
+  if (views === null) return '<p class="empty">Loading…</p>';
+  if (!views.length) {
+    return `<div class="welcome"><h2>Nothing decided yet</h2>
+      <p>Once the agent researches flights, neighbourhoods or hotels, the choices
+         and the reasoning behind them appear here.</p></div>`;
+  }
+  return views.map(decisionHtml).join("");
+}
+
+function decisionHtml(view) {
+  const chips = [];
+  if (view.booked) chips.push('<span class="status selected">✓ Already booked</span>');
+  else if (view.locked) chips.push('<span class="status locked">🔒 Locked</span>');
+  else if (view.selected) chips.push('<span class="status selected">✓ Selected</span>');
+  else if (view.exists) chips.push(`<span class="status">◇ ${esc(view.status)}</span>`);
+  if (view.needs_verification)
+    chips.push('<span class="status verify">? Needs verification</span>');
+
+  const acts = [];
+  if (view.exists && !view.booked) {
+    acts.push(view.locked
+      ? `<button data-decunlock="${esc(view.name)}">Unlock</button>`
+      : `<button data-declock="${esc(view.name)}">Lock</button>`);
+  }
+  if (view.exists) {
+    acts.push(view.booked
+      ? `<button data-decunbooked="${esc(view.name)}">Not booked after all</button>`
+      : `<button data-decbooked="${esc(view.name)}">Mark as booked</button>`);
+  }
+
+  const body = view.booked
+    ? `<div class="booked">Arranged outside this system${
+         view.booked_reference ? ` · ${esc(view.booked_reference)}` : ""
+       }. The agent will plan around it and stop suggesting alternatives.
+       ${view.selected ? `<br><b>${esc(view.selected.label)}</b>` : ""}</div>`
+    : view.exists
+      ? view.options.map((option) => optionHtml(view, option)).join("")
+      : `<div class="empty-slot">Not researched yet.${
+           view.hidden_reason ? ` ${esc(view.hidden_reason)}.` : ""
+         }</div>`;
+
+  return `<div class="dec">
+    <div class="dec-head">
+      <h3>${esc(view.title)}</h3>
+      ${chips.join(" ")}
+      <div class="spacer"></div>
+      <div class="acts" style="margin:0">${acts.join("")}</div>
+    </div>
+    ${view.relevant ? "" : `<p class="why-not">${esc(view.hidden_reason || "not needed for this trip")}</p>`}
+    ${view.stale_reason ? `<p class="why-not thin">Worth revisiting: ${esc(view.stale_reason)}</p>` : ""}
+    ${body}
+    ${view.rejected.length ? `<details class="rejected-list">
+      <summary style="font-size:12px;color:var(--ink-3)">${view.rejected.length} rejected</summary>
+      ${view.rejected.map((option) => rejectedHtml(view, option)).join("")}
+    </details>` : ""}
+  </div>`;
+}
+
+function optionHtml(view, option) {
+  return `<div class="opt ${option.selected ? "on" : ""}">
+    <div class="opt-top">
+      <b>${esc(option.label)}</b>
+      ${scoreHtml(option)}
+    </div>
+    ${option.pros.length ? `<ul>${option.pros.map((p) => `<li>+ ${esc(p)}</li>`).join("")}</ul>` : ""}
+    ${option.cons.length ? `<ul class="cons">${option.cons.map((c) => `<li>− ${esc(c)}</li>`).join("")}</ul>` : ""}
+    <div class="acts">
+      ${option.selected || view.locked ? "" :
+        `<button data-decselect="${esc(view.name)}|${esc(option.option_id)}">Select</button>`}
+      ${view.locked ? "" :
+        `<button class="danger" data-decreject="${esc(view.name)}|${esc(option.option_id)}">Reject</button>`}
+    </div>
+  </div>`;
+}
+
+function rejectedHtml(view, option) {
+  return `<div class="opt">
+    <div class="opt-top"><b>${esc(option.label)}</b></div>
+    <div class="acts">
+      <button data-decback="${esc(view.name)}|${esc(option.option_id)}">Reconsider</button>
+    </div>
+  </div>`;
+}
+
+/** Score and confidence, never blended into one number. A total resting on a
+ *  quarter of the usual evidence has to look weaker than one that is fully
+ *  informed, or the reader cannot judge it. */
+function scoreHtml(option) {
+  if (option.score === null || option.score === undefined) return "";
+  const thin = option.coverage !== null && option.coverage < 0.5;
+  return `<span class="status${thin ? " verify" : ""}" title="${
+    thin ? "scored on little evidence" : "score"}">${option.score.toFixed(2)}${
+    thin ? ` · thin evidence` : ""}</span>`;
+}
+
 function researchHtml() {
   const evidence = Object.values(S.trip.evidence || {});
   if (!evidence.length) {
@@ -969,6 +1108,31 @@ function wireWorkspace() {
     el.addEventListener("click", (e) => {
       if (!e.target.closest("button")) focusStop(el.dataset.item);
     }));
+
+  // Decision actions. The value is "<decision name>|<option id>" because a
+  // decision name can itself be dotted (place_shortlists.dinner_day1).
+  const pair = (value) => {
+    const cut = value.lastIndexOf("|");
+    return [value.slice(0, cut), value.slice(cut + 1)];
+  };
+  on("decselect", (v) => {
+    const [name, option] = pair(v);
+    act(`/decisions/${name}/select`, post({ option_id: option }), (r) => r.summary);
+  });
+  on("decreject", (v) => {
+    const [name, option] = pair(v);
+    act(`/decisions/${name}/options/${option}/reject`, post({}), (r) => r.summary);
+  });
+  on("decback", (v) => {
+    const [name, option] = pair(v);
+    act(`/decisions/${name}/options/${option}/reconsider`, post({}), (r) => r.summary);
+  });
+  on("declock", (name) => act(`/decisions/${name}/lock`, post({}), () => "Locked"));
+  on("decunlock", (name) => act(`/decisions/${name}/unlock`, post({}), () => "Unlocked"));
+  on("decbooked", (name) =>
+    act(`/decisions/${name}/booked`, post({ booked: true }), (r) => r.summary));
+  on("decunbooked", (name) =>
+    act(`/decisions/${name}/booked`, post({ booked: false }), (r) => r.summary));
 
   on("why", (id) => showWhy(`/items/${id}/why`));
   on("whyentity", (id) => showWhy(`/entities/${id}/why`));

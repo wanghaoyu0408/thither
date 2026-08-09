@@ -9,11 +9,22 @@ from typing import Any
 
 from app.models.trip import TripState, TripTraveler
 from app.services.conflict_service import detect_conflicts
+from app.services.decision_service import label_for
 from app.services.opening_hours import describe
 
 MAX_ENTITIES = 60
 MAX_ISSUES = 12
 MAX_CONFLICTS = 8
+
+
+def _selected_label(decision: Any) -> str | None:
+    """What was chosen, in words the model can repeat back."""
+    if not decision.selected_option_id:
+        return None
+    chosen = next(
+        (o for o in decision.options if o.option_id == decision.selected_option_id), None
+    )
+    return label_for(chosen.data) if chosen else None
 
 
 def _traveler_line(traveler: TripTraveler) -> dict[str, Any]:
@@ -149,6 +160,20 @@ def summarize(state: TripState) -> dict[str, Any]:
         "rejections": [
             {"target_id": r.target_id, "label": r.label, "reason": r.reason}
             for r in state.rejections
+        ],
+        # Where each decision stands. The model was previously told nothing at
+        # all about them, so it could not know a flight was already chosen - let
+        # alone already booked - and would cheerfully offer to search again.
+        "decisions": [
+            {
+                "name": name,
+                "status": decision.status,
+                "booked": decision.booked,
+                "options": len(decision.options),
+                "selected": _selected_label(decision),
+                "stale_reason": decision.stale_reason,
+            }
+            for name, decision in state.decisions.iter_decisions()
         ],
         "entities_total": len(state.entities),
         "entities": [_entity_line(state, entity_id) for entity_id in shown],

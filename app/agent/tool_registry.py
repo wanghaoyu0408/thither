@@ -15,8 +15,8 @@ from typing import Any
 
 from app.config import Settings
 from app.models.common import utcnow
-from app.models.decision import Decision, DecisionOption, PlaceOption
-from app.models.flight import SearchAirportsInput, SearchFlightsInput
+from app.models.decision import Decision, DecisionOption, FlightOptionData, PlaceOption
+from app.models.flight import AirportOption, SearchAirportsInput, SearchFlightsInput
 from app.models.group import TravelerPreferences
 from app.models.hotel import SearchHotelsInput
 from app.models.itinerary_plan import ItineraryProposal, PlanParams, ReplanParams
@@ -194,6 +194,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "location": {"type": "string", "description": "e.g. 'San Francisco Bay Area'."},
+                "role": {
+                    "type": "string",
+                    "enum": ["departure", "arrival"],
+                    "description": (
+                        "Which end of the trip this is. Given, the shortlist is kept as a "
+                        "decision the traveller can see and change on its own."
+                    ),
+                },
                 "max_ground_travel_minutes": {"type": ["integer", "null"], "minimum": 1},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 10},
             },
@@ -230,6 +238,13 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 },
                 "max_stops": {"type": ["integer", "null"], "minimum": 0, "maximum": 3},
                 "max_price_per_person": {"type": ["number", "null"]},
+                "override_booked": {
+                    "type": "boolean",
+                    "description": (
+                        "Search even though the flights are already booked. Only when the "
+                        "traveller asked for that in so many words."
+                    ),
+                },
             },
             "required": ["origins", "destinations", "departure_date"],
             "additionalProperties": False,
@@ -303,6 +318,13 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     ),
                 },
                 "bypass_reason": {"type": ["string", "null"]},
+                "override_booked": {
+                    "type": "boolean",
+                    "description": (
+                        "Search even though the hotel is already booked. Only when the "
+                        "traveller asked for that in so many words."
+                    ),
+                },
             },
             "required": ["check_in", "check_out"],
             "additionalProperties": False,
@@ -875,6 +897,50 @@ async def _discover_restaurants(context: ToolContext, args: dict[str, Any]) -> d
     }
 
 
+def _refuse_if_booked(
+    context: ToolContext, name: str, args: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Stop searching for something the traveller has already paid for.
+
+    Checked before the provider call, not after: a booked trip should not be
+    spending Duffel or SerpApi quota re-pricing a decision nobody is going to
+    change. `booked` is a fact recorded by the traveller, so only the traveller
+    can wave it aside - hence an explicit argument rather than a judgement call.
+    """
+    if args.get("override_booked"):
+        return None
+    decision = getattr(context.state.decisions, name, None)
+    if decision is None or not decision.booked:
+        return None
+    reference = f" (reference {decision.booked_reference})" if decision.booked_reference else ""
+    return {
+        "already_booked": True,
+        "message": (
+            f"the {name} for this trip are already booked{reference}, so nothing was searched"
+        ),
+        "hint": (
+            "Say so rather than offering alternatives. If the traveller explicitly wants to "
+            "look anyway, call this again with override_booked: true."
+        ),
+    }
+
+
+def _airport_pros(airport: AirportOption) -> list[str]:
+    """Only what was measured. A straight-line distance is not a drive."""
+    pros: list[str] = []
+    if airport.ground_travel_source == "routes_api" and airport.ground_travel_minutes is not None:
+        pros.append(f"{airport.ground_travel_minutes:.0f} min drive from the pickup point")
+    if airport.city:
+        pros.append(f"serves {airport.city}")
+    return pros
+
+
+def _airport_cons(airport: AirportOption) -> list[str]:
+    if airport.ground_travel_source == "routes_api":
+        return []
+    return ["drive time was not measured, so this airport cannot be compared on access"]
+
+
 async def _search_airports(context: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
     if context.toolbox.airports is None:
         return {"error": "airport search is not configured"}
@@ -890,6 +956,29 @@ async def _search_airports(context: ToolContext, args: dict[str, Any]) -> dict[s
         return {"error": result.error.message, "code": result.error.code}
 
     context.airports = list(result.results)
+
+    # Which airport you fly out of is a decision in its own right - people change
+    # it without changing the flight ("we'd rather drive to SFO") - so it is kept
+    # as one rather than dissolving into a scoring dimension inside the fare
+    # search. Without a role we cannot say which end it belongs to, so we keep
+    # nothing rather than filing it under a guess.
+    role = args.get("role")
+    if role in ("departure", "arrival") and result.results:
+        context.pending_decisions[f"{role}_airport"] = Decision[AirportOption](
+            status="shortlisted",
+            rationale=f"airports near {args['location']}",
+            updated_at=utcnow(),
+            options=[
+                DecisionOption[AirportOption](
+                    data=airport,
+                    status="shortlisted" if position < 3 else "candidate",
+                    pros=_airport_pros(airport),
+                    cons=_airport_cons(airport),
+                )
+                for position, airport in enumerate(result.results)
+            ],
+        ).model_dump(mode="json")
+
     return {
         "airports": [
             {
@@ -913,6 +1002,10 @@ async def _search_flights(context: ToolContext, args: dict[str, Any]) -> dict[st
             "error": "flight search is not configured (no DUFFEL_ACCESS_TOKEN)",
             "hint": "say that flights cannot be searched rather than guessing at fares",
         }
+
+    booked = _refuse_if_booked(context, "flights", args)
+    if booked is not None:
+        return booked
 
     try:
         spec = SearchFlightsInput(
@@ -983,6 +1076,38 @@ async def _search_flights(context: ToolContext, args: dict[str, Any]) -> dict[st
         trade_off = explain_choice(ranked[0], cheapest, airports=context.airports)
 
     sandbox = [item for item in ranked if not item.option.live_mode]
+
+    # Persist the ranking, not just the fares.
+    #
+    # Until this existed, `context.flight_options` was the only record of a
+    # flight search and it died with the turn - so the trip could carry a chosen
+    # flight with nothing behind it, and "why this one?" had no stored answer.
+    # The decision slot and its audit event have existed since M5; nothing ever
+    # wrote them.
+    if ranked:
+        context.pending_decisions["flights"] = Decision[FlightOptionData](
+            status="shortlisted",
+            rationale=(
+                f"{'/'.join(spec.origins)} to {'/'.join(spec.destinations)} "
+                f"on {spec.departure_date.isoformat()}"
+            ),
+            updated_at=utcnow(),
+            options=[
+                DecisionOption[FlightOptionData](
+                    data=item.option,
+                    status="shortlisted" if position < 3 else "candidate",
+                    score=item.score,
+                    group_score=(
+                        group_by_ref[item.option.offer_ref].group
+                        if item.option.offer_ref in group_by_ref
+                        else None
+                    ),
+                    pros=item.pros,
+                    cons=item.cons,
+                )
+                for position, item in enumerate(ranked)
+            ],
+        ).model_dump(mode="json")
 
     payload: dict[str, Any] = {
         "offers": [
@@ -1084,6 +1209,10 @@ async def _search_hotels(context: ToolContext, args: dict[str, Any]) -> dict[str
                 "prices cannot be searched rather than guessing at them."
             ),
         }
+
+    booked = _refuse_if_booked(context, "hotel", args)
+    if booked is not None:
+        return booked
 
     working = _working_state(context)
     party = working.brief.party

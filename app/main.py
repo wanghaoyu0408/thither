@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 from app.api import (
     actions_router,
     chat_router,
+    decisions_router,
     profiles_router,
     tools_router,
     trips_router,
@@ -45,6 +46,7 @@ app.include_router(chat_router)
 # Registered after trips so the more specific /trips/{id}/items/... routes are
 # matched before the catch-all trip routes.
 app.include_router(actions_router)
+app.include_router(decisions_router)
 
 
 @app.get("/health", tags=["meta"])

@@ -728,6 +728,17 @@ def build_area_decision(
                     center=LatLng(lat=area.candidate.lat, lng=area.candidate.lng),
                     anchor_entity_ids=area.candidate.anchor_entity_ids,
                     notes=_area_note(area),
+                    # The same figures as the note, kept as numbers. The note is
+                    # for reading; these are for comparing. Flattening them into
+                    # prose meant a comparison card could only paraphrase
+                    # English or re-run the ranker, and neither is provenance.
+                    mean_minutes=area.mean_minutes,
+                    worst_minutes=area.worst_minutes,
+                    minutes_by_anchor=dict(area.minutes_by_anchor),
+                    unreachable_anchors=list(area.unreachable_anchors),
+                    travel_mode=area.mode,
+                    community_sentiment=area.signal.sentiment if area.signal else None,
+                    source_urls=list(area.signal.source_urls) if area.signal else [],
                 ),
                 status="shortlisted" if position < 3 else "candidate",
                 score=area.score,

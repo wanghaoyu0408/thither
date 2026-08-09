@@ -4,7 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from app.models.common import Cabin, LatLng, Money, new_id, utcnow
-from app.models.flight import BaggageAllowance, FlightSlice
+from app.models.flight import AirportOption, BaggageAllowance, FlightSlice
 from app.models.group import GroupScore
 from app.models.hotel import HotelPriceQuote, HotelRating
 
@@ -66,6 +66,16 @@ class Decision[T](BaseModel):
     # change?" problem this project exists to avoid.
     stale_reason: str | None = None
 
+    # Already arranged outside this system - the flights are ticketed, the hotel
+    # is paid for. Deliberately its own field rather than a status value or a
+    # lock, because these are three different claims: `status` is where the
+    # decision is in *our* workflow, a LockRecord is an instruction not to change
+    # it, and this is a fact about the world. A booked decision stops the agent
+    # recommending alternatives (see search_flights / search_hotels).
+    booked: bool = False
+    booked_reference: str | None = None
+    booked_at: datetime | None = None
+
     updated_at: datetime = Field(default_factory=utcnow)
 
 
@@ -82,13 +92,38 @@ class DestinationOption(BaseModel):
 
 
 class HotelAreaOption(BaseModel):
-    """A neighborhood, decided *before* individual hotels (spec section 25)."""
+    """A neighborhood, decided *before* individual hotels (spec section 25).
+
+    The measured figures below are kept structurally, not only flattened into
+    `notes`. A comparison card has to be buildable from persisted state alone -
+    if the only record of "18 minutes to the anchors, one unreachable" is a
+    prose sentence, the card either re-runs the ranker or paraphrases English,
+    and neither is provenance.
+
+    What is *not* here matters as much: there is no quietness, nightlife or food
+    figure, because no provider supplies one. The card names them as unscored
+    rather than inventing a number.
+    """
 
     area_name: str
     center: LatLng | None = None
     # Anchor POIs that make this area convenient.
     anchor_entity_ids: list[str] = []
     notes: str | None = None
+
+    # Travel to the anchors, in the mode actually used. `travel_mode` can differ
+    # from the mode requested - transit falls back to driving where Google has
+    # no transit data - so it travels with the figures it describes.
+    mean_minutes: float | None = None
+    worst_minutes: float | None = None
+    minutes_by_anchor: dict[str, float] = {}
+    unreachable_anchors: list[str] = []
+    travel_mode: str | None = None
+
+    # Community sentiment as the research tier found it. "unclear" is a real
+    # answer and is stored as one.
+    community_sentiment: str | None = None
+    source_urls: list[str] = []
 
 
 class FlightOptionData(BaseModel):
@@ -270,15 +305,32 @@ class PlaceOption(BaseModel):
     why: str | None = None
 
 
-SINGLETON_DECISIONS = ("destination", "flights", "hotel_area", "hotel")
+# In the order a trip actually settles them, because that is the order
+# iter_decisions walks and therefore the order the workspace lists them.
+SINGLETON_DECISIONS = (
+    "destination",
+    "departure_airport",
+    "arrival_airport",
+    "flights",
+    "hotel_area",
+    "hotel",
+)
 
 
 class TripDecisions(BaseModel):
-    """The four singleton decisions from spec section 8, plus keyed place
-    shortlists - restaurants and attractions are chosen many times per trip, so
-    they need a dict rather than a field."""
+    """The singleton decisions from spec section 8, plus keyed place shortlists -
+    restaurants and attractions are chosen many times per trip, so they need a
+    dict rather than a field.
+
+    Airports are their own decisions rather than an implicit part of the flight
+    choice. Which airport you fly out of is a decision a traveller makes and
+    changes on its own ("we'd rather drive to SFO than fly from SJC"), and one
+    the flight ranker only ever sees as a scoring dimension.
+    """
 
     destination: Decision[DestinationOption] | None = None
+    departure_airport: Decision[AirportOption] | None = None
+    arrival_airport: Decision[AirportOption] | None = None
     flights: Decision[FlightOptionData] | None = None
     hotel_area: Decision[HotelAreaOption] | None = None
     hotel: Decision[HotelOptionData] | None = None

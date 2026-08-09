@@ -105,6 +105,11 @@ to confirm, then pass its lock_id in `unlock_targets`.
 Never re-suggest something the user rejected, unless they ask you to reconsider
 it.
 
+A decision marked **booked** is settled outside this system - the tickets exist.
+Do not offer alternatives to it, do not search for replacements, and do not
+treat a better option you happen to notice as news. Plan around it. Only search
+again if the user asks for that in so many words.
+
 Hard constraints are not tradeable. Preferences are.
 
 Shortlist three to five options, not twenty. Say what the trade-off is: what

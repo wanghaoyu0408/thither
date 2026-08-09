@@ -44,6 +44,8 @@ _EVENT_RULES: tuple[tuple[str, str, str], ...] = (
     ("/itinerary", "*", "itinerary_updated"),
     ("/decisions/place_shortlists", "*", "shortlist_updated"),
     ("/decisions/destination", "*", "destination_updated"),
+    ("/decisions/departure_airport", "*", "departure_airport_updated"),
+    ("/decisions/arrival_airport", "*", "arrival_airport_updated"),
     ("/decisions/flights", "*", "flights_updated"),
     ("/decisions/hotel_area", "*", "hotel_area_updated"),
     ("/decisions/hotel", "*", "hotel_updated"),
