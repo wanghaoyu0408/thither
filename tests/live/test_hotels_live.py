@@ -151,16 +151,14 @@ async def test_the_hotel_search_contract_holds(toolbox):
 @pytest.mark.skipif(not settings.serpapi_api_key, reason="needs SERPAPI_API_KEY")
 async def test_the_shortlist_measures_real_travel_times_to_the_trips_places(toolbox):
     state = tokyo_trip()
-    search = await toolbox.hotels.search_hotels(
-        SearchHotelsInput(
-            city="Tokyo", area_name="Asakusa", check_in=CHECK_IN, check_out=CHECK_OUT, limit=10
-        ),
-        state=state,
+    spec = SearchHotelsInput(
+        city="Tokyo", area_name="Asakusa", check_in=CHECK_IN, check_out=CHECK_OUT, limit=10
     )
+    search = await toolbox.hotels.search_hotels(spec, state=state)
     if not search.ok or search.found_nothing:
         pytest.skip("no properties to shortlist today")
 
-    shortlist = await toolbox.hotels.shortlist(search.results, state=state, size=3)
+    shortlist = await toolbox.hotels.shortlist(search.results, state=state, spec=spec, size=3)
 
     assert shortlist.ranked
     measured = [item for item in shortlist.ranked if item.option.mean_route_minutes() is not None]
@@ -168,3 +166,36 @@ async def test_the_shortlist_measures_real_travel_times_to_the_trips_places(tool
     for item in measured:
         assert 0 < item.option.mean_route_minutes() < 180
         assert "location" in item.score.dimensions
+
+
+@pytest.mark.skipif(not settings.serpapi_api_key, reason="needs SERPAPI_API_KEY")
+async def test_the_shortlist_gets_prices_that_name_who_is_offering_them(toolbox):
+    """The search's headline rate has no source behind it; a quote does.
+
+    Also the cheap half of the bargain: three detail calls, not twenty.
+    """
+    state = tokyo_trip()
+    spec = SearchHotelsInput(
+        city="Tokyo", area_name="Ueno", check_in=CHECK_IN, check_out=CHECK_OUT, limit=10
+    )
+    search = await toolbox.hotels.search_hotels(spec, state=state)
+    if not search.ok or search.found_nothing:
+        pytest.skip("no properties to shortlist today")
+
+    shortlist = await toolbox.hotels.shortlist(search.results, state=state, spec=spec, size=3)
+
+    quoted = [item for item in shortlist.ranked if item.option.quotes]
+    if not quoted:
+        pytest.skip("no booking site listed a price for any shortlisted hotel today")
+
+    for item in quoted:
+        cheapest = item.option.cheapest_quote
+        assert cheapest.source, "a quote with no source is not a quote"
+        # The recommendation is priced at something a named site offers.
+        assert item.option.nightly_price.amount == cheapest.nightly.amount
+        for quote in item.option.quotes:
+            # Paid placements are aclk/gclid redirects and must not be in here.
+            assert quote.link is None or "gclid=" not in quote.link
+
+    # The properties nobody asked about keep their advertised rate untouched.
+    assert all(not option.quotes for option in search.results[5:])

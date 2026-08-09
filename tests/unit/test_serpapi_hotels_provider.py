@@ -4,6 +4,7 @@ from datetime import date
 
 import pytest
 
+from app.models.common import Money
 from app.models.hotel import SearchHotelsInput
 from app.providers.base import ProviderBadRequest
 from app.providers.serpapi_hotels import (
@@ -263,6 +264,136 @@ async def test_pagination_stops_once_the_limit_is_met(monkeypatch):
     assert pages == [None]
 
 
+# --- the detail call, where the named booking sites live ---------------------
+
+DETAIL = {
+    "name": "Centurion Hotel Ueno",
+    "address": "1-2-3 Ueno, Taito City, Tokyo",
+    "prices": [
+        {
+            "source": "Centurion Hotel Ueno",
+            "official": True,
+            "link": "https://example.com/official",
+            "rate_per_night": {"lowest": "$90", "extracted_lowest": 90},
+            "total_rate": {"lowest": "$361", "extracted_lowest": 361},
+            "free_cancellation": True,
+        },
+        {
+            "source": "Agoda.com",
+            "link": "https://example.com/agoda",
+            "rate_per_night": {"lowest": "$97", "extracted_lowest": 97},
+        },
+    ],
+    # Paid placement: aclk redirect with a gclid. Must never be read as a quote.
+    "featured_prices": [
+        {
+            "source": "Expedia.com",
+            "link": "https://www.google.com/aclk?sa=l&gclid=EAIaIQob",
+            "rate_per_night": {"lowest": "$41", "extracted_lowest": 41},
+        }
+    ],
+    "amenities": ["Free Wi-Fi", "Kid-friendly"],
+}
+
+
+def headline(amount: float = 70.0):
+    parsed = option()
+    parsed.headline_nightly = parsed.nightly_price = Money(amount=amount, currency="USD")
+    parsed.quotes = []
+    return parsed
+
+
+async def test_the_detail_call_fills_in_the_named_booking_sites(monkeypatch):
+    from app.providers import serpapi_hotels
+
+    seen: list[dict] = []
+
+    async def fake_request(*args, params=None, **kwargs):
+        seen.append(params)
+        return DETAIL
+
+    monkeypatch.setattr(serpapi_hotels, "request_json", fake_request)
+    provider = serpapi_hotels.SerpApiGoogleHotelsProvider("key", client=None)
+
+    priced = headline()
+    notes = await provider.fetch_quotes([priced], SPEC)
+
+    assert seen[0]["property_token"] == priced.offer_ref
+    assert [quote.source for quote in priced.quotes] == ["Centurion Hotel Ueno", "Agoda.com"]
+    assert priced.cheapest_quote.nightly.amount == 90.0
+    # Repriced to something a named site actually offers.
+    assert priced.nightly_price.amount == 90.0
+    assert priced.total_price.amount == 361.0
+    assert priced.headline_nightly.amount == 70.0
+    assert priced.refundable is True
+    assert notes and "cheapest booking site listed is Centurion Hotel Ueno" in notes[0]
+
+
+async def test_advertised_prices_are_never_read_as_quotes(monkeypatch):
+    """`featured_prices` are aclk/gclid ads, and $41 is not a price on offer."""
+    from app.providers import serpapi_hotels
+
+    async def fake_request(*args, **kwargs):
+        return DETAIL
+
+    monkeypatch.setattr(serpapi_hotels, "request_json", fake_request)
+    provider = serpapi_hotels.SerpApiGoogleHotelsProvider("key", client=None)
+
+    priced = headline()
+    await provider.fetch_quotes([priced], SPEC)
+
+    assert "Expedia.com" not in {quote.source for quote in priced.quotes}
+    assert priced.nightly_price.amount == 90.0
+
+
+async def test_a_property_no_site_lists_is_reported_rather_than_repriced(monkeypatch):
+    from app.providers import serpapi_hotels
+
+    async def fake_request(*args, **kwargs):
+        return {"name": "Somewhere", "prices": []}
+
+    monkeypatch.setattr(serpapi_hotels, "request_json", fake_request)
+    provider = serpapi_hotels.SerpApiGoogleHotelsProvider("key", client=None)
+
+    priced = headline()
+    notes = await provider.fetch_quotes([priced], SPEC)
+
+    assert priced.quotes == []
+    assert priced.nightly_price.amount == 70.0
+    assert notes == ["Asakusa View Hotel: no booking site listed a price"]
+
+
+async def test_a_headline_within_tolerance_raises_no_note(monkeypatch):
+    from app.providers import serpapi_hotels
+
+    async def fake_request(*args, **kwargs):
+        return DETAIL
+
+    monkeypatch.setattr(serpapi_hotels, "request_json", fake_request)
+    provider = serpapi_hotels.SerpApiGoogleHotelsProvider("key", client=None)
+
+    priced = headline(88.0)
+    notes = await provider.fetch_quotes([priced], SPEC)
+
+    assert priced.headline_gap() == 2.0
+    assert notes == []
+
+
+async def test_a_property_with_no_token_is_not_asked_about(monkeypatch):
+    from app.providers import serpapi_hotels
+
+    async def fake_request(*args, **kwargs):
+        raise AssertionError("there is nothing to look up")
+
+    monkeypatch.setattr(serpapi_hotels, "request_json", fake_request)
+    provider = serpapi_hotels.SerpApiGoogleHotelsProvider("key", client=None)
+
+    priced = headline()
+    priced.offer_ref = None
+
+    assert await provider.fetch_quotes([priced], SPEC) == []
+
+
 # --- booking stays out of scope ----------------------------------------------
 
 
@@ -276,7 +407,8 @@ def test_the_provider_exposes_nothing_that_books():
         for name in dir(SerpApiGoogleHotelsProvider)
         if not name.startswith("_") and name not in ("name", "live_mode")
     }
-    assert public == {"search_hotels"}
+    # Look up what is there, and look up what it costs. Nothing else.
+    assert public == {"search_hotels", "fetch_quotes"}
 
     forbidden = ("order", "book", "pay", "reserve", "cancel", "checkout")
     for name in dir(module):
@@ -285,7 +417,7 @@ def test_the_provider_exposes_nothing_that_books():
         assert not any(word in name.lower() for word in forbidden), name
 
 
-def test_the_hotel_provider_interface_has_one_method():
+def test_the_hotel_provider_interface_reads_and_never_writes():
     import app.providers.hotel_provider as module
     from app.providers.hotel_provider import HotelProvider
 
@@ -294,5 +426,5 @@ def test_the_hotel_provider_interface_has_one_method():
         for name in dir(HotelProvider)
         if not name.startswith("_") and name not in ("name", "live_mode")
     }
-    assert public == {"search_hotels"}
+    assert public == {"search_hotels", "fetch_quotes"}
     assert "will ever gain a booking method" in (module.__doc__ or "")

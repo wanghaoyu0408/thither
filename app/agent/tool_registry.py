@@ -897,7 +897,7 @@ async def _search_hotels(context: ToolContext, args: dict[str, Any]) -> dict[str
         }
 
     shortlist = await context.toolbox.hotels.shortlist(
-        result.results, state=working, preferences=HotelPreferences(), size=5
+        result.results, state=working, spec=spec, preferences=HotelPreferences(), size=5
     )
     context.pending_entity_ops.extend(shortlist.entities)
 
@@ -940,6 +940,13 @@ async def _search_hotels(context: ToolContext, args: dict[str, Any]) -> dict[str
             "recommended": trade_off.recommended_ref,
             "alternative": trade_off.alternative_ref,
             "statements": trade_off.statements,
+            "close_call": trade_off.close_call,
+            "note": (
+                "Nothing measured meaningfully separates these two. Say so rather than "
+                "presenting the first as a winner."
+                if trade_off.close_call
+                else "Every figure here came from a tool. Use these words."
+            ),
         }
 
     if not context.toolbox.hotels.live_mode:

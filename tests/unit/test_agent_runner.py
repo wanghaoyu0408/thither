@@ -374,6 +374,43 @@ async def test_the_loop_stops_at_the_iteration_cap(session, settings):
     assert run.iterations == settings.agent_max_iterations
     assert llm.calls == settings.agent_max_iterations
     assert "ran out of steps" in run.reply
+    # Being cut off mid-task must be visible, not inferable. Without the flag a
+    # truncated turn looks exactly like a finished one to anything that reads
+    # only `error` - which is how an unfinished plan gets reported as done.
+    assert run.hit_iteration_limit is True
+    assert run.error is None
+
+
+async def test_a_finished_turn_is_not_flagged_as_cut_short(session, settings):
+    llm = ScriptedLLM([say("all done")])
+    runner = await make_runner(session, llm, settings)
+
+    run = await runner.run(sample_state(), "check it")
+
+    assert run.hit_iteration_limit is False
+    assert run.reply == "all done"
+
+
+async def test_words_spoken_before_the_cap_are_kept_and_qualified(session, settings):
+    """Returning a working turn's last words as its conclusion would mislead.
+
+    So whatever the model managed to say is preserved, with the truncation
+    stated alongside it rather than instead of it.
+    """
+    turns = [
+        LLMTurn(
+            text="Here is what I have so far.",
+            tool_calls=[LLMToolCall(call_id=f"call_{i}", name="validate_itinerary", arguments={})],
+        )
+        for i in range(20)
+    ]
+    runner = await make_runner(session, ScriptedLLM(turns), settings)
+
+    run = await runner.run(sample_state(), "check it")
+
+    assert run.hit_iteration_limit is True
+    assert "Here is what I have so far." in run.reply
+    assert "ran out of steps" in run.reply
 
 
 async def test_a_model_outage_changes_nothing_and_says_so(session, settings):

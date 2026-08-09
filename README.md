@@ -20,7 +20,7 @@ validated `TripPatch` with revision control, lock enforcement and rejection memo
 | 3 | Itinerary generation, validator, scoped local replanning, agent | done |
 | 4 | Web research: Xiaohongshu / Reddit / blogs, resolved against Google | done |
 | 5 | Flights (Duffel), airport comparison, ranking with trade-offs | done |
-| 6 | Hotels: neighbourhood decided first, then priced inventory | done (prices need a key) |
+| 6 | Hotels: neighbourhood decided first, then priced inventory | done |
 | 7 | Multi-traveler preferences, group scoring, fairness | not started |
 
 ## Setup
@@ -64,7 +64,7 @@ Then open http://127.0.0.1:8000/docs.
 .venv/Scripts/python.exe -m pytest -q
 ```
 
-500 tests, no network, no API keys. The `tests/scenarios/` files map one-to-one onto each
+515 tests, no network, no API keys. The `tests/scenarios/` files map one-to-one onto each
 milestone's acceptance criteria.
 
 Contract tests against the real Google APIs are opt-in, since they cost quota:
@@ -178,30 +178,68 @@ hotel provider no longer exists. Replacing it cost one class, because nothing ab
 documented as the next one. No provider under that interface has, or will gain, a booking
 method.
 
+Then, and only then, hotels inside it:
+
+```
+Ueno Urban Hotel Tokyo
+   71 USD/night   11 min avg   score 0.780
+   rating: 3-star (Google Hotels)
+   rating: 3.9/5 from 417 reviews (Google Hotels)
+   price:  71 USD/night at Ikyu.com
+   price:  73 USD/night at klook
+
+Too close to call
+   Nothing measured meaningfully separates Ueno Urban Hotel Tokyo from APA HOTEL UENO-EKIKITA:
+   - 1 USD less per night
+   - the same 3.9/5, but from only 417 reviews against 1,762
+```
+
 **Two ratings are never one number.** A star category and a guest score measure different
 things, so `HotelOptionData.ratings` is a list of typed, sourced `HotelRating`s rather than
 the single float it started as. A five-star with no reviews is not highly rated — it is
-unreviewed, and scores nothing at all on guest rating. Prices work the same way: Google
-Hotels lists one property at several sites, so each quote keeps its vendor.
+unreviewed, and scores nothing at all on guest rating.
+
+**A price with no source behind it is not a price.** The search advertises a property "from
+$70"; the detail call names who will actually take the booking. Those disagree often enough
+to matter, so the advertised figure is kept aside as `headline_nightly`, ranking uses the
+cheapest rate attributable to a named site, and a gap between them is stated rather than
+met at checkout. `featured_prices` — `aclk` links carrying a `gclid` — are advertisements
+and never read as quotes.
+
+**A one-dollar gap is not a recommendation.** When nothing measured separates two hotels,
+the trade-off says so instead of dressing up a rounding difference as a winner. Review
+depth is reported rather than scored: 3.9 from 1,762 reviews is a firmer 3.9 than 3.9 from
+417, which is a statement about confidence, not quality.
 
 **What has no data is said, not scored.** Spec §23 lists quietness as a hotel dimension and
 no provider publishes it, so it is not in the ranking and a traveller who cares is told so.
 Same for room size.
 
-Two things the live run turned up that no offline test could:
+**Enrichment is spent on the shortlist.** Five properties get a price-detail call, a Places
+lookup and a route matrix; the other fifteen get none. Ranking first and enriching after is
+what makes that ordering structural rather than remembered.
+
+Four things the live runs turned up that no offline test could:
 
 - **Google has no transit routing data for Japan.** Both Routes endpoints answer transit
   queries in the US and the UK and return no route at all in Tokyo. So a mode with no
   coverage is retried once in a fallback mode and the substitution is declared — the
   minutes above say "driving" because that is what was measured. A driving minute must
-  never be read as a train minute.
+  never be read as a train minute, so `route_mode` travels with every figure and two
+  differently-measured times are never compared.
 - **`compute_route` had never worked.** It wrapped waypoints the way only the matrix
-  endpoint accepts, so every call would have been rejected. Dead code until now; fixed and
-  covered.
+  endpoint accepts, so every call would have been rejected. Dead code until now.
+- **A hotel search returns almost no per-vendor prices.** On a live Ueno search, two of
+  twenty properties carried a `prices[]` array; the named booking sites live behind a
+  per-property detail call. The interface gained a second method for it, because who pays
+  for that call is the caller's decision, not the provider's.
+- **The agent had no headroom.** A successful five-day plan spent 13 tool calls against a
+  12-round cap, so the acceptance turned on whether the model happened to be economical.
+  The cap is now 16, and — more importantly — running out of rounds sets
+  `hit_iteration_limit` instead of returning a half-finished turn that looks finished.
 
-Hotel prices need `SERPAPI_API_KEY`. Without it the script prints the area decision and
-stops, saying so. The SerpApi contract tests skip with the same remedy named, so nobody
-reads the milestone as more verified than it is.
+Nothing here needs a key the project does not have: `SERPAPI_API_KEY` covers the hotel
+half. Without it the script prints the area decision and stops, saying so.
 
 ## How a change reaches the database
 

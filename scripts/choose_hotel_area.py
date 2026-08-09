@@ -186,15 +186,13 @@ async def main() -> int:
             if not toolbox.hotels.live_mode:
                 sandbox_banner()
 
-            search = await toolbox.hotels.search_hotels(
-                SearchHotelsInput(
-                    check_in=CHECK_IN,
-                    check_out=CHECK_OUT,
-                    adults=2,
-                    limit=20,
-                ),
-                state=state,
+            spec = SearchHotelsInput(
+                check_in=CHECK_IN,
+                check_out=CHECK_OUT,
+                adults=2,
+                limit=20,
             )
+            search = await toolbox.hotels.search_hotels(spec, state=state)
             if not search.ok:
                 print(f"    search failed: [{search.error.code}] {search.error.message}")
                 return 1
@@ -202,7 +200,9 @@ async def main() -> int:
                 print("    no hotels came back. The search itself worked.")
                 return 0
 
-            shortlist = await toolbox.hotels.shortlist(search.results, state=state, size=5)
+            shortlist = await toolbox.hotels.shortlist(
+                search.results, state=state, spec=spec, size=5
+            )
 
             for item in shortlist.ranked:
                 price = f"{item.nightly:.0f} {item.currency}" if item.nightly else "no price"
@@ -225,14 +225,25 @@ async def main() -> int:
                 print(f"\n    note: {warning}")
 
             if len(shortlist.ranked) > 1:
-                trade_off = explain_hotel_choice(shortlist.ranked[0], shortlist.ranked[1])
-                banner("Why the recommendation wins")
-                print(
-                    f"    {shortlist.ranked[0].option.name} over "
-                    f"{shortlist.ranked[1].option.name}:\n"
-                )
+                first, second = shortlist.ranked[0], shortlist.ranked[1]
+                trade_off = explain_hotel_choice(first, second)
+
+                if trade_off.close_call:
+                    # Manufacturing a winner out of a one-dollar gap would be
+                    # exactly the confident wrongness this project avoids.
+                    banner("Too close to call")
+                    print(
+                        f"    Nothing measured meaningfully separates "
+                        f"{first.option.name} from {second.option.name}:\n"
+                    )
+                else:
+                    banner("Why the recommendation wins")
+                    print(f"    {first.option.name} over {second.option.name}:\n")
+
                 for statement in trade_off.statements:
                     print(f"       - {statement}")
+                if trade_off.close_call:
+                    print("\n    Pick on whatever the tools cannot see: the photos, the street.")
 
             return 0
     except MissingCredentials as exc:

@@ -50,6 +50,13 @@ class AgentRun:
     response_ids: list[str] = field(default_factory=list)
     error: str | None = None
 
+    # True when the loop was cut off mid-task rather than the model finishing.
+    # Kept apart from `error`, which means the turn failed: work may well have
+    # been applied before the cap hit. Without this flag, running out of steps
+    # is indistinguishable from a normal completion to anything reading the
+    # result - which is how an unfinished plan comes to look like a finished one.
+    hit_iteration_limit: bool = False
+
     @property
     def changed_state(self) -> bool:
         return self.revision_after != self.revision_before
@@ -174,11 +181,17 @@ class AgentRunner:
                     }
                 )
 
-        run.reply = (
-            turn.text
-            or "I ran out of steps working on that. Nothing was left half-applied - "
-            "tell me which part to focus on and I will do that one thing."
+        # Falling out of the loop means the model was still working. Whatever it
+        # had already said is kept, but the truncation is stated either way -
+        # silently returning a half-finished turn's last words as if they were
+        # its conclusion would be the worst of both.
+        run.hit_iteration_limit = True
+        cut_short = (
+            f"I ran out of steps working on that after {run.iterations} rounds. Anything "
+            "already applied is safe and complete - nothing was left half-applied - but I "
+            "had more to do. Tell me which part to focus on and I will do that one thing."
         )
+        run.reply = f"{turn.text}\n\n{cut_short}" if turn.text else cut_short
         return run
 
     async def _apply_all(

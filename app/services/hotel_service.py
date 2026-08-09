@@ -264,16 +264,25 @@ class HotelService:
         options: list[HotelOptionData],
         *,
         state: TripState,
+        spec: SearchHotelsInput | None = None,
         preferences: HotelPreferences | None = None,
         size: int = DEFAULT_SHORTLIST,
         mode: TravelMode = "transit",
     ) -> Shortlist:
-        """Rank, cut to a shortlist, then spend the enrichment calls on it.
+        """Rank, cut to a shortlist, then spend the expensive calls on it.
 
-        The order is the point. Ranking first uses only what the hotel provider
-        already returned; Google Places and Routes are then asked about the few
-        that survived. Doing it the other way round costs twenty searches and a
-        matrix to answer a question about five.
+        The order is the point. Ranking first uses only what the search already
+        returned; per-vendor prices, Google Places and Routes are then asked
+        about the few that survived. Doing it the other way round costs twenty
+        detail calls, twenty searches and a large matrix to answer a question
+        about five.
+
+        The re-rank afterwards is not redundant: the shortlist is picked on the
+        provider's advertised rates and then re-ordered on prices that name who
+        is offering them, which is a better question answered with better data.
+
+        `spec` is what the search was run with; without it the per-vendor price
+        detail is skipped and the warnings say so.
         """
         preferences = preferences or HotelPreferences()
         warnings = unscored_preferences(preferences)
@@ -288,6 +297,11 @@ class HotelService:
 
         top = [item.option for item in first_pass[:size]]
 
+        # Resolved the same way the search was, so the detail calls carry the
+        # dates and party the prices were quoted for.
+        resolved, _problem = resolve_area(spec, state) if spec else (None, None)
+        warnings.extend(await self._add_quotes(top, resolved))
+
         entities, enrich_warnings = await self._enrich(top, state)
         warnings.extend(enrich_warnings)
 
@@ -299,6 +313,27 @@ class HotelService:
             entities=entities,
             warnings=warnings,
         )
+
+    async def _add_quotes(
+        self, options: list[HotelOptionData], spec: SearchHotelsInput | None
+    ) -> list[str]:
+        """Ask who is actually offering these, and for how much.
+
+        A failure here costs the vendor breakdown, not the shortlist: the
+        advertised rate is still a real thing the search returned. So it is
+        reported and the ranking goes on, rather than the whole call dying for
+        want of a price comparison.
+        """
+        if spec is None:
+            return [
+                "per-site prices were not fetched, so each rate is the provider's advertised "
+                "figure rather than one a named booking site quoted"
+            ]
+
+        try:
+            return await self._provider.fetch_quotes(options, spec)
+        except ProviderError as exc:
+            return [f"per-site prices unavailable: {exc.message}"]
 
     async def _enrich(
         self, options: list[HotelOptionData], state: TripState

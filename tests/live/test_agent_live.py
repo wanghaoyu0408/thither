@@ -85,6 +85,14 @@ async def test_the_two_turn_acceptance_conversation(agent, session):
 
     assert first.error is None, first.error
     assert first.reply, "the agent said nothing"
+    # Named explicitly: a truncated turn used to surface here as the mystifying
+    # "no itinerary was produced", which points at the planner rather than at
+    # the round budget that actually ran out.
+    assert not first.hit_iteration_limit, (
+        f"the agent was cut off after {first.iterations} rounds and "
+        f"{len(first.tools)} tool calls; raise agent_max_iterations rather than "
+        f"reading this as a planning failure"
+    )
 
     state = await repo.get(state.trip_id)
     assert state.itinerary.days, "no itinerary was produced"

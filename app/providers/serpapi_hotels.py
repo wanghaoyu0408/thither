@@ -1,22 +1,31 @@
 """Google Hotels prices via SerpApi (spec section 16).
 
-Search only. Follows the `HotelProvider` interface and will never gain a
-booking method.
+Search and price detail. Follows the `HotelProvider` interface and will never
+gain a booking method.
 
-Three properties of this API shape the code:
+Four properties of this API shape the code:
 
-**One call, not two.** Properties arrive with their prices already attached, so
-there is no id-then-offers round trip and no fan-out. The complexity moves to
-pagination, which is handled here rather than leaking upward.
+**The search is one call; per-vendor prices are one call each.** A search
+returns twenty properties carrying a single headline `rate_per_night` and
+usually no `prices[]` at all - on a live Ueno search, two of twenty had one.
+The named booking sites live behind `property_token` in a per-property detail
+call, so the shape is search-then-detail. Who pays for the details is the
+caller's decision: `HotelService` spends them on the shortlist only.
 
 **Both kinds of rating arrive together.** `overall_rating` with `reviews` is
 what guests thought; `extracted_hotel_class` is the facility category. They
 come from one response and are kept apart into two `HotelRating` entries,
 because a four-star hotel and a 4.3-from-2,300-reviews are not the same claim.
 
-**`prices[]` is per booking vendor.** The same property is listed by several
-sites at different rates, so there is no single "the price". Every quote keeps
-the source that gave it.
+**The headline rate is not a quote.** Google Hotels advertises a property "from
+$70" while every booking site it lists wants $90. Nobody can be sent to pay the
+advertised figure, so it is kept aside as `headline_nightly` and the price that
+drives ranking is the cheapest one attributable to a named source.
+
+**`featured_prices` are advertisements** - their links are `aclk` redirects
+carrying a `gclid`. Only the organic `prices[]` array is read, for the same
+reason the search's `ads` block is ignored: a purchased slot inside a
+recommendation would make the recommendation a different thing than it claims.
 
 `location_rating` is stored with its source but is never used as *the* location
 score. It is an opaque composite; the route-based score in
@@ -24,6 +33,7 @@ score. It is an opaque composite; the route-based score in
 provenance.
 """
 
+import asyncio
 from datetime import date
 from typing import Any
 from urllib.parse import quote
@@ -42,6 +52,14 @@ ENGINE = "google_hotels"
 # One page is 20 properties. Three is more than a person can weigh, and each
 # page is a billed request.
 MAX_PAGES = 3
+
+# Detail calls run in parallel, but not in a burst: a rate limit costs the whole
+# shortlist, and five properties is not worth racing for.
+MAX_CONCURRENT_DETAILS = 3
+
+# A headline rate this far below every named booking site is worth saying out
+# loud rather than leaving to be discovered at checkout.
+HEADLINE_GAP_TOLERANCE = 5.0
 
 # SerpApi answers "nothing matched" with HTTP 200 and an `error` string. That is
 # a legitimately empty search, not a failed call, and conflating the two would
@@ -143,6 +161,12 @@ def _ratings(raw: dict[str, Any]) -> list[HotelRating]:
 
 
 def _quotes(raw: dict[str, Any], currency: str) -> list[HotelPriceQuote]:
+    """The organic `prices[]` array only.
+
+    `featured_prices` is deliberately not read. Those entries are paid
+    placements - `aclk` links carrying a `gclid` - and an advertisement inside a
+    price comparison is not a price comparison.
+    """
     quotes: list[HotelPriceQuote] = []
     for entry in raw.get("prices") or []:
         if not isinstance(entry, dict):
@@ -211,12 +235,58 @@ def normalize_property(
         lng=lng,
         area_name=spec.area_name,
         nightly_price=nightly,
+        headline_nightly=_rate(raw.get("rate_per_night"), spec.currency),
         total_price=total,
         quotes=quotes,
         ratings=_ratings(raw),
         room_description=raw.get("description"),
         amenities=[str(item) for item in (raw.get("amenities") or []) if item],
         search_url=_search_url(str(name), spec.check_in, spec.check_out),
+    )
+
+
+def _apply_detail(
+    option: HotelOptionData, payload: dict[str, Any], spec: SearchHotelsInput
+) -> None:
+    """Reprice and enrich one option from its detail response.
+
+    The price that drives ranking becomes the cheapest quote that can be
+    attributed to a named site. The advertised headline stays where it was, so
+    the difference between "advertised" and "obtainable" survives rather than
+    being resolved silently in either direction.
+    """
+    cheapest = option.cheapest_quote
+    if cheapest and cheapest.nightly:
+        option.nightly_price = cheapest.nightly
+        if cheapest.total:
+            option.total_price = cheapest.total
+
+    # Free cancellation is a fact about a specific vendor's offer, so it counts
+    # only when the cheapest one - the one being recommended - carries it.
+    for entry in payload.get("prices") or []:
+        if not isinstance(entry, dict):
+            continue
+        if cheapest and entry.get("source") == cheapest.source:
+            option.refundable = bool(entry.get("free_cancellation")) or None
+            break
+
+    amenities = payload.get("amenities")
+    if isinstance(amenities, list) and amenities:
+        option.amenities = [str(item) for item in amenities if item][:12]
+
+
+def _headline_note(option: HotelOptionData) -> str | None:
+    gap = option.headline_gap()
+    if gap is None or gap <= HEADLINE_GAP_TOLERANCE:
+        return None
+
+    cheapest = option.cheapest_quote
+    return (
+        f"{option.name}: advertised from "
+        f"{option.headline_nightly.amount:.0f} {option.headline_nightly.currency}/night, but the "
+        f"cheapest booking site listed is {cheapest.source} at "
+        f"{cheapest.nightly.amount:.0f} {cheapest.nightly.currency}. The lower figure is not "
+        f"attributable to anywhere you could book"
     )
 
 
@@ -303,3 +373,39 @@ class SerpApiGoogleHotelsProvider:
                 break
 
         return options[: spec.limit]
+
+    async def fetch_quotes(
+        self, options: list[HotelOptionData], spec: SearchHotelsInput
+    ) -> list[str]:
+        """Per-vendor prices for a handful of properties, one call each.
+
+        Billed per property, so the caller decides which handful is worth it.
+        Concurrency is bounded for the same reason the route matrix is: a burst
+        of parallel searches is the fastest way to a rate limit.
+        """
+        wanted = [option for option in options if option.offer_ref]
+        if not wanted:
+            return []
+
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_DETAILS)
+
+        async def one(option: HotelOptionData) -> str | None:
+            params = {**self._params(spec), "property_token": option.offer_ref}
+            async with semaphore:
+                payload = await request_json(
+                    self._client, "GET", BASE_URL, provider=PROVIDER, params=params
+                )
+
+            message = payload.get("error")
+            if isinstance(message, str) and message:
+                return f"{option.name}: no price detail available ({message})"
+
+            option.quotes = _quotes(payload, spec.currency)
+            if not option.quotes:
+                return f"{option.name}: no booking site listed a price"
+
+            _apply_detail(option, payload, spec)
+            return _headline_note(option)
+
+        notes = await asyncio.gather(*(one(option) for option in wanted))
+        return [note for note in notes if note]

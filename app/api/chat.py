@@ -108,6 +108,7 @@ async def send_message(trip_id: str, payload: ChatRequest, session: SessionDep) 
             [error.code for error in patch.errors] for patch in run.patches if not patch.applied
         ],
         iterations=run.iterations,
+        hit_iteration_limit=run.hit_iteration_limit,
         input_tokens=run.input_tokens,
         output_tokens=run.output_tokens,
         error=run.error,

@@ -169,8 +169,17 @@ class HotelOptionData(BaseModel):
     # trip keeps the trace of that decision.
     area_bypass_reason: str | None = None
 
+    # What ranking and display use. Once vendor quotes exist this is the
+    # cheapest one that can be attributed to a named source.
     nightly_price: Money | None = None
     total_price: Money | None = None
+
+    # The provider's own headline rate, kept separately because nobody can say
+    # who is offering it. Google Hotels' "from $70" can come from a paid
+    # placement that no listed booking site matches, so it is never quietly
+    # treated as a price someone could go and pay.
+    headline_nightly: Money | None = None
+
     quotes: list[HotelPriceQuote] = []
 
     ratings: list[HotelRating] = []
@@ -212,6 +221,18 @@ class HotelOptionData(BaseModel):
     def cheapest_quote(self) -> HotelPriceQuote | None:
         priced = [quote for quote in self.quotes if quote.nightly is not None]
         return min(priced, key=lambda quote: quote.nightly.amount) if priced else None
+
+    def headline_gap(self) -> float | None:
+        """How much cheaper the unattributed headline is than any real quote.
+
+        `None` when there is nothing to compare. A positive number means the
+        advertised rate is not matched by any booking site we can name, which
+        the traveller should hear rather than discover at checkout.
+        """
+        cheapest = self.cheapest_quote
+        if self.headline_nightly is None or cheapest is None or cheapest.nightly is None:
+            return None
+        return round(cheapest.nightly.amount - self.headline_nightly.amount, 2)
 
     def mean_route_minutes(self) -> float | None:
         if not self.route_minutes:

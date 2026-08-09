@@ -187,6 +187,15 @@ def _cons(option: HotelOptionData, preferences: HotelPreferences) -> list[str]:
     if not option.nightly_price and not option.quotes:
         cons.append("no price available")
 
+    gap = option.headline_gap()
+    if gap is not None and gap > 0:
+        # An advertised rate no listed site matches is a real difference the
+        # traveller would otherwise meet at checkout.
+        cons.append(
+            f"{gap:.0f} {option.nightly_price.currency} above the advertised rate, which no "
+            f"named booking site matched"
+        )
+
     return cons
 
 
@@ -282,6 +291,15 @@ def describe_prices(option: HotelOptionData) -> list[str]:
     return lines
 
 
+# A price gap smaller than this, proportionally, is not a reason to prefer one
+# hotel over another - it is noise the ranking happened to order.
+NEGLIGIBLE_PRICE_FRACTION = 0.03
+
+# One rating backed by this many times more reviews than another is worth
+# mentioning. Not scored - it says how firm a number is, not how good.
+REVIEW_DEPTH_RATIO = 2.0
+
+
 @dataclass
 class HotelTradeOff:
     """One comparison, in figures that came from a tool."""
@@ -295,6 +313,9 @@ class HotelTradeOff:
 
     statements: list[str] = field(default_factory=list)
     live_mode: bool = True
+    # True when nothing measured separates these two meaningfully. Presenting a
+    # winner anyway would dress up a rounding difference as a recommendation.
+    close_call: bool = False
 
 
 def explain_hotel_choice(recommended: RankedHotel, alternative: RankedHotel) -> HotelTradeOff:
@@ -329,8 +350,19 @@ def explain_hotel_choice(recommended: RankedHotel, alternative: RankedHotel) -> 
                 f"({here:.0f} min against {there:.0f})"
             )
 
+    substantive = 0
     for kind in ("user_rating", "star_category"):
-        _compare_rating(recommended, alternative, kind, statements)
+        substantive += _compare_rating(recommended, alternative, kind, statements)
+
+    substantive += _compare_review_depth(recommended, alternative, statements)
+
+    if minutes_gap is not None and abs(minutes_gap) >= 3:
+        substantive += 1
+
+    # A price difference only counts as a reason when it is one.
+    if price_gap is not None and recommended.nightly:
+        if abs(price_gap) / max(recommended.nightly, 1.0) >= NEGLIGIBLE_PRICE_FRACTION:
+            substantive += 1
 
     return HotelTradeOff(
         recommended_ref=recommended.ref,
@@ -340,19 +372,57 @@ def explain_hotel_choice(recommended: RankedHotel, alternative: RankedHotel) -> 
         minutes_difference=minutes_gap,
         statements=statements,
         live_mode=recommended.option.live_mode and alternative.option.live_mode,
+        close_call=substantive == 0,
     )
+
+
+def _compare_review_depth(
+    recommended: RankedHotel, alternative: RankedHotel, statements: list[str]
+) -> int:
+    """How firmly each rating is held, when the ratings themselves agree.
+
+    Two hotels at 3.9/5 are not equally well described if one has 1,762 reviews
+    and the other 417. This is stated rather than scored: it says how much to
+    trust a number, which is not the same as the number being better.
+    """
+    mine = recommended.option.user_rating
+    theirs = alternative.option.user_rating
+    if mine is None or theirs is None or not mine.review_count or not theirs.review_count:
+        return 0
+    if abs(mine.value - theirs.value) >= 0.1:
+        # The ratings differ; _compare_rating has already said so.
+        return 0
+
+    if mine.review_count >= theirs.review_count * REVIEW_DEPTH_RATIO:
+        statements.append(
+            f"the same {mine.value:g}/{mine.scale_max:g}, but from {mine.review_count:,} "
+            f"reviews rather than {theirs.review_count:,}"
+        )
+        return 1
+    if theirs.review_count >= mine.review_count * REVIEW_DEPTH_RATIO:
+        statements.append(
+            f"the same {mine.value:g}/{mine.scale_max:g}, but from only "
+            f"{mine.review_count:,} reviews against {theirs.review_count:,}"
+        )
+    return 0
 
 
 def _compare_rating(
     recommended: RankedHotel, alternative: RankedHotel, kind: str, statements: list[str]
-) -> None:
-    """Compare like with like, or not at all."""
+) -> int:
+    """Compare like with like, or not at all.
+
+    Only ever compares a rating against the same *kind* of rating from the same
+    scale. A star category against a guest score would be the one comparison
+    this whole milestone exists to prevent.
+    """
     mine: HotelRating | None = recommended.option.rating_of(kind)
     theirs: HotelRating | None = alternative.option.rating_of(kind)
     if mine is None or theirs is None or mine.scale_max != theirs.scale_max:
-        return
+        return 0
     if abs(mine.value - theirs.value) < 0.1:
-        return
+        return 0
     better = "higher" if mine.value > theirs.value else "lower"
     label = kind.replace("_", " ")
     statements.append(f"{better} {label}: {mine.describe()} vs {theirs.describe()}")
+    return 1

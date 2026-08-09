@@ -31,7 +31,14 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_model: str = "gpt-5"
     # Hard stop on the agent loop, so a confused model cannot spend forever.
-    agent_max_iterations: int = 12
+    #
+    # Raised from 12 in M6. A five-day plan legitimately spends rounds on
+    # discovery, then place details, then generate, then apply; a live run
+    # measured 13 tool calls against a 12-round cap, which left no headroom at
+    # all and made the acceptance turn on whether the model happened to be
+    # economical. This still bounds a confused model - it just stops cutting off
+    # a working one.
+    agent_max_iterations: int = 16
     # Ceiling on fresh Places searches per planning run; the entity registry is
     # consulted first.
     planning_search_budget: int = 8

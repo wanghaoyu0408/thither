@@ -42,6 +42,10 @@ class ChatResponse(BaseModel):
     patches_rejected: list[list[str]] = []
 
     iterations: int = 0
+    # True when the agent was still working when the round cap hit. Distinct
+    # from `error`: the turn did not fail, it was cut short, and what it applied
+    # before that is complete.
+    hit_iteration_limit: bool = False
     input_tokens: int = 0
     output_tokens: int = 0
 

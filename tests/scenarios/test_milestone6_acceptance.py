@@ -149,17 +149,59 @@ class ScriptedPlaces:
 class FakeHotelProvider:
     name = "fake_hotels"
 
-    def __init__(self, options: list[HotelOptionData], *, live_mode=True, raises=None):
+    def __init__(
+        self,
+        options: list[HotelOptionData],
+        *,
+        live_mode=True,
+        raises=None,
+        quotes: dict[str, list[tuple[str, float]]] | None = None,
+        quotes_raise=None,
+    ):
         self.options = options
         self.live_mode = live_mode
         self.raises = raises
+        # name -> [(vendor, nightly)], as a detail call would return.
+        self.quotes = quotes or {}
+        self.quotes_raise = quotes_raise
         self.calls: list[SearchHotelsInput] = []
+        self.quoted: list[str] = []
 
     async def search_hotels(self, spec: SearchHotelsInput) -> list[HotelOptionData]:
         self.calls.append(spec)
         if self.raises:
             raise self.raises
         return [option.model_copy(deep=True) for option in self.options]
+
+    async def fetch_quotes(
+        self, options: list[HotelOptionData], spec: SearchHotelsInput
+    ) -> list[str]:
+        if self.quotes_raise:
+            raise self.quotes_raise
+
+        notes: list[str] = []
+        for option in options:
+            self.quoted.append(option.name)
+            listed = self.quotes.get(option.name)
+            if not listed:
+                notes.append(f"{option.name}: no booking site listed a price")
+                continue
+
+            option.quotes = [
+                HotelPriceQuote(source=source, nightly=Money(amount=amount))
+                for source, amount in listed
+            ]
+            cheapest = option.cheapest_quote
+            option.nightly_price = cheapest.nightly
+
+            gap = option.headline_gap()
+            if gap is not None and gap > 5.0:
+                notes.append(
+                    f"{option.name}: advertised from "
+                    f"{option.headline_nightly.amount:.0f} but the cheapest booking site "
+                    f"listed is {cheapest.source} at {cheapest.nightly.amount:.0f}"
+                )
+        return notes
 
 
 def cache() -> LayeredCache:
@@ -200,6 +242,7 @@ def hotel(
     lng: float = 139.7960,
     area: str | None = "Asakusa",
     live_mode: bool = True,
+    headline: float | None = None,
 ) -> HotelOptionData:
     ratings: list[HotelRating] = []
     if stars is not None:
@@ -220,6 +263,9 @@ def hotel(
         lng=lng,
         area_name=area,
         nightly_price=Money(amount=nightly) if nightly is not None else None,
+        headline_nightly=Money(amount=headline if headline is not None else nightly)
+        if nightly is not None or headline is not None
+        else None,
         ratings=ratings,
         quotes=[
             HotelPriceQuote(source=source, nightly=Money(amount=amount))
@@ -726,6 +772,160 @@ def test_the_cheapest_vendor_quote_is_used_and_its_source_is_kept():
         "212 USD/night at Hotels.com",
         "259 USD/night at Expedia",
     ]
+
+
+async def test_vendor_quotes_are_fetched_for_the_shortlist_only():
+    """One detail call per property, so only the few worth it get one."""
+    options = [hotel(name, nightly=200.0 + index) for index, name in enumerate(EIGHT_HOTELS)]
+    provider = FakeHotelProvider(
+        options,
+        quotes={name: [("Booking.com", 220.0), ("Hotels.com", 205.0)] for name in EIGHT_HOTELS},
+    )
+    service = hotel_service(provider)
+
+    shortlist = await service.shortlist(
+        options,
+        state=tokyo_trip(),
+        spec=SearchHotelsInput(area_name="Asakusa", check_in=CHECK_IN, check_out=CHECK_OUT),
+        size=3,
+    )
+
+    assert len(provider.quoted) == 3
+    top = shortlist.ranked[0].option
+    assert {quote.source for quote in top.quotes} == {"Booking.com", "Hotels.com"}
+    # The cheapest named site is what the recommendation is priced at.
+    assert top.nightly_price.amount == 205.0
+    assert top.cheapest_quote.source == "Hotels.com"
+
+
+async def test_an_advertised_rate_no_site_matches_is_said_out_loud():
+    """Google Hotels advertises "from $70" while every listed site wants $90.
+
+    Ranking on the advertised figure would be ranking on something nobody can
+    be sent to pay, so the price becomes the cheapest attributable one and the
+    difference is stated rather than left for checkout.
+    """
+    option = hotel("Centurion Ueno", nightly=70.0, rating=3.6, reviews=1782)
+    provider = FakeHotelProvider(
+        [option], quotes={"Centurion Ueno": [("Centurion Hotel Ueno", 90.0)]}
+    )
+
+    shortlist = await hotel_service(provider).shortlist(
+        [option],
+        state=tokyo_trip(),
+        spec=SearchHotelsInput(area_name="Ueno", check_in=CHECK_IN, check_out=CHECK_OUT),
+        size=1,
+    )
+
+    priced = shortlist.ranked[0]
+    assert priced.option.headline_nightly.amount == 70.0
+    assert priced.option.nightly_price.amount == 90.0
+    assert priced.option.headline_gap() == 20.0
+    assert any("above the advertised rate" in con for con in priced.cons)
+    assert any("cheapest booking site listed" in note for note in shortlist.warnings)
+
+
+async def test_losing_the_price_detail_costs_the_breakdown_not_the_shortlist():
+    option = hotel("Only Option", nightly=180.0, rating=4.2, reviews=500)
+    provider = FakeHotelProvider(
+        [option], quotes_raise=ProviderUnavailable("detail endpoint is down", "fake_hotels")
+    )
+
+    shortlist = await hotel_service(provider).shortlist(
+        [option],
+        state=tokyo_trip(),
+        spec=SearchHotelsInput(area_name="Asakusa", check_in=CHECK_IN, check_out=CHECK_OUT),
+        size=1,
+    )
+
+    assert len(shortlist.ranked) == 1
+    assert shortlist.ranked[0].option.nightly_price.amount == 180.0
+    assert any("per-site prices unavailable" in warning for warning in shortlist.warnings)
+
+
+async def test_without_a_spec_the_rates_are_declared_as_unattributed():
+    option = hotel("Only Option", nightly=180.0)
+    provider = FakeHotelProvider([option], quotes={"Only Option": [("Booking.com", 200.0)]})
+
+    shortlist = await hotel_service(provider).shortlist([option], state=tokyo_trip(), size=1)
+
+    assert provider.quoted == []
+    assert any("advertised figure" in warning for warning in shortlist.warnings)
+
+
+def test_two_near_identical_hotels_are_reported_as_a_close_call():
+    """A one-dollar gap is not a recommendation.
+
+    Manufacturing a winner out of it would be the confident wrongness this
+    project exists to avoid, so the trade-off says nothing separates them.
+    """
+    from app.services.hotel_ranking import explain_hotel_choice
+
+    first, second = rank_hotels(
+        [
+            hotel("Ueno Urban", nightly=71.0, stars=3.0, rating=3.9, reviews=417),
+            hotel("APA Ueno", nightly=72.0, stars=3.0, rating=3.9, reviews=430),
+        ]
+    )
+
+    trade_off = explain_hotel_choice(first, second)
+
+    assert trade_off.close_call
+    assert trade_off.price_difference == -1.0
+
+
+def test_a_real_difference_is_not_a_close_call():
+    from app.services.hotel_ranking import explain_hotel_choice
+
+    first, second = rank_hotels(
+        [
+            hotel("Good", nightly=180.0, stars=4.0, rating=4.6, reviews=3000),
+            hotel("Poor", nightly=175.0, stars=3.0, rating=3.4, reviews=3000),
+        ]
+    )
+
+    trade_off = explain_hotel_choice(first, second)
+
+    assert not trade_off.close_call
+    assert any("higher user rating" in s for s in trade_off.statements)
+    assert any("higher star category" in s for s in trade_off.statements)
+
+
+def test_review_depth_separates_two_identical_ratings():
+    """3.9 from 1,762 reviews is a firmer 3.9 than 3.9 from 417.
+
+    Said, not scored: it describes how much to trust the number, which is not
+    the same as the number being better.
+    """
+    from app.services.hotel_ranking import explain_hotel_choice
+
+    deep = rank_hotels([hotel("Well Reviewed", nightly=90.0, rating=3.9, reviews=1762)])[0]
+    shallow = rank_hotels([hotel("Less Reviewed", nightly=90.0, rating=3.9, reviews=417)])[0]
+
+    trade_off = explain_hotel_choice(deep, shallow)
+
+    assert not trade_off.close_call
+    assert any("from 1,762 reviews rather than 417" in s for s in trade_off.statements)
+    # Neither is scored differently on rating - both are 3.9.
+    assert deep.score.dimensions["user_rating"] == shallow.score.dimensions["user_rating"]
+
+
+def test_travel_times_measured_differently_are_not_compared():
+    """A driving minute and a train minute are not the same minute."""
+    from app.services.hotel_ranking import explain_hotel_choice
+
+    by_car = hotel("Drove", nightly=100.0)
+    by_car.route_minutes = {"ent_ueno": 10.0}
+    by_car.route_mode = "driving"
+
+    by_train = hotel("Trained", nightly=100.0)
+    by_train.route_minutes = {"ent_ueno": 40.0}
+    by_train.route_mode = "transit"
+
+    trade_off = explain_hotel_choice(rank_hotels([by_car])[0], rank_hotels([by_train])[0])
+
+    assert trade_off.minutes_difference is None
+    assert not any("closer to" in s for s in trade_off.statements)
 
 
 def test_a_cheaper_hotel_scores_higher_on_price():
