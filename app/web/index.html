@@ -225,6 +225,17 @@ section.work { background: var(--bg); }
 .opt-top b { font-size: 13.5px; flex: 1; }
 .opt ul { margin: 6px 0 0 15px; font-size: 12.5px; color: var(--ink-2); }
 .opt ul.cons { color: var(--warn); }
+.figures { margin-top: 8px; border-top: 1px solid var(--line); }
+.fig { display: flex; gap: 10px; align-items: baseline; padding: 4px 0; font-size: 12.5px; }
+.fig b { flex: none; width: 40%; font-weight: 500; color: var(--ink-3); }
+.fig span { color: var(--ink); }
+.fig em { display: block; font-style: normal; font-size: 11.5px; color: var(--warn); }
+.notscored { margin-top: 8px; font-size: 11.5px; color: var(--ink-3); }
+.notscored summary { cursor: pointer; }
+.notscored li { margin: 4px 0 0 15px; }
+.versus { margin-top: 9px; padding: 7px 9px; border-radius: 7px;
+  background: var(--sunk); font-size: 12px; color: var(--ink-2); }
+.versus b { color: var(--ink); }
 .booked { background: var(--accent-soft); border: 1px solid var(--accent);
   border-radius: var(--r); padding: 10px 12px; font-size: 13px; color: var(--accent); }
 .thin { color: var(--warn); }
@@ -970,21 +981,38 @@ function decisionHtml(view) {
   </div>`;
 }
 
+/** A comparison card, not a row in a ranked list. The figures are what make it
+ *  possible to disagree with the ranking, and the "not scored" list is what
+ *  stops a silence reading as a bad result. */
 function optionHtml(view, option) {
   return `<div class="opt ${option.selected ? "on" : ""}">
     <div class="opt-top">
       <b>${esc(option.label)}</b>
       ${scoreHtml(option)}
     </div>
+    ${figuresHtml(option.metrics)}
     ${option.pros.length ? `<ul>${option.pros.map((p) => `<li>+ ${esc(p)}</li>`).join("")}</ul>` : ""}
     ${option.cons.length ? `<ul class="cons">${option.cons.map((c) => `<li>− ${esc(c)}</li>`).join("")}</ul>` : ""}
+    ${option.unscored.length ? `<details class="notscored">
+      <summary>${option.unscored.length} thing(s) this ranking does not measure</summary>
+      <ul>${option.unscored.map((u) => `<li>${esc(u)}</li>`).join("")}</ul>
+    </details>` : ""}
     <div class="acts">
+      <button data-decwhy="${esc(view.name)}|${esc(option.option_id)}">Why?</button>
       ${option.selected || view.locked ? "" :
         `<button data-decselect="${esc(view.name)}|${esc(option.option_id)}">Select</button>`}
       ${view.locked ? "" :
         `<button class="danger" data-decreject="${esc(view.name)}|${esc(option.option_id)}">Reject</button>`}
     </div>
   </div>`;
+}
+
+function figuresHtml(metrics) {
+  if (!metrics || !metrics.length) return "";
+  return `<div class="figures">${metrics.map((m) => `<div class="fig">
+    <b>${esc(m.label)}</b>
+    <span>${esc(m.value)}${m.note ? `<em>${esc(m.note)}</em>` : ""}</span>
+  </div>`).join("")}</div>`;
 }
 
 function rejectedHtml(view, option) {
@@ -1300,6 +1328,10 @@ function wireWorkspace() {
     const [name, option] = pair(v);
     act(`/decisions/${name}/options/${option}/reconsider`, post({}), (r) => r.summary);
   });
+  on("decwhy", (v) => {
+    const [name, option] = pair(v);
+    showWhy(`/decisions/${name}/options/${option}/why`);
+  });
   on("declock", (name) => act(`/decisions/${name}/lock`, post({}), () => "Locked"));
   on("decunlock", (name) => act(`/decisions/${name}/unlock`, post({}), () => "Unlocked"));
   on("decbooked", (name) =>
@@ -1380,8 +1412,19 @@ async function showWhy(path) {
       <b>Explanation incomplete.</b><br>${why.missing.map(esc).join("<br>")}
     </div>`}
 
+    ${sec("The figures", figuresHtml(why.metrics))}
     ${sec("Why it was chosen", list(why.pros))}
     ${sec("Trade-off", list(why.cons))}
+    ${why.alternative ? sec("Compared with the next best", `<div class="versus">
+      <b>${esc(why.alternative.label)}</b>${why.alternative.score !== null
+        ? ` · scored ${why.alternative.score.toFixed(2)}${
+            why.alternative.coverage !== null && why.alternative.coverage < 0.5
+              ? " on thin evidence" : ""}` : ""}
+      ${why.alternative.deltas.length
+        ? `<br>This one is ${why.alternative.deltas.map(esc).join(", ")}.`
+        : "<br>No figure the two share differs enough to report."}
+    </div>`) : ""}
+    ${why.unscored.length ? sec("Not measured", list(why.unscored)) : ""}
     ${why.rating ? sec("Rating", `<p style="font-size:13px">${why.rating} / 5${
         why.rating_count ? ` from ${why.rating_count.toLocaleString()} reviews` : ""}${
         why.rating_count && why.rating_count < 50

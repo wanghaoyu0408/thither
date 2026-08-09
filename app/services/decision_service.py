@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from app.models.decision import SINGLETON_DECISIONS, Decision, DecisionOption
 from app.models.trip import TripState
 from app.services.conflict_service import unresolved_blocking
+from app.services.option_metrics import Metric, metrics_for, unscored_for
 
 # What each slot is called on screen, and the order they are worked through.
 TITLES: dict[str, str] = {
@@ -53,6 +54,11 @@ class OptionView(BaseModel):
     pros: list[str] = []
     cons: list[str] = []
     evidence_count: int = 0
+
+    # The figures that make this a comparison rather than a ranked list. Same
+    # builder the explanation uses, so a card and its `Why?` cannot disagree.
+    metrics: list[Metric] = []
+    unscored: list[str] = []
 
 
 class DecisionView(BaseModel):
@@ -101,8 +107,15 @@ def label_for(data: Any) -> str:
     destination = getattr(data, "destination", None)
     if origin and destination:
         airlines = getattr(data, "airlines", []) or []
-        carrier = f" · {airlines[0]}" if airlines else ""
-        return f"{origin} → {destination}{carrier}"
+        parts = [f"{origin} → {destination}"]
+        if airlines:
+            parts.append(airlines[0])
+        # The departure is what tells two offers on the same route apart. Without
+        # it a shortlist of four flights renders as the same line four times.
+        departure = getattr(data, "departure_at", None)
+        if departure is not None:
+            parts.append(departure.strftime("%H:%M"))
+        return " · ".join(parts)
     return getattr(data, "entity_id", None) or "option"
 
 
@@ -122,6 +135,8 @@ def _option_view(option: DecisionOption, *, selected_id: str | None) -> OptionVi
         pros=option.pros,
         cons=option.cons,
         evidence_count=len(option.evidence_refs),
+        metrics=metrics_for(option.data),
+        unscored=unscored_for(option.data),
     )
 
 

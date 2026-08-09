@@ -26,6 +26,7 @@ from app.models.rejection import RejectionRecord
 from app.models.trip import TripState
 from app.services import json_pointer as jp
 from app.services.decision_service import DecisionView, decision_views, visible
+from app.services.explanation_service import Explanation, explain_option
 
 router = APIRouter(prefix="/trips/{trip_id}/decisions", tags=["decisions"])
 
@@ -261,6 +262,24 @@ async def set_booked(
 
 
 # --- rejecting ---------------------------------------------------------------
+
+
+@router.get("/{name}/options/{option_id}/why", response_model=Explanation)
+async def explain_decision_option(
+    trip_id: str, name: str, option_id: str, session: SessionDep
+) -> Explanation:
+    """Why this option - for flights and neighbourhoods too, not just places.
+
+    `explain` reaches a place through its entity id. A flight has none, so for
+    two milestones the flight and area cards had no explanation available at all.
+    """
+    state = await _load(session, trip_id)
+    explanation = explain_option(state, name, option_id)
+    if explanation is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, f"no option {option_id!r} on decision {name!r}"
+        )
+    return explanation
 
 
 @router.post("/{name}/options/{option_id}/reject", response_model=ActionResult)

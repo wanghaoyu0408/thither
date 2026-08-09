@@ -240,7 +240,7 @@ async def test_the_model_is_told_which_decisions_are_booked():
 
     flights = next(row for row in summary["decisions"] if row["name"] == "flights")
     assert flights["booked"] is True
-    assert flights["selected"] == "SFO → HND · UA"
+    assert flights["selected"] == "SFO → HND · UA · 11:00"
 
 
 async def test_without_a_role_no_airport_decision_is_invented():
