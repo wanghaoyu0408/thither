@@ -67,13 +67,20 @@ def check_budget(constraint: TripConstraint, state: TripState) -> ConstraintChec
         )
 
     spent = sum(c.amount for c in costs)
-    ceiling = float(cap) * state.brief.party.size
+    party_size = state.brief.party.size
+    if party_size is None:
+        return _result(
+            constraint,
+            "not_checkable",
+            "a per-person budget cannot be checked until the party size is known",
+        )
+    ceiling = float(cap) * party_size
     if spent > ceiling:
         return _result(
             constraint,
             "violated",
             f"itinerary totals {spent:.2f} {currency}, over the "
-            f"{ceiling:.2f} {currency} ceiling ({cap} per person x {state.brief.party.size})",
+            f"{ceiling:.2f} {currency} ceiling ({cap} per person x {party_size})",
         )
     return _result(
         constraint,

@@ -163,6 +163,51 @@ section.work { background: var(--bg); }
 .acts button:hover { border-color: var(--line-2); color: var(--ink); }
 .acts button.danger:hover { color: var(--error); border-color: var(--error); }
 
+/* --- intake --------------------------------------------------------------- */
+.intake { max-width: 560px; }
+.intake h2 { font-size: 18px; margin-bottom: 4px; }
+.intake .lede { color: var(--ink-2); font-size: 13px; margin-bottom: 18px; }
+.q {
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r);
+  padding: 13px 15px; margin-bottom: 10px;
+}
+.q > b { font-size: 13.5px; display: block; margin-bottom: 9px; }
+.q label {
+  display: flex; align-items: flex-start; gap: 8px; font-size: 13px;
+  padding: 5px 0; cursor: pointer; color: var(--ink-2);
+}
+.q label:hover { color: var(--ink); }
+.q label input { margin-top: 2px; }
+.q label small { display: block; color: var(--ink-3); font-size: 11.5px; }
+.q .free { margin-top: 8px; }
+.q .free input, .q .dates input {
+  width: 100%; font: inherit; font-size: 13px; padding: 6px 8px;
+  border: 1px solid var(--line); border-radius: 7px;
+  background: var(--panel-2); color: var(--ink);
+}
+.q .dates { display: flex; gap: 8px; }
+.q .hint { font-size: 11.5px; color: var(--ink-3); margin-top: 6px; }
+
+.brief-card {
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r);
+  padding: 16px 18px;
+}
+.brief-card h3 { font-size: 17px; }
+.brief-card .who { color: var(--ink-2); font-size: 13px; margin-top: 2px; }
+.brief-sec { margin-top: 16px; }
+.brief-sec .eyebrow { margin-bottom: 5px; }
+.brief-sec ul { list-style: none; font-size: 13px; color: var(--ink-2); }
+.brief-sec li { padding: 2px 0; }
+.yes { color: var(--accent); }
+.no { color: var(--ink-3); }
+.gaps {
+  background: var(--warn-soft); border: 1px solid var(--warn); color: var(--warn);
+  border-radius: var(--r); padding: 11px 13px; font-size: 12.5px; margin-bottom: 14px;
+}
+.gaps li { margin-left: 15px; }
+.go { display: flex; gap: 8px; margin-top: 18px; align-items: center; }
+.go .btn { font-size: 13px; }
+
 /* --- decisions ------------------------------------------------------------ */
 .dec { margin-bottom: 22px; }
 .dec-head { display: flex; align-items: baseline; gap: 9px; margin-bottom: 8px; }
@@ -339,6 +384,7 @@ details.debug li { font: 11.5px/1.7 var(--mono); color: var(--ink-3); }
 
     <section class="work">
       <div class="tabs" id="tabs" hidden>
+        <button class="tab" data-view="intake" id="intakeTab" hidden>Start here</button>
         <button class="tab" data-view="overview">Overview</button>
         <button class="tab" data-view="itinerary">Itinerary</button>
         <button class="tab" data-view="decisions">Decisions</button>
@@ -383,7 +429,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
   (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 
 const S = { tripId: null, trip: null, over: null, view: "itinerary", busy: false,
-            lastDiff: null, mapDay: null, decisions: null };
+            lastDiff: null, mapDay: null, decisions: null, intake: null };
 
 async function api(path, opts) {
   const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
@@ -439,9 +485,13 @@ $("newTrip").onsubmit = async (e) => {
 };
 
 async function selectTrip(id) {
-  S.tripId = id; S.lastDiff = null; S.mapDay = null; S.decisions = null;
+  S.tripId = id; S.lastDiff = null; S.mapDay = null; S.decisions = null; S.intake = null;
   await refresh();
-  S.view = (S.trip.itinerary.days || []).length ? "itinerary" : "overview";
+  await loadIntake();
+  // An unconfirmed brief is where the trip starts, so that is what opens.
+  S.view = S.intake && S.intake.status !== "confirmed"
+    ? "intake"
+    : (S.trip.itinerary.days || []).length ? "itinerary" : "overview";
   await loadMessages();
   await loadTrips();
   $("tabs").hidden = false;
@@ -471,11 +521,43 @@ function adopt(result) {
   paintHeader();
   render();
   if (S.view === "decisions") loadDecisions().then(render);
+  // Intake is derived too: answering a question or editing a fact can change
+  // what is still missing, and therefore whether planning may start.
+  loadIntake().then(() => { if (S.view === "intake") render(); });
 }
 
 async function loadDecisions() {
   try { S.decisions = await api(`/trips/${S.tripId}/decisions`); }
   catch (err) { S.decisions = []; toast(err.message); }
+}
+
+/** Collect every answered question and send them in one go. A choice and a
+ *  sentence are both kept: they picked an option *and* qualified it. */
+function submitAnswers() {
+  const answers = [];
+  document.querySelectorAll(".q").forEach((box) => {
+    const id = box.dataset.question;
+    const values = [...box.querySelectorAll(`input[name="q_${id}"]:checked`)]
+      .map((el) => el.value);
+    const free = box.querySelector(`[data-free="${id}"]`);
+    const from = box.querySelector(`[data-from="${id}"]`);
+    const to = box.querySelector(`[data-to="${id}"]`);
+    let text = free ? free.value.trim() : "";
+    if (from && from.value) text = (to && to.value ? `${from.value} to ${to.value}` : from.value)
+      + (text ? ` — ${text}` : "");
+    if (values.length || text) answers.push({ question_id: id, values, text: text || null });
+  });
+  if (!answers.length) return toast("Nothing answered yet");
+  act("/intake/answers", post({ answers }), (r) => r.summary);
+}
+
+async function loadIntake() {
+  try { S.intake = await api(`/trips/${S.tripId}/intake`); }
+  catch (err) { toast(err.message); return; }
+  // The tab is only there while it has something to say. Once the brief is
+  // confirmed it stays available but stops being where the trip starts.
+  $("intakeTab").hidden = false;
+  $("intakeTab").textContent = S.intake.status === "confirmed" ? "Brief" : "Start here";
 }
 
 function paintHeader() {
@@ -528,7 +610,8 @@ function render() {
   document.querySelectorAll(".tab").forEach((el) =>
     el.classList.toggle("on", el.dataset.view === S.view));
   const out = [];
-  if (S.view === "overview") out.push(overviewHtml());
+  if (S.view === "intake") out.push(intakeHtml());
+  else if (S.view === "overview") out.push(overviewHtml());
   else if (S.view === "itinerary") out.push(itineraryHtml());
   else if (S.view === "decisions") out.push(decisionsHtml());
   else out.push(researchHtml());
@@ -745,6 +828,85 @@ function dayOfItem(itemId) {
 }
 
 /* Research -- normalized evidence, never raw pages. */
+/* Intake -- the questions, then the brief to confirm. Rendered wholly from
+   GET /intake: which facts are missing and whether the brief is ready are
+   decided server-side, so the browser cannot let planning start early. */
+function intakeHtml() {
+  const view = S.intake;
+  if (view === null) return '<p class="empty">Loading…</p>';
+
+  if (view.status === "confirmed") {
+    return `<div class="intake"><h2>Brief confirmed</h2>
+      <p class="lede">Planning is under way. Everything below is what you agreed to.</p>
+      ${briefCardHtml(view, { confirmed: true })}</div>`;
+  }
+
+  const questions = view.questions.map(questionHtml).join("");
+  return `<div class="intake">
+    <h2>${questions ? "A couple of things first" : "Does this look right?"}</h2>
+    <p class="lede">${questions
+      ? "Only what actually changes the plan — everything else can wait."
+      : "Nothing is searched until you say so."}</p>
+    ${questions ? questions + `<div class="go">
+        <button class="btn" id="answerBtn">Save answers</button>
+      </div>` : briefCardHtml(view, { confirmed: false })}
+  </div>`;
+}
+
+function questionHtml(question) {
+  const id = esc(question.question_id);
+  let body = "";
+
+  if (question.kind === "single_choice" || question.kind === "multi_choice") {
+    const type = question.kind === "single_choice" ? "radio" : "checkbox";
+    body = question.choices.map((choice) => `<label>
+      <input type="${type}" name="q_${id}" value="${esc(choice.value)}">
+      <span>${esc(choice.label)}${choice.description
+        ? `<small>${esc(choice.description)}</small>` : ""}</span>
+    </label>`).join("");
+    // Always, for every structured question. A list that does not contain the
+    // real answer is worse than no list, so there is never only a list.
+    body += `<div class="free"><input type="text" data-free="${id}"
+      placeholder="or say it in your own words"></div>`;
+  } else if (question.kind === "dates") {
+    body = `<div class="dates">
+      <input type="date" data-from="${id}"><input type="date" data-to="${id}">
+    </div><div class="free"><input type="text" data-free="${id}"
+      placeholder="or describe it — “four days in October”"></div>`;
+  } else {
+    body = `<div class="free"><input type="text" data-free="${id}" placeholder="Your answer"></div>`;
+  }
+
+  return `<div class="q" data-question="${id}"><b>${esc(question.question)}</b>${body}</div>`;
+}
+
+function briefCardHtml(view, { confirmed }) {
+  const list = (rows, cls) => rows.length
+    ? `<ul>${rows.map((r) => `<li class="${cls || ""}">${esc(r)}</li>`).join("")}</ul>` : "";
+  const sec = (title, body) => body ? `<div class="brief-sec">
+    <p class="eyebrow">${title}</p>${body}</div>` : "";
+
+  return `${view.gaps.length ? `<div class="gaps">Still needed before planning:
+      <ul>${view.gaps.map((g) => `<li>${esc(g.why)}</li>`).join("")}</ul></div>` : ""}
+    <div class="brief-card">
+      <h3>${esc(view.headline)}</h3>
+      ${view.travelers
+        ? `<p class="who">${esc(view.travelers)}</p>`
+        : '<p class="who no">Party size not given</p>'}
+
+      ${sec("Already arranged", list(view.already_arranged.map((r) => "✓ " + r), "yes"))}
+      ${sec("Priorities", list(view.priorities.map((r) => "• " + r)))}
+      ${sec("Preferences", list(view.preferences.map((r) => "• " + r)))}
+      ${sec("I will plan", list(view.will_plan.map((r) => "✓ " + r), "yes"))}
+      ${sec("I will not search", list(view.will_not_search.map((r) => "✕ " + r), "no"))}
+    </div>
+    ${confirmed ? "" : `<div class="go">
+      <button class="btn" id="confirmBtn" ${view.ready_to_confirm ? "" : "disabled"}>Start planning</button>
+      <button class="btn ghost sm" id="editBriefBtn">Edit</button>
+      <span class="empty" style="font-size:12px">Nothing is searched until you do.</span>
+    </div>`}`;
+}
+
 /* Decisions -- rendered wholly from the server's projection. There is no
    frontend idea of what a decision is: relevance, lock state and which options
    were refused are all decided in one place, and that place is not here. */
@@ -1108,6 +1270,17 @@ function wireWorkspace() {
     el.addEventListener("click", (e) => {
       if (!e.target.closest("button")) focusStop(el.dataset.item);
     }));
+
+  // Intake.
+  const answerBtn = $("answerBtn");
+  if (answerBtn) answerBtn.onclick = () => submitAnswers();
+  const confirmBtn = $("confirmBtn");
+  if (confirmBtn) confirmBtn.onclick = () =>
+    act("/intake/confirm", post({}), (r) => r.summary);
+  const editBtn = $("editBriefBtn");
+  // Editing reuses the inline brief editors that already exist on Overview,
+  // rather than a second set that could drift from them.
+  if (editBtn) editBtn.onclick = () => { S.view = "overview"; render(); };
 
   // Decision actions. The value is "<decision name>|<option id>" because a
   // decision name can itself be dotted (place_shortlists.dinner_day1).

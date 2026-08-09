@@ -218,6 +218,10 @@ it cannot come back.
 | 17 | Multi-patch turns committed per patch, so one could land and the next be rejected | hardening pass | invariant 3 |
 | 18 | A replan that arrived at the day it started from still committed, spending a revision on an empty diff — the number moved and nothing explained it | frontend P0 live | `test_a_replan_that_changes_nothing_does_not_spend_a_revision` |
 | 19 | The UI's `post` helper was declared `(path, body)` while all eight call sites pass the body first, so every POST carried `{}`. Move failed outright; replan silently ignored the requested pace, planned a balanced day, and reported success | frontend P0 live | `test_the_post_helper_takes_the_body_first` |
+| 20 | `PartySpec.adults` defaulted to `1`, so a trip whose party size nobody had given was indistinguishable from a solo trip - and `search_flights` compounded it with `party.adults or 1`, pricing a real fare for an invented passenger | intake | `test_a_flight_search_refuses_an_invented_passenger_count` |
+| 21 | The agent was never told the current date, so it could not resolve "8/10-8/14" to a year and asked the traveller to repeat dates they had just given | intake live | acceptance 2 in `test_intake_acceptance.py` |
+| 22 | The intake tools staged their work for `apply_trip_patch` like every other tool. Twice the agent recorded the answers, composed the right questions, replied "已经记录", and never applied - leaving an empty workspace beside a chat listing three questions. Strengthening the prompt did not fix it; the tools now commit through the same path | intake live | `test_intake_writes_itself_rather_than_waiting_to_be_applied` |
+| 23 | `ask_clarifications` would ask anything the model thought of: the party size on a trip where it was not blocking, and "which area is your hotel in?" on a trip with nothing left to ask | intake live | `test_nothing_is_asked_once_nothing_is_blocking`, `test_a_question_about_something_not_blocking_is_dropped` |
 
 ---
 

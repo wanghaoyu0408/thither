@@ -19,12 +19,14 @@ from app.models.decision import Decision, DecisionOption, FlightOptionData, Plac
 from app.models.flight import AirportOption, SearchAirportsInput, SearchFlightsInput
 from app.models.group import TravelerPreferences
 from app.models.hotel import SearchHotelsInput
+from app.models.intake import SCOPE_LABELS, ClarificationChoice, ClarificationQuestion
 from app.models.itinerary_plan import ItineraryProposal, PlanParams, ReplanParams
 from app.models.place import GetPlaceDetailsInput, PlaceFieldSet, SearchPlacesInput
 from app.models.research import ResearchWebInput
 from app.models.route import GetRoutesInput, LocationRef
 from app.models.traveler import FlightPreferences, HotelPreferences
 from app.models.trip import OpenQuestion, TripState
+from app.services import json_pointer as jp
 from app.services.conflict_service import detect_conflicts
 from app.services.entity_service import resolve_places
 from app.services.flight_ranking import cheapest_of, explain_choice, rank_flights
@@ -43,6 +45,7 @@ from app.services.hotel_service import (
 from app.services.hotel_service import (
     build_hotel_decision,
 )
+from app.services.intake_service import missing_blocking, research_allowed
 from app.services.itinerary_service import build_itinerary, replan_day
 from app.services.preference_service import (
     diff_profile,
@@ -60,6 +63,143 @@ from app.services.validation_service import (
 )
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "name": "update_trip_brief",
+        "description": (
+            "Write down what the traveller has told you about the trip: where, when, who, "
+            "budget, priorities, and which parts they want you to plan. Pass ONLY fields "
+            "they actually gave you - omitting a field leaves it alone, and guessing one "
+            "puts a fact in the trip that nobody said. Call this before asking anything, "
+            "so you never ask for something you were already told. Resolve loose dates "
+            "against `today` in the state: '8/10-8/14' with no year is the next 10-14 "
+            "August from today, and you record it rather than asking which year."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "destination_city": {
+                    "type": ["string", "null"],
+                    "description": (
+                        "The place they named, when it is a city or a place you would "
+                        "search within: Tokyo, Maui, Lisbon. Not the country."
+                    ),
+                },
+                "destination_region": {
+                    "type": ["string", "null"],
+                    "description": "A wider area, when that is what they named: the Amalfi Coast.",
+                },
+                "destination_country": {
+                    "type": ["string", "null"],
+                    "description": (
+                        "Only alongside a city or region, never instead of one. 'United "
+                        "States' is not a destination anything can be planned around."
+                    ),
+                },
+                "destination_flexible": {
+                    "type": ["boolean", "null"],
+                    "description": "True when they have not picked, or want you to suggest.",
+                },
+                "origin_city": {"type": ["string", "null"]},
+                "origin_airport_codes": {"type": "array", "items": {"type": "string"}},
+                "start_date": {"type": ["string", "null"], "description": "ISO date."},
+                "end_date": {"type": ["string", "null"], "description": "ISO date."},
+                "earliest_date": {
+                    "type": ["string", "null"],
+                    "description": "ISO. Start of the window when the dates are not decided.",
+                },
+                "latest_date": {"type": ["string", "null"], "description": "ISO. End of it."},
+                "duration_nights": {
+                    "type": ["integer", "null"],
+                    "minimum": 1,
+                    "description": "Use with the window for 'four days in October'.",
+                },
+                "adults": {"type": ["integer", "null"], "minimum": 1},
+                "children": {"type": ["integer", "null"], "minimum": 0},
+                "rooms": {"type": ["integer", "null"], "minimum": 1},
+                "budget_total_per_person": {"type": ["number", "null"]},
+                "budget_hotel_per_night": {"type": ["number", "null"]},
+                "priorities": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "What the trip is for, in their words: food, beaches, hiking.",
+                },
+                "pace": {"type": ["string", "null"], "enum": ["relaxed", "balanced", "packed"]},
+                "notes": {"type": ["string", "null"]},
+                "scope": {
+                    "type": "object",
+                    "description": (
+                        "What to do about each part. 'already_arranged' means booked or "
+                        "otherwise sorted - plan around it and never shop for it."
+                    ),
+                    "properties": {
+                        part: {
+                            "type": "string",
+                            "enum": ["plan", "already_arranged", "not_needed", "unknown"],
+                        }
+                        for part in SCOPE_LABELS
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "ask_clarifications",
+        "description": (
+            "Ask the traveller one to three questions - only for facts that actually block "
+            "planning, and only ones you were not already told. Offer choices when the "
+            "answers are genuinely enumerable; they can always reply in their own words "
+            "instead. Do not ask for a destination they have deliberately left open: "
+            "choosing one is your job, not theirs."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "questions": {
+                    "type": "array",
+                    "maxItems": 3,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "question": {"type": "string"},
+                            "kind": {
+                                "type": "string",
+                                "enum": ["single_choice", "multi_choice", "text", "dates"],
+                            },
+                            "fills": {
+                                "type": ["string", "null"],
+                                "description": (
+                                    "The brief path this answers, e.g. /brief/dates. Always "
+                                    "set it. A question about anything not currently "
+                                    "blocking planning is dropped."
+                                ),
+                            },
+                            "choices": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "value": {"type": "string"},
+                                        "label": {"type": "string"},
+                                        "description": {"type": ["string", "null"]},
+                                    },
+                                    "required": ["value", "label"],
+                                    "additionalProperties": False,
+                                },
+                            },
+                        },
+                        "required": ["question", "kind"],
+                        "additionalProperties": False,
+                    },
+                }
+            },
+            "required": ["questions"],
+            "additionalProperties": False,
+        },
+    },
     {
         "type": "function",
         "name": "search_places",
@@ -525,6 +665,13 @@ class ToolContext:
     profiles: Any = None
     # decision name -> why it is now questionable, from a confirmed refresh.
     pending_stale: dict = field(default_factory=dict)
+    # Brief facts learned this turn, as patch operations on /brief/...
+    pending_brief_ops: list = field(default_factory=list)
+    # Serialized ClarificationQuestions to ask the traveller.
+    pending_clarifications: list = field(default_factory=list)
+    # Set only by the deterministic check in _update_trip_brief. The model never
+    # gets to declare the brief ready; "confirmed" is the traveller's alone.
+    pending_intake_status: str | None = None
 
     def budget_left(self) -> int:
         return max(0, self.settings.planning_search_budget - self.searches_used)
@@ -682,7 +829,13 @@ def _working_state(context: ToolContext) -> TripState:
     in the same turn, or the first `review_group_preferences` on a trip would
     report a group with no opinions.
     """
-    if not context.pending_entity_ops and not context.pending_traveler_prefs:
+    staged_anything = (
+        context.pending_entity_ops
+        or context.pending_traveler_prefs
+        or context.pending_brief_ops
+        or context.pending_clarifications
+    )
+    if not staged_anything:
         return context.state
 
     working = context.state.model_copy(deep=True)
@@ -692,6 +845,16 @@ def _working_state(context: ToolContext) -> TripState:
         staged = context.pending_traveler_prefs.get(traveler.traveler_id)
         if staged is not None:
             traveler.preferences = TravelerPreferences.model_validate(staged)
+
+    # Brief facts recorded a moment ago have to count toward "what is still
+    # missing", or the tool would report a gap it had just been told how to fill.
+    if context.pending_brief_ops:
+        document = working.model_dump(mode="json")
+        for operation in context.pending_brief_ops:
+            jp.set_value(document, operation["path"], operation["value"])
+        working = TripState.model_validate(document)
+    for question in context.pending_clarifications:
+        working.intake.questions.append(ClarificationQuestion.model_validate(question))
     return working
 
 
@@ -897,6 +1060,20 @@ async def _discover_restaurants(context: ToolContext, args: dict[str, Any]) -> d
     }
 
 
+# Flights and rooms are both priced per person, so a guessed headcount produces
+# a plausible number for a trip nobody is taking. This is the one place party
+# size is a hard precondition rather than a preference.
+_PARTY_UNKNOWN = {
+    "error": "this trip does not say how many people are travelling",
+    "code": "invalid_request",
+    "hint": (
+        "Ask how many adults (and children) are going, save it with update_trip_brief, "
+        "then search again. Do not assume one, and do not quote a fare you had to invent "
+        "a passenger count for."
+    ),
+}
+
+
 def _refuse_if_booked(
     context: ToolContext, name: str, args: dict[str, Any]
 ) -> dict[str, Any] | None:
@@ -939,6 +1116,176 @@ def _airport_cons(airport: AirportOption) -> list[str]:
     if airport.ground_travel_source == "routes_api":
         return []
     return ["drive time was not measured, so this airport cannot be compared on access"]
+
+
+def _commit_now(operations: list[dict[str, Any]], reason: str) -> dict[str, Any]:
+    """Write these immediately, through the one commit path.
+
+    The stage-then-apply split exists so the model can revise a *proposal*
+    before committing it. Intake has no such judgement to exercise: recording a
+    fact the traveller stated, and asking them a question, are the work itself,
+    not a suggestion about it.
+
+    Two live runs proved the split was the wrong shape here. The agent recorded
+    the answers, composed exactly the right questions, replied "已经记录", and
+    never called apply_trip_patch - so nothing was saved and the workspace
+    showed an empty screen beside a chat message listing three questions.
+    Strengthening the prompt did not fix it the second time either.
+
+    Nothing is weakened by this: `__patches__` goes to the same `_apply_all`,
+    the same `repo.apply_patches`, the same gates, atomicity, revision bump and
+    reload. The only thing that changes is that the model cannot forget.
+    """
+    return {
+        "__patches__": [
+            {"operations": operations, "scope": None, "reason": reason, "unlock_targets": []}
+        ]
+    }
+
+
+def _brief_ops(state: TripState, args: dict[str, Any]) -> list[dict[str, Any]]:
+    """Only the fields actually supplied. Absence is not an instruction to clear."""
+    operations: list[dict[str, Any]] = []
+    simple: dict[str, str] = {
+        "destination_city": "/brief/destination/city",
+        "destination_region": "/brief/destination/region",
+        "destination_country": "/brief/destination/country",
+        "destination_flexible": "/brief/destination/flexible",
+        "origin_city": "/brief/origin/city",
+        "start_date": "/brief/dates/start",
+        "end_date": "/brief/dates/end",
+        "earliest_date": "/brief/dates/earliest",
+        "latest_date": "/brief/dates/latest",
+        "duration_nights": "/brief/dates/duration_nights",
+        "adults": "/brief/party/adults",
+        "children": "/brief/party/children",
+        "rooms": "/brief/party/rooms",
+        "budget_total_per_person": "/brief/budget/total_per_person",
+        "budget_hotel_per_night": "/brief/budget/hotel_per_night",
+        "pace": "/brief/pace",
+        "notes": "/brief/notes",
+    }
+    for key, path in simple.items():
+        if key in args and args[key] is not None:
+            operations.append({"op": "set", "path": path, "value": args[key]})
+
+    if args.get("origin_airport_codes"):
+        operations.append(
+            {
+                "op": "set",
+                "path": "/brief/origin/airport_codes",
+                "value": args["origin_airport_codes"],
+            }
+        )
+    if args.get("priorities"):
+        operations.append({"op": "set", "path": "/brief/priorities", "value": args["priorities"]})
+
+    for part, value in (args.get("scope") or {}).items():
+        if part in SCOPE_LABELS and value:
+            operations.append({"op": "set", "path": f"/brief/scope/{part}", "value": value})
+    return operations
+
+
+async def _update_trip_brief(context: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    """Write down what the traveller has told us about the trip.
+
+    Until this existed the agent had no way to persist anything it learned - the
+    brief was only ever editable from the web form - so an intake conversation
+    could ask perfect questions and lose every answer at the end of the turn.
+    """
+    operations = _brief_ops(context.state, args)
+    if not operations:
+        return {"error": "nothing to record", "hint": "pass the facts the traveller gave you"}
+
+    context.pending_brief_ops.extend(operations)
+
+    # Whether the brief is complete enough to show is decided here, from the
+    # state, not by the model announcing it.
+    working = _working_state(context)
+    if (
+        not missing_blocking(working)
+        and not working.intake.unanswered
+        and working.intake.status == "collecting"
+    ):
+        context.pending_intake_status = "awaiting_confirmation"
+        operations = operations + [
+            {"op": "set", "path": "/intake/status", "value": "awaiting_confirmation"}
+        ]
+
+    return _commit_now(operations, "record what the traveller said")
+
+
+async def _ask_clarifications(context: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    """Ask for what is missing - only what is missing, and only once."""
+    asked = args.get("questions") or []
+    if not asked:
+        return {"error": "no questions given"}
+
+    # Nothing outstanding means nothing to ask. Enforced rather than asked for,
+    # because a model with a question in mind will find a reason: the first live
+    # run of a fully-specified trip still produced "which area is your hotel in?"
+    # - useful, perhaps, but not something planning was waiting on.
+    working = _working_state(context)
+    gaps = missing_blocking(working)
+    if not gaps:
+        return {
+            "asked": 0,
+            "error": "nothing is blocking planning, so there is nothing to ask",
+            "hint": (
+                "Everything needed is already recorded. Show the traveller the summary and "
+                "wait for them to confirm it. Anything else you are curious about can be "
+                "asked later, once planning is under way."
+            ),
+        }
+
+    # Drop questions about things we are not actually waiting on. A question
+    # that names the field it fills can be checked against the outstanding gaps;
+    # one that names nothing is kept, because we cannot judge it. The live run
+    # of an undecided-destination trip asked for the party size alongside two
+    # real gaps - reasonable-looking, and exactly the interruption the traveller
+    # was promised they would not get.
+    outstanding = [gap.field for gap in gaps]
+    warranted = [
+        raw
+        for raw in asked
+        if not raw.get("fills")
+        or any(field.startswith(raw["fills"]) or raw["fills"].startswith(field)
+               for field in outstanding)
+    ]
+
+    existing = {question.question for question in context.state.intake.questions}
+    staged: list[dict[str, Any]] = []
+    for raw in warranted[:3]:
+        text = (raw.get("question") or "").strip()
+        if not text or text in existing:
+            continue
+        question = ClarificationQuestion(
+            question=text,
+            kind=raw.get("kind", "text"),
+            fills=raw.get("fills"),
+            choices=[
+                ClarificationChoice(
+                    value=choice.get("value", choice.get("label", "")),
+                    label=choice.get("label", choice.get("value", "")),
+                    description=choice.get("description"),
+                )
+                for choice in (raw.get("choices") or [])
+            ],
+        )
+        existing.add(text)
+        staged.append(question.model_dump(mode="json"))
+
+    if not staged:
+        return {
+            "asked": 0,
+            "note": "every one of those has already been asked; wait for the answers.",
+        }
+
+    context.pending_clarifications.extend(staged)
+    return _commit_now(
+        [{"op": "add", "path": "/intake/questions/-", "value": q} for q in staged],
+        f"ask {len(staged)} clarification(s)",
+    )
 
 
 async def _search_airports(context: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
@@ -1007,6 +1354,12 @@ async def _search_flights(context: ToolContext, args: dict[str, Any]) -> dict[st
     if booked is not None:
         return booked
 
+    # A fare is quoted per passenger, so an assumed passenger count produces a
+    # real-looking price for a trip nobody is taking. Ask instead.
+    adults = args.get("adults", context.state.brief.party.adults)
+    if adults is None:
+        return _PARTY_UNKNOWN
+
     try:
         spec = SearchFlightsInput(
             origins=args["origins"],
@@ -1015,7 +1368,7 @@ async def _search_flights(context: ToolContext, args: dict[str, Any]) -> dict[st
             return_date=(
                 date_type.fromisoformat(args["return_date"]) if args.get("return_date") else None
             ),
-            adults=int(args.get("adults", context.state.brief.party.adults or 1)),
+            adults=adults,
             children=int(args.get("children", context.state.brief.party.children or 0)),
             cabin=args.get("cabin", "economy"),
             max_stops=args.get("max_stops"),
@@ -1217,13 +1570,18 @@ async def _search_hotels(context: ToolContext, args: dict[str, Any]) -> dict[str
     working = _working_state(context)
     party = working.brief.party
 
+    # Same reason as flights: room rates are quoted for a number of guests.
+    adults = args.get("adults", party.adults)
+    if adults is None:
+        return _PARTY_UNKNOWN
+
     try:
         spec = SearchHotelsInput(
             city=working.brief.destination.city,
             area_name=args.get("area_name"),
             check_in=date_type.fromisoformat(args["check_in"]),
             check_out=date_type.fromisoformat(args["check_out"]),
-            adults=int(args.get("adults", party.adults or 2)),
+            adults=int(adults),
             children=int(party.children or 0),
             rooms=int(args.get("rooms", party.rooms or 1)),
             max_nightly_price=args.get("max_nightly_price") or working.brief.budget.hotel_per_night,
@@ -1701,6 +2059,19 @@ async def _apply_trip_patch(context: ToolContext, args: dict[str, Any]) -> dict[
         for question in context.pending_questions
     ]
 
+    # Intake: the brief facts learned this turn, the questions to ask, and the
+    # status if the deterministic check said the brief is now complete. All
+    # unscoped - the brief is not about any one day.
+    decision_ops += list(context.pending_brief_ops)
+    decision_ops += [
+        {"op": "add", "path": "/intake/questions/-", "value": question}
+        for question in context.pending_clarifications
+    ]
+    if context.pending_intake_status:
+        decision_ops.append(
+            {"op": "set", "path": "/intake/status", "value": context.pending_intake_status}
+        )
+
     reason = args.get("reason", "agent update")
 
     # Places discovered or refreshed this turn have to land before anything
@@ -1824,6 +2195,8 @@ def _stale_ops(context: ToolContext) -> list[dict[str, Any]]:
 
 
 HANDLERS = {
+    "update_trip_brief": _update_trip_brief,
+    "ask_clarifications": _ask_clarifications,
     "research_web": _research_web,
     "review_group_preferences": _review_group_preferences,
     "refresh_traveler_preferences": _refresh_traveler_preferences,
@@ -1842,10 +2215,66 @@ HANDLERS = {
 }
 
 
+# Everything that reaches a provider, directly or otherwise. `generate_itinerary`
+# and `replan_day` look local but call Google through _ensure_hours/_ensure_routes,
+# and are meaningless before a brief exists anyway.
+#
+# Everything absent from this set stays open, because intake needs it:
+# apply_trip_patch writes the brief, update_trip_brief and ask_clarifications are
+# the intake itself, and the preference tools read stored profiles only.
+RESEARCH_TOOLS = frozenset(
+    {
+        "search_places",
+        "get_place_details",
+        "get_routes",
+        "research_web",
+        "discover_restaurants",
+        "search_airports",
+        "search_flights",
+        "recommend_hotel_areas",
+        "search_hotels",
+        "generate_itinerary",
+        "replan_day",
+    }
+)
+
+
+def _refuse_until_confirmed(context: ToolContext, name: str) -> dict[str, Any] | None:
+    """Hold research until the traveller has confirmed what we are planning.
+
+    A refusal, not a failure: the model gets a sentence telling it what to do
+    instead, and its turn continues. That is how "ask questions" happens -
+    having no research worth calling, it asks and then stops.
+
+    Checked in one place rather than at eleven call sites, so a tool added later
+    is gated by default instead of by remembering.
+    """
+    if name not in RESEARCH_TOOLS or research_allowed(context.state):
+        return None
+    gaps = missing_blocking(context.state)
+    return {
+        "intake_incomplete": True,
+        "message": (
+            f"{name} is on hold: this trip's brief has not been confirmed yet, so nothing "
+            "has been searched."
+        ),
+        "still_needed": [{"field": gap.field, "why": gap.why} for gap in gaps],
+        "hint": (
+            "Save what you already know with update_trip_brief. If something on the list "
+            "above is genuinely unknown, ask for it with ask_clarifications - one to three "
+            "questions, nothing you were already told. Then stop and let the traveller "
+            "confirm the summary; you cannot confirm it for them."
+        ),
+    }
+
+
 async def dispatch(context: ToolContext, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     handler = HANDLERS.get(name)
     if handler is None:
         return {"error": f"unknown tool {name!r}"}
+    held = _refuse_until_confirmed(context, name)
+    if held is not None:
+        return held
     try:
         return await handler(context, arguments)
     except Exception as exc:  # noqa: BLE001 - a tool bug must not kill the turn

@@ -7,9 +7,11 @@ by id, small enough to send every turn.
 
 from typing import Any
 
+from app.models.common import utcnow
 from app.models.trip import TripState, TripTraveler
 from app.services.conflict_service import detect_conflicts
 from app.services.decision_service import label_for
+from app.services.intake_service import missing_blocking, research_allowed
 from app.services.opening_hours import describe
 
 MAX_ENTITIES = 60
@@ -110,6 +112,11 @@ def summarize(state: TripState) -> dict[str, Any]:
         "trip_id": state.trip_id,
         "revision": state.revision,
         "status": state.status,
+        # What day it is. Without this the model cannot turn "8/10" into a year
+        # or "next October" into a window, and has to ask for dates the
+        # traveller has already given - which is what it did on the first live
+        # run of intake.
+        "today": utcnow().date().isoformat(),
         "brief": {
             "destination": state.brief.destination.city or state.brief.destination.country,
             "start": state.brief.dates.start.isoformat() if state.brief.dates.start else None,
@@ -119,6 +126,20 @@ def summarize(state: TripState) -> dict[str, Any]:
             "budget": state.brief.budget.model_dump(),
             "priorities": state.brief.priorities,
             "pace": state.brief.pace,
+        },
+        # Where intake stands, and what is still missing. A rule the model
+        # cannot see the state for is not a rule - and without the questions
+        # listed here it would ask the same ones again every turn.
+        "intake": {
+            "status": state.intake.status,
+            "research_allowed": research_allowed(state),
+            "still_needed": [
+                {"field": gap.field, "why": gap.why} for gap in missing_blocking(state)
+            ],
+            "scope": state.brief.scope.model_dump(),
+            "questions_awaiting_answer": [
+                question.question for question in state.intake.unanswered
+            ],
         },
         "travelers": [_traveler_line(traveler) for traveler in state.travelers],
         # Put in front of the model every turn rather than left to a tool call.

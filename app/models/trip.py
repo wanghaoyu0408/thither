@@ -9,6 +9,7 @@ from app.models.decision import TripDecisions
 from app.models.entity import TripEntity
 from app.models.evidence import EvidenceRecord
 from app.models.group import TravelerPreferences
+from app.models.intake import ClarificationQuestion, IntakeStatus, PlanScope
 from app.models.itinerary import TripItinerary
 from app.models.lock import LockRecord
 from app.models.rejection import RejectionRecord
@@ -39,25 +40,63 @@ class DestinationSpec(BaseModel):
 
 
 class TripDates(BaseModel):
+    """When the trip is, or the window it has to fall in.
+
+    Two ways to be specified, and the difference matters. `start`/`end` are the
+    decided dates. `earliest`/`latest` plus `duration_nights` describe a trip
+    that is real but not yet pinned - "four days sometime in October" - which
+    used to have nowhere to live, so it was either invented into concrete dates
+    or lost.
+    """
+
     start: date | None = None
     end: date | None = None
     flexible_days: int = Field(default=0, ge=0)
+
+    # The window a not-yet-dated trip must fall inside.
+    earliest: date | None = None
+    latest: date | None = None
+    duration_nights: int | None = Field(default=None, ge=1)
+
+    @property
+    def decided(self) -> bool:
+        return self.start is not None and self.end is not None
+
+    @property
+    def bounded(self) -> bool:
+        """Enough to search on without pretending to know the dates."""
+        return self.duration_nights is not None and (
+            self.earliest is not None or self.latest is not None
+        )
 
     @model_validator(mode="after")
     def _check_order(self) -> "TripDates":
         if self.start and self.end and self.end < self.start:
             raise ValueError("trip end date is before start date")
+        if self.earliest and self.latest and self.latest < self.earliest:
+            raise ValueError("trip window ends before it starts")
         return self
 
 
 class PartySpec(BaseModel):
-    adults: int = Field(default=1, ge=1)
-    children: int = Field(default=0, ge=0)
-    rooms: int = Field(default=1, ge=1)
+    """Who is going, or nothing at all.
+
+    Every count is optional and defaults to None rather than to a number. An
+    unknown party size used to default to one adult, which made "we have not
+    said yet" indistinguishable from "I am travelling alone" - and the flight
+    search then priced it for one. A count nobody gave is not a count.
+    """
+
+    adults: int | None = Field(default=None, ge=1)
+    children: int | None = Field(default=None, ge=0)
+    rooms: int | None = Field(default=None, ge=1)
 
     @property
-    def size(self) -> int:
-        return self.adults + self.children
+    def size(self) -> int | None:
+        """Total travellers, or None while the adult count is unknown."""
+        if self.adults is None:
+            return None
+        return self.adults + (self.children or 0)
 
 
 class BudgetSpec(BaseModel):
@@ -85,6 +124,12 @@ class TripBrief(BaseModel):
     priorities: list[str] = []
     pace: Pace = "balanced"
     notes: str | None = None
+
+    # What the traveller has asked us to plan, and what is already arranged.
+    # Part of the brief rather than of the intake record, because it stays true
+    # after confirmation and is what stops the agent shopping for a flight
+    # somebody already holds a ticket for.
+    scope: PlanScope = PlanScope()
 
 
 class TripTraveler(BaseModel):
@@ -115,6 +160,30 @@ class OpenQuestion(BaseModel):
     asked_at: datetime | None = None
     answered: bool = False
     answer: str | None = None
+
+
+class TripIntake(BaseModel):
+    """Whether we know enough to start, and whether the traveller has said so.
+
+    A separate axis from `TripStatus`, which is about where the trip is in its
+    life. A trip can be `draft` and still have a confirmed brief.
+
+    The snapshot exists so "what did I agree to?" has an answer that later edits
+    cannot quietly rewrite. It is taken at confirmation and never updated: if the
+    brief moves far enough to matter, intake reopens and a new one is taken.
+    """
+
+    status: IntakeStatus = "collecting"
+
+    questions: list[ClarificationQuestion] = []
+
+    confirmed_brief: "TripBrief | None" = None
+    confirmed_revision: int | None = None
+    confirmed_at: datetime | None = None
+
+    @property
+    def unanswered(self) -> list[ClarificationQuestion]:
+        return [question for question in self.questions if not question.answered]
 
 
 class Assumption(BaseModel):
@@ -173,6 +242,10 @@ class TripState(BaseModel):
 
     open_questions: list[OpenQuestion] = []
     assumptions: list[Assumption] = []
+
+    # What we still need to ask before researching, and whether the traveller
+    # has confirmed the brief. Gate lives in app/services/intake_service.py.
+    intake: TripIntake = TripIntake()
 
     validation: ValidationState = ValidationState()
 

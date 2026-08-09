@@ -255,6 +255,9 @@ class AgentRunner:
         context.pending_traveler_prefs.clear()
         context.pending_questions.clear()
         context.pending_stale.clear()
+        context.pending_brief_ops.clear()
+        context.pending_clarifications.clear()
+        context.pending_intake_status = None
         run.revision_after = final.revision
 
         return {

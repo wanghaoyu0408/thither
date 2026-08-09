@@ -35,6 +35,11 @@ from app.models.hotel import (
     RatingType,
     SearchHotelsInput,
 )
+from app.models.intake import (
+    ClarificationChoice,
+    ClarificationQuestion,
+    PlanScope,
+)
 from app.models.itinerary import DaySummary, ItineraryDay, ItineraryItem, TripItinerary
 from app.models.lock import LockRecord
 from app.models.patch import (
@@ -78,6 +83,7 @@ from app.models.trip import (
     PartySpec,
     TripBrief,
     TripDates,
+    TripIntake,
     TripMetadata,
     TripState,
     TripSummary,
@@ -89,6 +95,8 @@ __all__ = [
     "ActivityPreferences",
     "ApplyTripPatchInput",
     "Assumption",
+    "ClarificationChoice",
+    "ClarificationQuestion",
     "Authority",
     "BudgetSpec",
     "Citation",
@@ -127,6 +135,7 @@ __all__ = [
     "OriginSpec",
     "PacePreferences",
     "PartySpec",
+    "PlanScope",
     "PatchError",
     "PatchOperation",
     "PatchResult",
@@ -159,6 +168,7 @@ __all__ = [
     "TripDecisions",
     "TripEntity",
     "TripItinerary",
+    "TripIntake",
     "TripMetadata",
     "TripPatch",
     "TripState",

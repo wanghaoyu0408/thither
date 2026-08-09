@@ -9,6 +9,7 @@ from app.api import (
     actions_router,
     chat_router,
     decisions_router,
+    intake_router,
     profiles_router,
     tools_router,
     trips_router,
@@ -47,6 +48,7 @@ app.include_router(chat_router)
 # matched before the catch-all trip routes.
 app.include_router(actions_router)
 app.include_router(decisions_router)
+app.include_router(intake_router)
 
 
 @app.get("/health", tags=["meta"])

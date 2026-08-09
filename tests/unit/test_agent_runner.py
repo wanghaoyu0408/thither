@@ -98,6 +98,8 @@ async def test_the_system_prompt_carries_the_rules_that_matter(session, settings
     assert "TripState is the source of truth" in instructions
     assert "Never modify a locked item" in instructions
     assert "do not book" in instructions.lower()
+    assert "You cannot confirm the" in instructions
+    assert "until it happens you do not" in instructions
 
 
 # --- state summary -----------------------------------------------------------

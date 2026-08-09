@@ -460,14 +460,17 @@ def _check_trip_wide(state: TripState) -> list[ValidationIssue]:
             )
 
     budget = state.brief.budget.total_per_person
-    if budget is not None:
+    party_size = state.brief.party.size
+    # A per-person ceiling needs a number of people. Multiplying by an assumed
+    # one traveller would report a false overspend on a trip for four.
+    if budget is not None and party_size is not None:
         costs = [
             item.estimated_cost for _d, item in state.itinerary.iter_items() if item.estimated_cost
         ]
         currencies = {cost.currency for cost in costs}
         if costs and len(currencies) == 1:
             spent = sum(cost.amount for cost in costs)
-            ceiling = budget * state.brief.party.size
+            ceiling = budget * party_size
             if spent > ceiling:
                 issues.append(
                     ValidationIssue(
