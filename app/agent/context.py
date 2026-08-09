@@ -151,6 +151,8 @@ def summarize(state: TripState) -> dict[str, Any]:
             "budget": state.brief.budget.model_dump(),
             "priorities": state.brief.priorities,
             "pace": state.brief.pace,
+            # Shown so the agent neither re-asks nor forgets it when searching.
+            "avoid_red_eye": state.brief.avoid_red_eye,
         },
         # Where intake stands, and what is still missing. A rule the model
         # cannot see the state for is not a rule - and without the questions

@@ -37,8 +37,10 @@ def airport(iata: str, minutes: float | None, source: str = "routes_api") -> Air
     )
 
 
-def offer(ref: str, origin: str, price: float, stops: int) -> FlightOptionData:
-    depart = datetime(2026, 10, 3, 11, 0)
+def offer(
+    ref: str, origin: str, price: float, stops: int, depart_hour: int = 11
+) -> FlightOptionData:
+    depart = datetime(2026, 10, 3, depart_hour, 0)
     arrive = depart + timedelta(hours=11)
     return FlightOptionData(
         provider="duffel",
@@ -140,6 +142,36 @@ async def test_a_flight_search_that_finds_nothing_stages_nothing():
     )
 
     assert "flights" not in context.pending_decisions
+
+
+async def test_the_briefs_red_eye_answer_reaches_the_ranking():
+    """The intake quick-pick must move the ordering, not just sit in the brief.
+
+    The base ranking used to be handed a blank FlightPreferences(), so a trip
+    that said "avoid red-eyes" ranked exactly like one that never answered -
+    a stated preference that moved nothing, the ledger's oldest failure.
+    """
+    offers = [
+        offer("off_red", "SFO", 560, 0, depart_hour=1),
+        offer("off_day", "SFO", 600, 0, depart_hour=11),
+    ]
+
+    # Nobody answered: the cheaper red-eye wins on price.
+    silent = context_for(FakeToolbox(flights=FakeFlights(offers)))
+    assert silent.state.brief.avoid_red_eye is None
+    reply = await _search_flights(
+        silent, {"origins": ["SFO"], "destinations": ["HND"], "departure_date": DEPART.isoformat()}
+    )
+    assert reply["offers"][0]["offer_ref"] == "off_red"
+
+    # The trip said avoid: forty dollars does not outbid the answer.
+    averse_state = sample_state()
+    averse_state.brief.avoid_red_eye = True
+    averse = context_for(FakeToolbox(flights=FakeFlights(offers)), state=averse_state)
+    reply = await _search_flights(
+        averse, {"origins": ["SFO"], "destinations": ["HND"], "departure_date": DEPART.isoformat()}
+    )
+    assert reply["offers"][0]["offer_ref"] == "off_day"
 
 
 # --- airports ----------------------------------------------------------------

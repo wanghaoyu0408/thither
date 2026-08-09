@@ -15,8 +15,12 @@
   --error: #a3352b; --error-soft: #fbeceb;
   --warn: #8a5a12; --warn-soft: #fbf3e4;
   --info: #3d5878; --info-soft: #eaeff5;
-  --r: 10px; --r-sm: 7px;
+  --r: 12px; --r-sm: 8px;
   --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+  /* Cards separate by elevation in light mode and by hairline in dark, where
+     shadows have nothing to fall on. */
+  --elev: 0 1px 2px rgba(17, 20, 24, 0.06), 0 6px 20px rgba(17, 20, 24, 0.05);
+  --card-line: transparent;
 
   /* Pane sizes. Written back by the drag handles and restored from
      localStorage on load, so the shape of the window is the user's, not ours. */
@@ -31,6 +35,8 @@
     --error: #f2938a; --error-soft: #2e1e1e;
     --warn: #e8bd7a; --warn-soft: #2c2418;
     --info: #9dbbdd; --info-soft: #1c2531;
+    --elev: none;
+    --card-line: var(--line);
   }
 }
 * { box-sizing: border-box; }
@@ -188,8 +194,29 @@ section.work { background: var(--bg); }
   content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 6px;
   border-radius: 50%; background: var(--warn); vertical-align: middle;
 }
-.work-scroll { overflow-y: auto; flex: 1; padding: 22px 24px 28px; }
-.sheet { max-width: 780px; margin: 0 auto; }
+.work-scroll { overflow-y: auto; flex: 1; padding: 20px 24px 28px; }
+.sheet { max-width: 820px; margin: 0 auto; }
+
+/* The trip as a headline, not a record locator. Photo backdrop when one of
+   the trip's own places has one; a quiet tinted band otherwise. */
+.hero {
+  max-width: 820px; margin: 0 auto 20px; padding: 30px 26px 22px;
+  border-radius: 16px; min-height: 118px;
+  background: linear-gradient(135deg, var(--accent-soft), var(--panel-2));
+  display: flex; flex-direction: column; justify-content: flex-end;
+}
+.hero h2 { font-size: 27px; font-weight: 650; letter-spacing: -0.02em; line-height: 1.2; }
+.hero p { color: var(--ink-2); font-size: 13.5px; margin-top: 3px; }
+.hero.img { background-size: cover; background-position: center; min-height: 190px; }
+.hero.img h2 { color: #fff; text-shadow: 0 1px 8px rgba(0,0,0,.35); }
+.hero.img p { color: rgba(255,255,255,.92); text-shadow: 0 1px 6px rgba(0,0,0,.35); }
+
+/* Info-notes fold to one calm line; open only if you go looking. */
+.quietnotes summary {
+  font-size: 12px; color: var(--ink-3); cursor: pointer; list-style: none;
+}
+.quietnotes summary::before { content: "✓ "; color: var(--accent); }
+.quietnotes[open] summary { color: var(--ink-2); }
 
 /* Said wherever you are standing, because the thing it is asking for lives on
    one tab and the reason you notice is usually on another. */
@@ -220,7 +247,7 @@ section.work { background: var(--bg); }
 .metric span { color: var(--ink-3); font-size: 11.5px; }
 
 /* --- itinerary ------------------------------------------------------------ */
-.day { margin-bottom: 30px; scroll-margin-top: 52px; }
+.day { margin-bottom: 38px; scroll-margin-top: 52px; }
 
 /* One pill per day, pinned above the plan. The consumer way to move around a
    trip is by day, not by scrollbar. */
@@ -269,34 +296,35 @@ section.work { background: var(--bg); }
 .daymetrics.none { color: var(--ink-3); }
 .daymetrics .ok { color: var(--accent); }
 .daymetrics .bad { color: var(--warn); }
-.day-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
-.day-head h3 { font-size: 17px; letter-spacing: -0.01em; }
+.day-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.day-head h3 { font-size: 19px; font-weight: 650; letter-spacing: -0.015em; }
 .day-head small { color: var(--ink-3); font-size: 12.5px; }
 .day-head .spacer { flex: 1; }
 
-.slot { display: flex; gap: 12px; padding: 4px 0; }
+.slot { display: flex; gap: 12px; padding: 5px 0; }
 .slot time {
-  flex: none; width: 48px; text-align: right; padding-top: 14px;
+  flex: none; width: 48px; text-align: right; padding-top: 16px;
   font: 12px var(--mono); color: var(--ink-3);
 }
 .card {
-  flex: 1; background: var(--panel); border: 1px solid var(--line);
+  flex: 1; background: var(--panel); border: 1px solid var(--card-line);
+  box-shadow: var(--elev);
   border-radius: var(--r); padding: 12px 14px 12px 12px;
-  display: flex; gap: 12px; align-items: flex-start;
+  display: flex; gap: 14px; align-items: flex-start;
 }
-.card.locked { border-color: var(--line-2); background: var(--panel-2); }
+.card.locked { border-color: var(--line-2); background: var(--panel-2); box-shadow: none; }
 .card.attention { border-left: 3px solid var(--warn); }
 .card-main { flex: 1; min-width: 0; }
 .card-top { display: flex; align-items: flex-start; gap: 8px; }
-.card-top h4 { font-size: 15px; flex: 1; }
+.card-top h4 { font-size: 15.5px; font-weight: 600; flex: 1; }
 
 /* One photo per place, fetched only when the card is actually on screen, and
    an initial-letter tile whenever there is none - never a broken image. */
 .thumb {
-  flex: none; width: 64px; height: 64px; border-radius: 8px;
+  flex: none; width: 88px; height: 88px; border-radius: 10px;
   background: var(--accent-soft) center/cover no-repeat;
   display: flex; align-items: center; justify-content: center;
-  font-size: 22px; font-weight: 600; color: var(--accent);
+  font-size: 26px; font-weight: 600; color: var(--accent);
   overflow: hidden; user-select: none;
 }
 .thumb.loaded { color: transparent; }
@@ -341,8 +369,8 @@ section.work { background: var(--bg); }
 .intake h2 { font-size: 18px; margin-bottom: 4px; }
 .intake .lede { color: var(--ink-2); font-size: 13px; margin-bottom: 18px; }
 .q {
-  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r);
-  padding: 13px 15px; margin-bottom: 10px;
+  background: var(--panel); border: 1px solid var(--card-line); box-shadow: var(--elev);
+  border-radius: var(--r); padding: 13px 15px; margin-bottom: 10px;
 }
 .q > b { font-size: 13.5px; display: block; margin-bottom: 9px; }
 .q label {
@@ -362,8 +390,8 @@ section.work { background: var(--bg); }
 .q .hint { font-size: 11.5px; color: var(--ink-3); margin-top: 6px; }
 
 .brief-card {
-  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r);
-  padding: 16px 18px;
+  background: var(--panel); border: 1px solid var(--card-line); box-shadow: var(--elev);
+  border-radius: var(--r); padding: 18px 20px;
 }
 .brief-card h3 { font-size: 17px; }
 .brief-card .who { color: var(--ink-2); font-size: 13px; margin-top: 2px; }
@@ -386,6 +414,23 @@ section.work { background: var(--bg); }
 .asks { margin-bottom: 22px; }
 .asks .go { margin-top: 10px; }
 
+/* --- quick picks ---------------------------------------------------------- */
+.picks { margin-bottom: 22px; }
+.pickrow {
+  display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+  padding: 6px 0; font-size: 13px;
+}
+.pickrow > span { flex: none; width: 108px; color: var(--ink-2); }
+.pickrow small { color: var(--ink-3); font-size: 11.5px; }
+.pickrow input[type="number"] { width: 86px; padding: 5px 8px; font-size: 12.5px; }
+.pick {
+  font-size: 12.5px; padding: 5px 12px; border-radius: 999px;
+  border: 1px solid var(--line); color: var(--ink-2); background: var(--panel);
+}
+.pick:hover { border-color: var(--line-2); color: var(--ink); }
+.pick.on { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 550; }
+@media (prefers-color-scheme: dark) { .pick.on { color: #10221d; } }
+
 /* --- decisions ------------------------------------------------------------ */
 .dec { margin-bottom: 22px; }
 .dec-head { display: flex; align-items: baseline; gap: 9px; margin-bottom: 8px; }
@@ -396,8 +441,8 @@ section.work { background: var(--bg); }
   font-size: 12.5px; color: var(--ink-3); background: var(--sunk);
   border: 1px dashed var(--line-2); border-radius: var(--r); padding: 10px 12px;
 }
-.opt { background: var(--panel); border: 1px solid var(--line);
-  border-radius: var(--r); padding: 10px 12px; margin-bottom: 6px; }
+.opt { background: var(--panel); border: 1px solid var(--card-line); box-shadow: var(--elev);
+  border-radius: var(--r); padding: 10px 12px; margin-bottom: 8px; }
 .opt.on { border-color: var(--accent); background: var(--accent-soft); }
 .opt-top { display: flex; align-items: baseline; gap: 8px; }
 .opt-top b { font-size: 13.5px; flex: 1; }
@@ -483,12 +528,12 @@ section.work { background: var(--bg); }
 
 /* --- chat ----------------------------------------------------------------- */
 .composer { flex: none; background: var(--panel); padding: 10px 20px 14px; border-top: 1px solid var(--line); }
-.composer .inner { max-width: 780px; margin: 0 auto; }
+.composer .inner { max-width: 820px; margin: 0 auto; }
 .chat {
   flex: none; height: var(--chat); overflow-y: auto;
   background: var(--panel); padding: 14px 20px 4px;
 }
-.chat .inner, .chat > * { max-width: 780px; margin-left: auto; margin-right: auto; }
+.chat .inner, .chat > * { max-width: 820px; margin-left: auto; margin-right: auto; }
 
 /* What the agent is doing right now, visible whether or not the conversation
    pane is open. Nobody should stare at a spinner for two minutes. */
@@ -518,11 +563,14 @@ section.work { background: var(--bg); }
 .msg .body { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); }
 .msg.user .body { color: var(--ink); }
 .ask { display: flex; gap: 8px; align-items: flex-end; }
+/* A command bar, not a console: pill-shaped, borderless until touched. */
 .ask textarea {
-  flex: 1; resize: none; min-height: 42px; max-height: 150px; padding: 10px 12px;
-  border-radius: var(--r); border: 1px solid var(--line); background: var(--panel-2); color: var(--ink);
+  flex: 1; resize: none; min-height: 44px; max-height: 150px; padding: 11px 18px;
+  border-radius: 22px; border: 1px solid transparent;
+  background: var(--sunk); color: var(--ink);
 }
-.ask textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.ask textarea:focus { outline: none; border-color: var(--accent); background: var(--panel-2); }
+.ask .btn { border-radius: 999px; padding: 10px 18px; }
 .hint { font-size: 11.5px; color: var(--ink-3); margin-top: 6px; }
 .thinking { display: flex; align-items: center; gap: 8px; font: 12px var(--mono); color: var(--ink-2); }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pulse 1.15s infinite; }
@@ -532,10 +580,11 @@ section.work { background: var(--bg); }
 .mapwrap { margin-bottom: 16px; }
 .mapwrap .eyebrow { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .mapwrap .eyebrow select {
-  margin-left: auto; text-transform: none; letter-spacing: 0; font-size: 11px;
-  color: var(--ink-2); background: var(--panel-2); border: 1px solid var(--line);
-  border-radius: 6px; padding: 2px 4px; max-width: 150px;
+  margin-left: auto; text-transform: none; letter-spacing: 0; font-size: 11.5px;
+  color: var(--ink-2); background: transparent; border: none;
+  border-radius: 6px; padding: 2px 4px; max-width: 160px; cursor: pointer;
 }
+.mapwrap .eyebrow select:hover { color: var(--ink); }
 #map {
   height: clamp(320px, 45vh, 560px);
   border-radius: var(--r); border: 1px solid var(--line); background: var(--sunk);
@@ -624,7 +673,7 @@ details.debug li { font: 11.5px/1.7 var(--mono); color: var(--ink-3); }
         <button class="tab" data-view="research">Research</button>
       </div>
       <div class="notice" id="notice" hidden></div>
-      <div class="work-scroll"><div class="sheet" id="work">
+      <div class="work-scroll"><div class="hero" id="hero" hidden></div><div class="sheet" id="work">
         <div class="welcome">
           <h2>A trip you can see, not just read about</h2>
           <p>Create a trip on the left, then tell the agent what you want. Everything it
@@ -837,6 +886,7 @@ function resetWorkspace() {
   $("tabs").hidden = true;
   $("intakeTab").hidden = true;
   $("notice").hidden = true;
+  $("hero").hidden = true;
   $("work").innerHTML = `<div class="welcome">
     <h2>A trip you can see, not just read about</h2>
     <p>Create a trip on the left, then tell the agent what you want.</p></div>`;
@@ -1000,6 +1050,35 @@ function paintNotice() {
   $("noticeBtn").onclick = () => { S.view = "intake"; render(); };
 }
 
+/** The trip as a headline: name large, place and dates beneath, and the first
+ *  photographed place as a backdrop when one is already cached or cachable.
+ *  Falls back to a plain tinted band - never a broken image, never a spinner. */
+function paintHero() {
+  const hero = $("hero");
+  if (!S.trip) { hero.hidden = true; return; }
+  const b = S.trip.brief;
+  const where = b.destination.city || b.destination.region || "";
+  const when = b.dates.start && b.dates.end
+    ? `${shortDay(b.dates.start)} – ${shortDay(b.dates.end)}` : "";
+  const title = S.trip.metadata?.title || where || "Trip";
+
+  hero.hidden = false;
+  hero.innerHTML = `<h2>${esc(title)}</h2>
+    <p>${esc([where, when].filter(Boolean).join(" · "))}</p>`;
+
+  const tripId = S.tripId;
+  const first = Object.values(S.trip.entities || {})
+    .find((e) => e.provider_refs && e.provider_refs.google_place_id);
+  if (!first) { hero.classList.remove("img"); hero.style.backgroundImage = ""; return; }
+  photoFor(first.provider_refs.google_place_id).then((url) => {
+    if (S.tripId !== tripId) return;          // moved on while the photo loaded
+    if (!url) { hero.classList.remove("img"); hero.style.backgroundImage = ""; return; }
+    hero.style.backgroundImage =
+      `linear-gradient(180deg, rgba(15,18,22,.14), rgba(15,18,22,.58)), url("${url}")`;
+    hero.classList.add("img");
+  });
+}
+
 function paintHeader() {
   const t = S.trip;
   // Where and when - the two facts a traveller recognises their trip by.
@@ -1010,12 +1089,14 @@ function paintHeader() {
   const where = t.brief.destination.city || t.brief.destination.region || "somewhere";
   $("sub").textContent = `${where}${range}`;
 
+  // The chip speaks only when something needs acting on; a permanent green
+  // badge is reassurance-furniture, and clean is the default state of a plan.
   const chip = $("validChip"), issues = S.over.validation.issues || [];
   const errors = issues.filter((i) => i.severity === "error").length;
   const warns = issues.filter((i) => i.severity === "warning").length;
-  chip.hidden = false;
-  chip.className = "chip " + (errors ? "bad" : warns ? "warn" : "good");
-  chip.textContent = errors ? `${errors} to resolve` : warns ? `${warns} to check` : "no conflicts";
+  chip.hidden = !errors && !warns;
+  chip.className = "chip " + (errors ? "bad" : "warn");
+  chip.textContent = errors ? `${errors} to resolve` : `${warns} to check`;
   chip.onclick = () => { S.view = "itinerary"; render(); document.querySelector(".issue")?.scrollIntoView({behavior:"smooth", block:"center"}); };
 }
 
@@ -1061,6 +1142,7 @@ function render() {
   else if (S.view === "decisions") out.push(decisionsHtml());
   else out.push(researchHtml());
   $("work").innerHTML = out.join("");
+  paintHero();
   paintNotice();
   wireWorkspace();
   renderRail();
@@ -1172,7 +1254,7 @@ function itineraryHtml() {
         <h3>${esc(dayLabel(day.date))}</h3>
         ${day.theme ? `<small>${esc(day.theme)}</small>` : ""}
         <div class="spacer"></div>
-        <button class="chip" data-replan="${day.date}">Make this day easier</button>
+        <button class="linkish" data-replan="${day.date}">Make this day easier</button>
       </div>
       <div class="dayline">${weatherChipHtml(day)}${dayMetricsHtml(day)}</div>
       ${day.items.length
@@ -1499,7 +1581,50 @@ function intakeHtml() {
         <span class="empty" style="font-size:12px">Or just tell the agent in the chat.</span>
       </div>
     </div>` : ""}
+    ${quickPicksHtml()}
     ${briefCardHtml(view, { confirmed: false })}
+  </div>`;
+}
+
+/* The optional facts, tickable without a conversation: rental car, hotel
+   budget, red-eyes, shopping. Every chip writes the same patch path the
+   inline editors use - one write path, not two - and picking the selected
+   chip again unsets it. Tri-state survives: not answering stays not answered,
+   and none of this gates Start planning. */
+function quickPicksHtml() {
+  const b = S.trip.brief;
+  const chip = (path, value, label, on, unset) => `<button
+    class="pick ${on ? "on" : ""}" data-pickpath="${esc(path)}"
+    data-pickvalue="${esc(JSON.stringify(on ? unset : value))}">${esc(label)}</button>`;
+
+  const car = b.scope.rental_car;
+  const budget = b.budget.hotel_per_night;
+  const shopping = (b.priorities || []).includes("shopping");
+  const withShopping = [...(b.priorities || []).filter((p) => p !== "shopping"), "shopping"];
+  const withoutShopping = (b.priorities || []).filter((p) => p !== "shopping");
+
+  const budgetChip = (amount) => chip(
+    "/brief/budget/hotel_per_night", amount, `≤ $${amount}`, budget === amount, null);
+
+  return `<div class="picks">
+    <p class="eyebrow">Preferences — optional</p>
+    <div class="pickrow"><span>Rental car</span>
+      ${chip("/brief/scope/rental_car", "plan", "Plan it for me", car === "plan", "unknown")}
+      ${chip("/brief/scope/rental_car", "already_arranged", "Already arranged", car === "already_arranged", "unknown")}
+      ${chip("/brief/scope/rental_car", "not_needed", "Not needed", car === "not_needed", "unknown")}
+    </div>
+    <div class="pickrow"><span>Hotel budget</span>
+      ${budgetChip(150)}${budgetChip(300)}${budgetChip(600)}
+      <input type="number" min="0" step="10" placeholder="custom" title="Per night"
+        data-field="/brief/budget/hotel_per_night" value="${budget ?? ""}"> <small>/ night</small>
+    </div>
+    <div class="pickrow"><span>Red-eye flights</span>
+      ${chip("/brief/avoid_red_eye", false, "Fine by us", b.avoid_red_eye === false, null)}
+      ${chip("/brief/avoid_red_eye", true, "Avoid them", b.avoid_red_eye === true, null)}
+    </div>
+    <div class="pickrow"><span>Shopping</span>
+      ${chip("/brief/priorities", withShopping, "Set aside shopping time", shopping, withoutShopping)}
+    </div>
   </div>`;
 }
 
@@ -1536,11 +1661,25 @@ function briefCardHtml(view, { confirmed }) {
   const sec = (title, body) => body ? `<div class="brief-sec">
     <p class="eyebrow">${title}</p>${body}</div>` : "";
 
+  // What they picked, on the card they confirm - a commitment the traveller
+  // cannot see is one they cannot correct.
+  const b = S.trip.brief;
+  const picked = [
+    b.scope.rental_car === "plan" ? "Rental car: plan it"
+      : b.scope.rental_car === "already_arranged" ? "Rental car already arranged"
+      : b.scope.rental_car === "not_needed" ? "No rental car" : null,
+    b.budget.hotel_per_night
+      ? `Hotel up to $${b.budget.hotel_per_night} / night` : null,
+    b.avoid_red_eye === true ? "Avoid red-eye flights"
+      : b.avoid_red_eye === false ? "Red-eye flights are fine" : null,
+  ].filter(Boolean);
+
   return `<div class="brief-card">
       <h3>${esc(view.headline)}</h3>
       ${view.travelers
         ? `<p class="who">${esc(view.travelers)}</p>`
         : '<p class="who no">Party size not given</p>'}
+      ${picked.length ? `<p class="who">${picked.map(esc).join(" · ")}</p>` : ""}
 
       ${sec("Already arranged", list(view.already_arranged.map((r) => "✓ " + r), "yes"))}
       ${sec("Priorities", list(view.priorities.map((r) => "• " + r)))}
@@ -1847,9 +1986,11 @@ const NOTES = {
     no place photos. Set <code>MAPS_BROWSER_API_KEY</code> in <code>.env</code> — a separate,
     referrer-restricted key. The server's own key is never given to the page.</div>`,
   rejected: `<div class="mapnote warn"><b>Google refused this key.</b><br>
-    Most likely <b>Maps JavaScript API</b> is not enabled on the project — it is a
-    separate API from Places and Routes, so a key that plans trips fine can still
-    be rejected here.</div>`,
+    Three usual causes: <b>Maps JavaScript API</b> is not on the key's allowed-API
+    list; the key's referrer list does not include the address you are actually
+    using (<code>localhost</code> and <code>127.0.0.1</code> count as different
+    sites — allow both); or you changed the key's restrictions in the last few
+    minutes — Google takes a while to apply them, so wait five minutes and reload.</div>`,
   offline: `<div class="mapnote">Could not reach Google Maps. Everything else on
     this page still works — the trip is served from your own machine.</div>`,
 };
@@ -2067,13 +2208,18 @@ function renderRail() {
     }
   }
 
+  // The checks section earns its place only when something needs acting on.
+  // A permanent "Nothing to flag" heading is furniture, and furniture is what
+  // makes a travel plan read like an admin console. Quiet info-notes fold to
+  // one muted line rather than disappearing - hidden is not the same as fine.
   const notes = (S.over.validation.issues || []).filter((i) => i.severity === "info");
-  out.push('<p class="eyebrow">Checks</p>');
   const loud = (S.over.validation.issues || []).filter((i) => i.severity !== "info");
-  if (!loud.length && !notes.length) out.push('<p class="empty">Nothing to flag.</p>');
-  if (loud.length) out.push(`<p class="empty">${loud.length} shown in the itinerary.</p>`);
+  if (loud.length) {
+    out.push('<p class="eyebrow">Checks</p>');
+    out.push(`<p class="empty">${loud.length} shown in the itinerary.</p>`);
+  }
   if (notes.length) {
-    out.push(`<details class="debug"><summary>${notes.length} note(s)</summary>
+    out.push(`<details class="quietnotes"><summary>All good · ${notes.length} minor note(s)</summary>
       ${notes.map((i) => `<div class="issue info" style="margin-top:7px"><p>${esc(i.message)}</p></div>`).join("")}
     </details>`);
   }
@@ -2105,6 +2251,15 @@ function wireWorkspace() {
       const wasHidden = menu.hidden;
       closeMenus();
       menu.hidden = !wasHidden;
+    });
+
+  // Quick-picks: each chip writes one brief fact; the selected chip unsets.
+  $("work").querySelectorAll("[data-pickpath]").forEach((btn) =>
+    btn.onclick = () => {
+      let value;
+      try { value = JSON.parse(btn.dataset.pickvalue); } catch { return; }
+      patchBrief(btn.dataset.pickpath, value,
+        `picked ${btn.dataset.pickpath.split("/").pop()}`).catch((e) => toast(e.message));
     });
 
   // Day pills: jump to the day, and point the map at it too.
@@ -2208,6 +2363,23 @@ function wireWorkspace() {
   });
 }
 
+/** One brief fact, through the ordinary patch engine. Shared by the inline
+ *  editors and the intake quick-picks - one write path, not two. */
+async function patchBrief(path, value, reason) {
+  const result = await api(`/trips/${S.tripId}/patch`, post({
+    base_revision: S.trip.revision,
+    reason,
+    actor: "user",
+    operations: [{ op: "set", path, value }],
+  }));
+  if (!result.applied) {
+    toast(result.errors?.[0]?.message || "The server refused that change");
+    return false;
+  }
+  await refresh(); render(); await loadTrips();
+  return true;
+}
+
 async function saveFact(el) {
   const value = el.value;
   if (value === el.dataset.was) return;
@@ -2215,19 +2387,10 @@ async function saveFact(el) {
   const parsed = numeric ? (value === "" ? null : Number(value)) : (value === "" ? null : value);
 
   try {
-    const result = await api(`/trips/${S.tripId}/patch`, post({
-      base_revision: S.trip.revision,
-      reason: `set ${el.dataset.field.split("/").pop()}`,
-      actor: "user",
-      operations: [{ op: "set", path: el.dataset.field, value: parsed }],
-    }));
-    if (!result.applied) {
-      toast(result.errors?.[0]?.message || "The server refused that change");
-      el.value = el.dataset.was;   // never leave the screen ahead of the store
-      return;
-    }
+    const ok = await patchBrief(
+      el.dataset.field, parsed, `set ${el.dataset.field.split("/").pop()}`);
+    if (!ok) { el.value = el.dataset.was; return; }   // never ahead of the store
     el.dataset.was = value;
-    await refresh(); render(); await loadTrips();
     toast("Saved");
   } catch (err) {
     toast(err.message);
@@ -2362,6 +2525,8 @@ const toolLabel = (name) => TOOL_LABELS[name] || name.replace(/_/g, " ");
 function paintBusy(snap) {
   const box = $("busyStrip");
   box.hidden = false;
+  // Status a traveller can read: what is happening now, how long, what is
+  // done. Rounds and iterations are agent-console vocabulary and stay out.
   const secs = Math.round((snap?.elapsed_ms ?? 0) / 1000);
   const now = snap?.cancelled ? "stopping at the next safe point…"
     : snap?.current_tool
@@ -2374,7 +2539,7 @@ function paintBusy(snap) {
   box.querySelector(".inner").innerHTML = `
     <span class="thinking"><span class="dot"></span></span>
     <span class="now">${esc(now)}</span>
-    <span>round ${snap?.iteration || 1} · ${secs}s</span>
+    <span>${secs}s${done.length ? ` · ${done.length} step(s) done` : ""}</span>
     ${done.length ? `<span class="done">${doneBits}</span>` : ""}`;
 }
 

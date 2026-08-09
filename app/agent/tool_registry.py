@@ -1535,11 +1535,17 @@ async def _search_flights(context: ToolContext, args: dict[str, Any]) -> dict[st
     # Two scorings, answering two questions. `rank_flights` says what is good
     # about the flight itself - price, stops, duration are facts about the
     # aircraft, not opinions. The group pass says who it is good *for*.
-    ranked = rank_flights(
-        result.results, preferences=FlightPreferences(), airports=context.airports, limit=6
-    )
-
+    #
+    # The brief-level red-eye answer feeds the base ranking. It used to be a
+    # blank FlightPreferences() here, which made the intake quick-pick a stated
+    # preference that moved nothing - the ledger's oldest failure shape.
     working = _working_state(context)
+    ranked = rank_flights(
+        result.results,
+        preferences=FlightPreferences(avoid_red_eye=bool(working.brief.avoid_red_eye)),
+        airports=context.airports,
+        limit=6,
+    )
     travelers, gaps = effective(working)
     names = traveler_names(working)
 
@@ -1552,6 +1558,7 @@ async def _search_flights(context: ToolContext, args: dict[str, Any]) -> dict[st
             names=names,
             airports=context.airports,
             worst_weight=context.settings.group_worst_weight,
+            trip_avoid_red_eye=bool(working.brief.avoid_red_eye),
         )
         group_warnings.extend(airline_warnings)
         group_by_ref = {item.option.offer_ref: item for item in grouped}

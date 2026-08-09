@@ -126,6 +126,11 @@ class TripBrief(BaseModel):
     pace: Pace = "balanced"
     notes: str | None = None
 
+    # Trip-level flight taste, for when nobody has a stored profile. Tri-state:
+    # None means nobody said, which is not the same fact as "red-eyes are fine".
+    # Per-traveller preferences still apply on top in the group pass.
+    avoid_red_eye: bool | None = None
+
     # What the traveller has asked us to plan, and what is already arranged.
     # Part of the brief rather than of the intake record, because it stays true
     # after confirmation and is what stops the agent shopping for a flight

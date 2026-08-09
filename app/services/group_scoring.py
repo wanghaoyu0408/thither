@@ -29,6 +29,7 @@ from app.models.group import (
     TravelerPreferences,
 )
 from app.models.place import PlaceSummary
+from app.models.traveler import FlightPreferences
 from app.services.flight_ranking import flies_avoided_airline, score_flight
 from app.services.hotel_ranking import score_hotel
 from app.services.ranking_service import RankingWeights, score_place
@@ -201,6 +202,12 @@ def rank_flights_for_group(
     airports: list[AirportOption] | None = None,
     limit: int | None = None,
     worst_weight: float = WORST_WEIGHT,
+    # The trip-level intake answer. ORed into each traveller's preference: a
+    # trip that said "avoid red-eyes" means everyone on it did, and a traveller
+    # who said it themselves is unchanged. Without this, any trip that had
+    # travellers ignored the intake answer entirely - the group order wins the
+    # final sort, and the group pass never saw the brief.
+    trip_avoid_red_eye: bool = False,
 ) -> tuple[list[GroupRanked[FlightOptionData]], list[str]]:
     """Group flight ranking, with the avoided-airline rule applied group-wide.
 
@@ -243,6 +250,11 @@ def rank_flights_for_group(
     prices = [(option.price_per_person or option.price).amount for option in options]
     durations = [option.duration_minutes for option in options if option.duration_minutes]
 
+    def flight_prefs(prefs: TravelerPreferences) -> FlightPreferences:
+        if trip_avoid_red_eye and not prefs.flight.avoid_red_eye:
+            return prefs.flight.model_copy(update={"avoid_red_eye": True})
+        return prefs.flight
+
     ranked = score_for_group(
         options,
         travelers=travelers,
@@ -253,7 +265,7 @@ def rank_flights_for_group(
             dearest=max(prices),
             shortest=min(durations) if durations else None,
             ground_minutes=ground,
-            preferences=prefs.flight,
+            preferences=flight_prefs(prefs),
         ),
         key=lambda option: option.offer_ref,
         worst_weight=worst_weight,
