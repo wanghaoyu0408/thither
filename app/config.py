@@ -24,6 +24,14 @@ class Settings(BaseSettings):
     google_places_language: str | None = "en"
     google_places_region: str | None = None
 
+    # The key the *browser* loads Maps JavaScript with. A page publishes every
+    # key it loads, so this is deliberately a separate setting: the server key
+    # above can stay unrestricted for Places and Routes, while this one can be
+    # locked to an HTTP referrer. Left unset it falls back to the server key,
+    # which is fine on localhost and not fine anywhere reachable - a scraped
+    # key spends the same quota. See `maps_browser_key`.
+    maps_browser_api_key: str | None = None
+
     # Durable half of the tool cache. Only place ids and lat/lng ever persist;
     # see app/services/cache.py.
     cache_enabled: bool = True
@@ -67,6 +75,26 @@ class Settings(BaseSettings):
 
     # Placeholder for a later milestone.
     weather_api_key: str | None = None
+
+    @property
+    def maps_browser_key(self) -> str | None:
+        """The key to hand the page, or None if the map should not be offered.
+
+        One resolution point, so nothing else has to remember the fallback.
+        """
+        return self.maps_browser_api_key or self.google_maps_api_key
+
+    @property
+    def maps_key_is_shared_with_the_server(self) -> bool:
+        """True when the page publishes the same key the server plans with.
+
+        Worth naming rather than inferring: it is the difference between a key
+        that leaks a map and a key that leaks the Places and Routes budget.
+        """
+        return bool(
+            self.google_maps_api_key
+            and not self.maps_browser_api_key
+        )
 
     @property
     def sync_database_url(self) -> str:

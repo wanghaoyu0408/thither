@@ -12,9 +12,54 @@ async def test_the_ui_is_served_from_the_app(client):
     assert "text/html" in response.headers["content-type"]
     body = response.text
     assert "<title>Travel Agent</title>" in body
-    # Self-contained: nothing fetched from a host this project cannot vouch for.
+    # No CDN for the app itself: markup, styles and script are all served here.
     assert "//cdn." not in body
     assert "https://" not in body.split("<style>")[1].split("</style>")[0]
+    # Google's Maps JavaScript is the single exception, and it is loaded at
+    # runtime only when a key exists - never as a <script src> in the document,
+    # which would make the map a condition of the page rendering at all.
+    external = set(re.findall(r'<script[^>]+src="(https?://[^"]+)"', body))
+    assert external == set(), f"the document must not hard-load anything external: {external}"
+    assert "maps.googleapis.com/maps/api/js" in body
+
+
+async def test_the_page_carries_no_key_of_its_own(client):
+    """The file on disk is committed to git and handed to whoever opens the
+    app. A key the browser loads is public by construction, but that is not a
+    reason to bake one into the source."""
+    body = (await client.get("/")).text
+
+    assert "AIza" not in body, "a Google API key looks committed into the page"
+    assert "/ui-config" in body, "the page should fetch its key at runtime instead"
+
+
+async def test_ui_config_reports_whether_the_browser_shares_the_server_key(client):
+    """The page warns when it is publishing the key the server plans with, so
+    the risk is stated rather than left for the user to infer."""
+    response = await client.get("/ui-config")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {"maps_key", "maps_key_shared_with_server"}
+    assert isinstance(body["maps_key_shared_with_server"], bool)
+
+
+def test_the_browser_key_falls_back_to_the_server_key():
+    """One resolution point for the fallback, and one flag naming the risk."""
+    from app.config import Settings
+
+    shared = Settings(google_maps_api_key="server-key", maps_browser_api_key=None)
+    assert shared.maps_browser_key == "server-key"
+    assert shared.maps_key_is_shared_with_the_server is True
+
+    split = Settings(google_maps_api_key="server-key", maps_browser_api_key="browser-key")
+    assert split.maps_browser_key == "browser-key"
+    assert split.maps_key_is_shared_with_the_server is False
+
+    none = Settings(google_maps_api_key=None, maps_browser_api_key=None)
+    assert none.maps_browser_key is None
+    # Nothing is published, so nothing is shared.
+    assert none.maps_key_is_shared_with_the_server is False
 
 
 async def test_the_post_helper_takes_the_body_first(client):

@@ -44,6 +44,17 @@ billing on:
 - **Places API (New)** — the legacy "Places API" will not work; the field-mask header is
   a New-API concept
 - **Routes API**
+- **Maps JavaScript API** — only for the map in the web UI. It is a *separate* API, so a
+  key that plans trips perfectly well can still be refused by the map. If it is, the map
+  panel says so rather than showing a grey box.
+
+`MAPS_BROWSER_API_KEY` is optional and falls back to `GOOGLE_MAPS_API_KEY`. Set it when
+this app is reachable by anyone but you: the page publishes whatever key it loads, so a
+shared key hands out your Places and Routes budget along with the map, and you cannot fix
+that with an HTTP-referrer restriction because the same restriction would break the
+server's own calls. Two keys — one referrer-restricted for the browser, one unrestricted
+for the server — is the only arrangement that restricts both. While it is shared, the UI
+says so under the map.
 
 From Milestone 3 the conversation endpoint also needs `OPENAI_API_KEY`, and
 `OPENAI_MODEL` if you want something other than the default.
@@ -58,8 +69,10 @@ The offline test suite needs no key at all.
 
 Then open **http://127.0.0.1:8000** for the web UI, or `/docs` for the raw API.
 
-The UI is one self-contained file (`app/web/index.html`) with no CDN, on the same terms as
-the rest of the project: nothing fetched from a host it cannot vouch for. It shows the trip,
+The UI is one file (`app/web/index.html`) with no CDN and no key baked into it — it fetches
+what it needs from `/ui-config` at runtime. It loads exactly one thing from outside: Google's
+Maps JavaScript, and only when a key is configured; without one the workspace still works and
+the map panel explains its own absence. It shows the trip,
 the itinerary, the validation checks, every preference conflict with each person's position
 stated separately — and, under each reply, the actual tool calls the agent made. A turn takes
 minutes because it is really calling Google, Duffel, SerpApi and an LLM, so it shows a clock.

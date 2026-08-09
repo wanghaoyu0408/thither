@@ -244,6 +244,30 @@ section.work { background: var(--bg); }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pulse 1.15s infinite; }
 @keyframes pulse { 0%,100% { opacity: .25 } 50% { opacity: 1 } }
 
+/* --- map ------------------------------------------------------------------ */
+.mapwrap { margin-bottom: 16px; }
+.mapwrap .eyebrow { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.mapwrap .eyebrow select {
+  margin-left: auto; text-transform: none; letter-spacing: 0; font-size: 11px;
+  color: var(--ink-2); background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 6px; padding: 2px 4px; max-width: 150px;
+}
+#map { height: 236px; border-radius: var(--r); border: 1px solid var(--line); background: var(--sunk); }
+#map.gone { display: none; }
+.mapnote {
+  font-size: 12px; color: var(--ink-2); background: var(--sunk);
+  border: 1px solid var(--line); border-radius: var(--r); padding: 11px 12px;
+}
+.mapnote b { color: var(--ink); }
+.mapnote.warn { background: var(--warn-soft); border-color: var(--warn); color: var(--warn); }
+.mapnote code { font: 11px var(--mono); }
+.unmapped { font-size: 12px; color: var(--warn); margin-top: 7px; }
+/* Google's InfoWindow renders outside our stylesheet's reach; keep it legible. */
+.gm-style .gm-style-iw-c { border-radius: 8px; padding: 9px 11px; }
+.iw { font: 13px/1.4 inherit; color: #17181b; }
+.iw b { display: block; font-size: 13px; }
+.iw span { font-size: 12px; color: #565961; }
+
 .empty { color: var(--ink-3); font-size: 13px; }
 .banner { padding: 9px 11px; border-radius: var(--r); font-size: 12.5px;
   background: var(--error-soft); color: var(--error); border: 1px solid var(--error); margin-bottom: 12px; }
@@ -317,8 +341,13 @@ details.debug li { font: 11.5px/1.7 var(--mono); color: var(--ink-3); }
       </div>
     </section>
 
-    <aside class="right"><div class="scroll" id="rail">
-      <p class="empty">Pick a trip.</p>
+    <aside class="right"><div class="scroll">
+      <div class="mapwrap" id="mapwrap" hidden>
+        <p class="eyebrow">On the map<select id="mapDay" title="Which day to show"></select></p>
+        <div id="map" class="gone"></div>
+        <div id="mapnote"></div>
+      </div>
+      <div id="rail"><p class="empty">Pick a trip.</p></div>
     </div></aside>
   </main>
 </div>
@@ -329,7 +358,8 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
   (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 
-const S = { tripId: null, trip: null, over: null, view: "itinerary", busy: false, lastDiff: null };
+const S = { tripId: null, trip: null, over: null, view: "itinerary", busy: false,
+            lastDiff: null, mapDay: null };
 
 async function api(path, opts) {
   const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
@@ -385,7 +415,7 @@ $("newTrip").onsubmit = async (e) => {
 };
 
 async function selectTrip(id) {
-  S.tripId = id; S.lastDiff = null;
+  S.tripId = id; S.lastDiff = null; S.mapDay = null;
   await refresh();
   S.view = (S.trip.itinerary.days || []).length ? "itinerary" : "overview";
   await loadMessages();
@@ -470,6 +500,7 @@ function render() {
   $("work").innerHTML = out.join("");
   wireWorkspace();
   renderRail();
+  paintMap();   // async on purpose: the workspace must not wait on Google.
 }
 
 document.querySelectorAll(".tab").forEach((el) =>
@@ -550,11 +581,9 @@ function itineraryHtml() {
   }
 
   for (const day of days) {
-    const label = new Date(day.date + "T00:00:00").toLocaleDateString(undefined,
-      { weekday: "long", month: "short", day: "numeric" });
     out.push(`<div class="day">
       <div class="day-head">
-        <h3>${esc(label)}</h3>
+        <h3>${esc(dayLabel(day.date))}</h3>
         ${day.theme ? `<small>${esc(day.theme)}</small>` : ""}
         <div class="spacer"></div>
         <small>${day.items.length} stop(s)</small>
@@ -593,7 +622,8 @@ function itemHtml(item) {
 
   return `<div class="slot">
     <time>${esc(clock(item.start_at))}</time>
-    <div class="card ${locked ? "locked" : ""} ${unverified ? "attention" : ""}">
+    <div class="card ${locked ? "locked" : ""} ${unverified ? "attention" : ""}"
+         data-item="${esc(item.item_id)}">
       <div class="card-top">
         <h4>${esc(item.title)}</h4>
         ${status}
@@ -613,6 +643,11 @@ function itemHtml(item) {
       </div>
     </div>
   </div>`;
+}
+
+function dayLabel(date) {
+  return new Date(date + "T00:00:00").toLocaleDateString(undefined,
+    { weekday: "long", month: "short", day: "numeric" });
 }
 
 function clock(iso) {
@@ -703,6 +738,184 @@ function sourceHtml(record) {
   </div>`;
 }
 
+/* --- map ------------------------------------------------------------------ */
+
+/** Maps JavaScript is the one thing this page loads from outside itself, so
+ *  every way it can fail has to be a sentence the user can act on rather than
+ *  a grey rectangle. `status` is that sentence's subject. */
+const M = { status: "idle", pending: null, shared: false, map: null, info: null,
+            markers: [], line: null };
+
+async function mapsReady() {
+  if (M.status !== "idle") return M.status === "loading" ? M.pending : M.status;
+  M.status = "loading";
+  M.pending = (async () => {
+    let cfg;
+    try { cfg = await api("/ui-config"); }
+    catch { return (M.status = "offline"); }
+    M.shared = !!cfg.maps_key_shared_with_server;
+    if (!cfg.maps_key) return (M.status = "nokey");
+    try {
+      // Wait for Google's callback, not for the script's onload. With
+      // loading=async the script installs a loader and returns; at onload
+      // google.maps exists but is still a stub with no Map constructor on it.
+      // The callback is the point where the namespace is actually usable.
+      await new Promise((ok, fail) => {
+        const timer = setTimeout(() => fail(new Error("timed out")), 15000);
+        window.__mapsReady = () => { clearTimeout(timer); ok(); };
+        const s = document.createElement("script");
+        s.src = "https://maps.googleapis.com/maps/api/js?v=weekly&loading=async"
+              + "&callback=__mapsReady&key=" + encodeURIComponent(cfg.maps_key);
+        s.async = true;
+        s.onerror = () => { clearTimeout(timer); fail(new Error("blocked")); };
+        document.head.appendChild(s);
+      });
+    } catch (e) { M.loadError = e.message; return (M.status = "offline"); }
+    // gm_authFailure may already have fired by now; do not overwrite it.
+    return (M.status = M.status === "rejected" ? "rejected"
+            : typeof google.maps.Map === "function" ? "ready" : "offline");
+  })();
+  return M.pending;
+}
+
+// Google calls this when it refuses the key: wrong key, or Maps JavaScript API
+// not enabled on the project. That is the likeliest failure when a key made
+// for Places and Routes is reused here, so name it instead of showing nothing.
+window.gm_authFailure = () => { M.status = "rejected"; paintMap(); };
+
+const mappableDays = () => (S.trip?.itinerary?.days || []).filter((d) => d.items.length);
+
+/** Split a day into what can be drawn and what cannot. An item whose place has
+ *  no stored coordinates is named, not quietly left off - a map that shows
+ *  three of five stops without saying so is a map that lies about the day. */
+function stopsFor(day) {
+  const stops = [], unmapped = [];
+  for (const item of day.items) {
+    const entity = S.trip.entities[item.entity_id];
+    if (entity && typeof entity.lat === "number" && typeof entity.lng === "number") {
+      stops.push({ item, entity });
+    } else {
+      unmapped.push(item.title);
+    }
+  }
+  return { stops, unmapped };
+}
+
+const NOTES = {
+  nokey: `<div class="mapnote">No Maps key is configured, so there is no map.
+    Set <code>MAPS_BROWSER_API_KEY</code> in <code>.env</code> to switch it on.</div>`,
+  rejected: `<div class="mapnote warn"><b>Google refused this key.</b><br>
+    Most likely <b>Maps JavaScript API</b> is not enabled on the project — it is a
+    separate API from Places and Routes, so a key that plans trips fine can still
+    be rejected here.</div>`,
+  offline: `<div class="mapnote">Could not reach Google Maps. Everything else on
+    this page still works — the trip is served from your own machine.</div>`,
+};
+
+async function paintMap() {
+  const wrap = $("mapwrap"), days = mappableDays();
+  wrap.hidden = !days.length;
+  if (!days.length) return;
+
+  if (!days.some((d) => d.date === S.mapDay)) S.mapDay = days[0].date;
+  const picker = $("mapDay");
+  picker.innerHTML = days.map((d) =>
+    `<option value="${esc(d.date)}"${d.date === S.mapDay ? " selected" : ""}>${esc(dayLabel(d.date))}</option>`).join("");
+  picker.onchange = () => { S.mapDay = picker.value; paintMap(); };
+
+  const status = await mapsReady();
+  if (status !== "ready") {
+    $("map").classList.add("gone");
+    $("mapnote").innerHTML = NOTES[status] || NOTES.offline;
+    return;
+  }
+  drawDay(days.find((d) => d.date === S.mapDay));
+}
+
+function drawDay(day) {
+  const { stops, unmapped } = stopsFor(day);
+  const canvas = $("map");
+
+  const tail = [
+    unmapped.length
+      ? `<p class="unmapped">${unmapped.length} stop(s) have no stored coordinates and are
+         not drawn: ${esc(unmapped.join(", "))}.</p>` : "",
+    M.shared
+      ? `<p class="unmapped">This page is publishing your server Google key. Fine on
+         localhost; restrict it before this app is reachable from anywhere else.</p>` : "",
+  ].join("");
+
+  if (!stops.length) {
+    canvas.classList.add("gone");
+    $("mapnote").innerHTML = `<div class="mapnote">Nothing on this day has coordinates
+      stored yet.</div>${tail}`;
+    return;
+  }
+
+  canvas.classList.remove("gone");
+  const first = { lat: stops[0].entity.lat, lng: stops[0].entity.lng };
+  if (!M.map) {
+    // center and zoom are not optional: a Map built without them stays
+    // uninitialised and renders an empty box, with no error to explain it.
+    M.map = new google.maps.Map(canvas, {
+      center: first, zoom: 13,
+      mapTypeControl: false, streetViewControl: false, fullscreenControl: false,
+    });
+    M.info = new google.maps.InfoWindow();
+  }
+  M.markers.forEach((m) => m.setMap(null));
+  M.markers = [];
+  if (M.line) M.line.setMap(null);
+
+  const bounds = new google.maps.LatLngBounds(), path = [];
+  stops.forEach(({ item, entity }, index) => {
+    const at = { lat: entity.lat, lng: entity.lng };
+    path.push(at); bounds.extend(at);
+    const marker = new google.maps.Marker({
+      map: M.map, position: at, title: item.title,
+      label: { text: String(index + 1), color: "#fff", fontSize: "11px", fontWeight: "600" },
+    });
+    marker.itemId = item.item_id;
+    marker.addListener("click", () => {
+      M.info.setContent(`<div class="iw"><b>${esc(item.title)}</b><span>${
+        esc([clock(item.start_at), item.type, entity.rating ? "★ " + entity.rating : ""]
+          .filter(Boolean).join(" · "))}</span></div>`);
+      M.info.open({ map: M.map, anchor: marker });
+      document.querySelector(`[data-item="${item.item_id}"]`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    M.markers.push(marker);
+  });
+
+  M.line = new google.maps.Polyline({
+    map: M.map, path, strokeColor: "#2f5d50", strokeOpacity: 0.6, strokeWeight: 2,
+  });
+  if (stops.length === 1) { M.map.setCenter(path[0]); M.map.setZoom(15); }
+  else M.map.fitBounds(bounds, 36);
+
+  $("mapnote").innerHTML = tail;
+}
+
+/** Clicking a card points at its marker, so the list and the map agree about
+ *  which stop is being discussed. */
+function focusStop(itemId) {
+  const day = mappableDays().find((d) => d.items.some((i) => i.item_id === itemId));
+  if (!day) return;
+  if (day.date !== S.mapDay) {      // clicked a stop on a day the map is not showing
+    S.mapDay = day.date;
+    paintMap().then(() => panTo(itemId));
+    return;
+  }
+  panTo(itemId);
+}
+
+function panTo(itemId) {
+  const marker = M.markers.find((m) => m.itemId === itemId);
+  if (!marker || !M.map) return;
+  M.map.panTo(marker.getPosition());
+  google.maps.event.trigger(marker, "click");
+}
+
 /* --- right rail ----------------------------------------------------------- */
 
 function renderRail() {
@@ -750,6 +963,12 @@ function wireWorkspace() {
   const on = (attr, handler) =>
     $("work").querySelectorAll(`[data-${attr}]`).forEach((el) =>
       el.onclick = () => handler(el.dataset[attr]));
+
+  // Clicking the card itself (not one of its buttons) points at its marker.
+  $("work").querySelectorAll("[data-item]").forEach((el) =>
+    el.addEventListener("click", (e) => {
+      if (!e.target.closest("button")) focusStop(el.dataset.item);
+    }));
 
   on("why", (id) => showWhy(`/items/${id}/why`));
   on("whyentity", (id) => showWhy(`/entities/${id}/why`));

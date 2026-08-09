@@ -56,8 +56,30 @@ async def health() -> dict[str, str]:
 async def home() -> FileResponse:
     """The web UI.
 
-    One self-contained file with no CDN, so the interface works on the same
-    terms as the rest of this project: offline, with nothing fetched from
-    somewhere it cannot vouch for.
+    One file, and no key baked into it. Everything the interface needs is
+    either served from this app or fetched at runtime from `/ui-config`, so the
+    page can be read, cached or committed without carrying a secret.
+
+    It loads exactly one thing from outside: Google's Maps JavaScript, and only
+    when a key is configured. Without it the workspace still works - the map
+    panel says why it is absent instead of leaving a hole.
     """
     return FileResponse(WEB_ROOT / "index.html")
+
+
+@app.get("/ui-config", include_in_schema=False)
+async def ui_config() -> dict[str, object]:
+    """What the page needs to know that is not in a trip.
+
+    The Maps key is served here rather than templated into the HTML so the file
+    on disk never contains it. That is not secrecy - a key the browser loads is
+    public by construction - it is about not committing one to git or handing
+    one to whoever gets a copy of the page.
+    """
+    settings = get_settings()
+    return {
+        "maps_key": settings.maps_browser_key,
+        # The page shows this as a warning. A shared key means anyone reading
+        # the page can also spend the Places and Routes budget.
+        "maps_key_shared_with_server": settings.maps_key_is_shared_with_the_server,
+    }
