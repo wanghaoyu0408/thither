@@ -29,12 +29,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(
-    title="Travel Agent",
+    title="问津 · Whither",
     description=(
         "Personal group travel planning agent. M1: TripState with a validated patch "
         "engine. M2: Google Places and Routes behind replaceable providers. "
         "M3: deterministic itinerary generation, validation and scoped local replanning, "
-        "driven conversationally."
+        "driven conversationally. M4: web research resolved against Google. "
+        "M5: flights, airport comparison and ranking with stated trade-offs. "
+        "M6: hotels, with the neighbourhood decided before anything is priced. "
+        "M7: multi-traveler preferences, group scoring and named conflicts."
     ),
     version="0.1.0",
     lifespan=lifespan,

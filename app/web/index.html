@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Travel Agent</title>
+<title>问津 · Whither</title>
 <style>
 /* Quiet on purpose. Travel information should be easier to scan than chat text,
    and a loud interface makes an honest answer look like a sales pitch. */
@@ -17,6 +17,15 @@
   --info: #3d5878; --info-soft: #eaeff5;
   --r: 12px; --r-sm: 8px;
   --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+  /* The conversation, and only the conversation - the trip's own figures stay on
+     the UI face, because numbers in a comic hand are harder to compare.
+     Comic Sans MS carries no CJK glyphs at all, so the Chinese families are
+     named after it deliberately: Latin hits Comic Sans, Chinese falls straight
+     through to the same 黑体 the rest of the app uses. Without them named here
+     Chinese would land on the browser's default and stop matching the page. */
+  --chat-font: "Comic Sans MS", "Comic Sans", "Chalkboard SE",
+               "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB",
+               "Noto Sans SC", cursive;
   /* Cards separate by elevation in light mode and by hairline in dark, where
      shadows have nothing to fall on. */
   --elev: 0 1px 2px rgba(17, 20, 24, 0.06), 0 6px 20px rgba(17, 20, 24, 0.05);
@@ -65,7 +74,9 @@ header {
   display: flex; align-items: center; gap: 12px; flex: none;
   padding: 10px 18px; border-bottom: 1px solid var(--line); background: var(--panel);
 }
-.brand { font-size: 15px; letter-spacing: -0.01em; }
+/* Tracking is `normal`, not the -0.01em the Latin wordmark had: negative
+   tracking crowds 问津, whose glyphs are already full-width boxes. */
+.brand { font-size: 15px; letter-spacing: normal; }
 .brand span { font-size: 12px; color: var(--ink-3); font-weight: 400; margin-left: 8px; }
 .spacer { flex: 1; }
 .chip {
@@ -178,8 +189,52 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
   font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.07em;
   color: var(--ink-3); font-weight: 600; margin-bottom: 3px;
 }
-.msg .body { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); }
+/* `white-space: pre-wrap` used to be the only reason a newline showed at all.
+   Now that md() emits real blocks, pre-wrap would also render the newlines
+   *between* those tags and double every gap on the page - so line breaks are
+   the renderer's job and this is plain wrapping. `overflow-wrap` stays: it is
+   what stops a cited URL widening the whole column. */
+.msg .body {
+  overflow-wrap: anywhere; color: var(--ink-2); font-family: var(--chat-font);
+}
 .msg.user .body { color: var(--ink); }
+
+/* What md() is allowed to emit. Several of these are load-bearing rather than
+   decorative: the page resets `p` and `h1-h4` margins globally, so without
+   them a reply collapses into one unbroken block. */
+.msg .body > :first-child { margin-top: 0; }
+.msg .body p + p { margin-top: 0.7em; }
+/* Body text is --ink-2; bold that only changes weight barely reads as emphasis,
+   so it takes the darker ink too. */
+.msg .body strong { font-weight: 700; color: var(--ink); }
+.msg .body em { font-style: italic; }
+.msg .body del { opacity: 0.55; }
+.msg .body a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.msg .body h4 { font-size: 14.5px; color: var(--ink); margin: 1.1em 0 0.35em; }
+.msg .body ul, .msg .body ol { margin: 0.55em 0; padding-left: 1.4em; }
+.msg .body ul { list-style: disc; }
+.msg .body ol { list-style: decimal; }
+.msg .body li { margin: 0.2em 0; }
+.msg .body blockquote {
+  margin: 0.7em 0; padding-left: 12px;
+  border-left: 2px solid var(--line-2); color: var(--ink-3);
+}
+.msg .body hr { border: 0; border-top: 1px solid var(--line); margin: 1em 0; }
+/* Code keeps the UI's mono face - a comic hand is exactly wrong for something
+   meant to be copied character for character. */
+.msg .body code {
+  font: 12px var(--mono); background: var(--sunk);
+  border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px;
+}
+.msg .body pre {
+  margin: 0.7em 0; padding: 10px 12px; background: var(--sunk);
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  overflow-x: auto;   /* a long line scrolls itself rather than widening the page */
+}
+.msg .body pre code {
+  background: none; border: 0; padding: 0; line-height: 1.55;
+  white-space: pre;   /* the one place pre-wrap's job survives */
+}
 
 /* An artifact: the trip's substance, at full width, when it needs looking at. */
 .artifact {
@@ -627,6 +682,9 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
   flex: 1; resize: none; min-height: 44px; max-height: 150px; padding: 11px 18px;
   border-radius: 22px; border: 1px solid transparent;
   background: var(--sunk); color: var(--ink);
+  /* What you type matches what you read. `font-family` and not the `font`
+     shorthand, which would throw away the inherited size and leading. */
+  font-family: var(--chat-font);
 }
 .ask textarea:focus { outline: none; border-color: var(--accent); background: var(--panel-2); }
 .ask .btn { border-radius: 999px; padding: 10px 18px; }
@@ -684,7 +742,7 @@ details.debug li { font: 11.5px/1.7 var(--mono); color: var(--ink-3); }
 <div class="app">
   <header>
     <button class="side-toggle" id="sideToggle" title="Show or hide the trip list">☰</button>
-    <h1 class="brand">Travel Agent<span id="sub">no trip selected</span></h1>
+    <h1 class="brand">问津 · Whither<span id="sub">no trip selected</span></h1>
     <div class="spacer"></div>
     <button class="chip" id="validChip" hidden></button>
   </header>
@@ -1190,10 +1248,123 @@ function chipsHtml() {
   return chips.length ? `<div class="chips">${chips.join("")}</div>` : "";
 }
 
+/* --- markdown -------------------------------------------------------------
+   Small and self-contained, because this page loads nothing from a CDN. Without
+   it a reply renders `**like this**`, and the model's formatting reaches the
+   reader as punctuation.
+
+   The safety property is the ORDER, not a sanitizer: `esc` runs over the whole
+   string first, so by the time any rule below matches there is no `<`, `>`, `&`,
+   `"` or `'` left in it - every tag in the output is therefore one this code
+   wrote. Markdown-first would mangle our own tags, and "escape everything except
+   the tags we meant" is where XSS lives. Two consequences: a rule looking for
+   `>` must look for `&gt;`, and links need a check of their own, because
+   `javascript:alert(1)` contains nothing `esc` touches. */
+
+const MD_URL = /^https?:\/\/\S+$/i;
+const mdLink = (url, text) =>
+  `<a href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+
+/** Inline rules, in the only order that is correct. Anything already finished is
+ *  parked behind a `<N>` placeholder so a later rule cannot reach inside it -
+ *  unforgeable for the same reason the whole function is safe, since `esc` has
+ *  already taken every `<` out of the text. */
+function mdInline(s) {
+  const done = [];
+  const park = (html) => `<${done.push(html) - 1}>`;
+
+  // Code first: a span is literal, so the emphasis rules must never see the
+  // asterisks in `a*b*c`.
+  s = s.replace(/`([^`]+)`/g, (_, code) => park(`<code>${code}</code>`));
+  // Explicit links before bare ones, and both parked, so autolinking cannot
+  // walk back into an href it has just written.
+  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (whole, text, url) =>
+    MD_URL.test(url) ? park(mdLink(url, text)) : whole);
+  s = s.replace(/(^|[\s(])(https?:\/\/[^\s<)]*[^\s<).,;:!?])/g,
+    (_, lead, url) => lead + park(mdLink(url, url)));
+
+  // Double star before single, or **x** becomes <em>*x*</em>. Each span must
+  // begin and end on a non-space, so `3 * 4 * 5` stays arithmetic.
+  s = s.replace(/\*\*([^\s*](?:[^*]*[^\s*])?)\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/~~([^\s~](?:[^~]*[^\s~])?)~~/g, "<del>$1</del>");
+  s = s.replace(/(^|\W)_([^\s_](?:[^_]*[^\s_])?)_(?!\w)/g, "$1<em>$2</em>");
+  s = s.replace(/\*([^\s*](?:[^*]*[^\s*])?)\*/g, "<em>$1</em>");
+
+  // Restored in a loop, because a parked link's text can hold a parked code
+  // span - `[`code` here](url)` - and `replace` never rescans what it has just
+  // inserted, so one pass would leave the inner `<0>` on screen. Each pass can
+  // only uncover strictly earlier indices, so this terminates; the counter is
+  // there so a bug cannot hang the page.
+  for (let pass = 0; pass < 8 && /<\d+>/.test(s); pass++)
+    s = s.replace(/<(\d+)>/g, (_, i) => done[+i]);
+  return s;
+}
+
+/** Block structure first, then the inline rules over each block's text. */
+function md(raw) {
+  const text = esc(String(raw ?? "").replace(/\r\n?/g, "\n"));
+  const out = [];
+  let para = [], quote = [], list = null, fence = null;
+
+  const closePara = () => {
+    if (para.length) out.push(`<p>${mdInline(para.join("<br>"))}</p>`);
+    para = [];
+  };
+  const closeQuote = () => {
+    if (quote.length) out.push(`<blockquote>${mdInline(quote.join("<br>"))}</blockquote>`);
+    quote = [];
+  };
+  const closeList = () => {
+    if (list) out.push(`<${list.tag}>${list.items
+      .map((i) => `<li>${mdInline(i)}</li>`).join("")}</${list.tag}>`);
+    list = null;
+  };
+  const close = () => { closePara(); closeQuote(); closeList(); };
+  const bullet = (tag, item) => {
+    closePara(); closeQuote();
+    if (!list || list.tag !== tag) { closeList(); list = { tag, items: [] }; }
+    list.items.push(item);
+  };
+
+  for (const line of text.split("\n")) {
+    if (fence) {                                   // a fence swallows everything
+      if (/^\s*```/.test(line)) {                  // until it closes, verbatim
+        out.push(`<pre><code>${fence.join("\n")}</code></pre>`);
+        fence = null;
+      } else fence.push(line);
+      continue;
+    }
+    if (/^\s*```/.test(line)) { close(); fence = []; continue; }
+    if (!line.trim()) { close(); continue; }
+
+    let m;
+    if ((m = line.match(/^\s{0,3}#{1,6}\s+(.*)$/))) {
+      // One heading level, not six: a conversation turn has no room for a
+      // hierarchy, and the model is asked for prose rather than a document.
+      close(); out.push(`<h4>${mdInline(m[1])}</h4>`);
+    } else if (/^\s{0,3}(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      close(); out.push("<hr>");
+    } else if ((m = line.match(/^\s*&gt;\s?(.*)$/))) {   // `>` is `&gt;` by now
+      closePara(); closeList(); quote.push(m[1]);
+    } else if ((m = line.match(/^\s*[-*+]\s+(.*)$/))) {
+      bullet("ul", m[1]);
+    } else if ((m = line.match(/^\s*\d+[.)]\s+(.*)$/))) {
+      bullet("ol", m[1]);
+    } else if (list) {
+      list.items[list.items.length - 1] += "<br>" + line.trim();  // wrapped item
+    } else {
+      closeQuote(); para.push(line.trim());
+    }
+  }
+  close();
+  if (fence) out.push(`<pre><code>${fence.join("\n")}</code></pre>`);  // never closed
+  return out.join("");
+}
+
 function messageHtml(m) {
   return `<div class="msg ${esc(m.role)}">
     <div class="who">${m.role === "user" ? "You" : "Agent"}</div>
-    <div class="body">${esc(m.content)}</div>
+    <div class="body">${md(m.content)}</div>
   </div>`;
 }
 

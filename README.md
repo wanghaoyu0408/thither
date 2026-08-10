@@ -1,4 +1,4 @@
-# Travel Agent
+# 问津 · Whither
 
 A personal group travel-planning agent. It helps decide where to go, compares real
 options, builds a geographically and temporally feasible itinerary, explains why it
@@ -6,6 +6,12 @@ recommended what it did, and replans *part* of a trip when you ask.
 
 It does not book anything, does not touch payments, and does not treat LLM-generated
 facts as authoritative.
+
+*问津* is to ask the way at a river crossing — 陶渊明's *后遂无问津者*, the line that
+closes Peach Blossom Spring once nobody asks after the ford any more. *Whither* is the
+same question in English: **whither goest thou?** Both are a question, not a promise,
+which is the right register for something whose whole discipline is saying what it does
+not know.
 
 ## Status: Milestones 1-5 complete
 

@@ -1,7 +1,7 @@
 [project]
-name = "travel-agent"
+name = "whither"
 version = "0.1.0"
-description = "Personal group travel planning agent"
+description = "问津 · Whither - a personal group travel planning agent"
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.11",

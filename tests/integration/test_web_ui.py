@@ -11,7 +11,7 @@ async def test_the_ui_is_served_from_the_app(client):
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
     body = response.text
-    assert "<title>Travel Agent</title>" in body
+    assert "<title>问津 · Whither</title>" in body
     # No CDN for the app itself: markup, styles and script are all served here.
     assert "//cdn." not in body
     assert "https://" not in body.split("<style>")[1].split("</style>")[0]
