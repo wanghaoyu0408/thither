@@ -583,6 +583,18 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 .composer { flex: none; background: var(--panel); padding: 10px 20px 14px; border-top: 1px solid var(--line); }
 .composer .inner { max-width: 820px; margin: 0 auto; }
 
+/* A decision waiting below the fold. Same slot as the progress card, never
+   both at once - while the agent is working, what it is doing is the news. */
+.attention {
+  flex: none; background: var(--warn-soft); border-top: 1px solid var(--line);
+  padding: 9px 20px; font-size: 13px; color: var(--warn);
+}
+.attention .inner {
+  max-width: 820px; margin: 0 auto; display: flex; align-items: center; gap: 9px;
+}
+.attention .dot { background: var(--warn); }
+.attention .linkish { margin-left: auto; color: var(--warn); }
+
 /* What the agent is doing right now, as a plan taking shape, immediately above
    the composer. Nobody should stare at a spinner for two minutes, and nobody
    should be shown tool names or round counts. */
@@ -691,6 +703,13 @@ details.debug li { font: 11.5px/1.7 var(--mono); color: var(--ink-3); }
         </div>
       </div>
     </div>
+    <!-- Points at something waiting that has scrolled out of sight. Silent
+         whenever the card is already on screen: a bar that nags about what you
+         are looking at is just another thing to ignore. -->
+    <div class="attention" id="attentionBar" hidden><div class="inner">
+      <span class="dot"></span><span id="attentionText"></span>
+      <button class="linkish" id="attentionGo">Show me →</button>
+    </div></div>
     <div class="busy-strip" id="busyStrip" hidden><div class="inner"></div></div>
     <div class="composer">
       <div class="inner">
@@ -1110,17 +1129,31 @@ function artifact(kind, title, body, { sub, collapsible = true } = {}) {
   </div>`;
 }
 
-/** The one artifact the trip is waiting on, if any. Order matters: confirm the
- *  brief before choosing anything, choose before reviewing edits. */
-function attentionArtifact() {
+/** Everything the trip is waiting on. Order matters: confirm the brief before
+ *  choosing anything, and choose in the order the choices depend on each other.
+ *  A brief that is not confirmed is the only thing shown, because nothing else
+ *  can proceed until it is. */
+function attentionArtifacts() {
+  if (!S.trip) return [];
+  if (S.intake && S.intake.status !== "confirmed") {
+    return [artifact("brief", "Your trip brief",
+      intakeHtml(), { sub: "Confirm this and planning starts", collapsible: false })];
+  }
+  return pendingChoices().map(chooserHtml);
+}
+
+/** What the attention bar points at, and what it should say. */
+function attentionSummary() {
   if (!S.trip) return null;
   if (S.intake && S.intake.status !== "confirmed") {
-    return artifact("brief", "Your trip brief",
-      intakeHtml(), { sub: "Confirm this and planning starts", collapsible: false });
+    return { selector: '[data-art="brief"]', text: "Confirm your trip brief to start planning" };
   }
-  const choice = pendingChoice();
-  if (choice) return chooserHtml(choice);
-  return null;
+  const n = pendingChoices().length;
+  if (!n) return null;
+  return {
+    selector: '[data-art="choice"]',
+    text: `${n} decision${n === 1 ? "" : "s"} need${n === 1 ? "s" : ""} you`,
+  };
 }
 
 /** Artifacts the traveller opened on purpose. */
@@ -1174,14 +1207,15 @@ function render() {
   // every edit is what made this feel like an admin tool.
   if (S.lastDiff) out.push(artifact("diff", "What changed", diffHtml()));
 
-  const waiting = attentionArtifact();
-  if (waiting) out.push(waiting);
+  const waiting = attentionArtifacts();
+  out.push(...waiting);
 
   // Opened on purpose, in a stable order, and never a second copy of what is
   // already shown above.
+  const briefIsWaiting = S.intake && S.intake.status !== "confirmed";
   for (const kind of ["itinerary", "map", "decisions", "research", "brief", "overview"]) {
     if (!S.open.has(kind)) continue;
-    if (waiting && kind === "brief") continue;
+    if (briefIsWaiting && kind === "brief") continue;
     out.push(openedArtifact(kind));
   }
 
@@ -1198,6 +1232,7 @@ function render() {
   wireWorkspace();
   wireStream();
   hydratePhotos();
+  paintAttention();
   paintMap();      // async on purpose: the stream must not wait on Google.
 }
 
@@ -1227,6 +1262,51 @@ function scrollStreamToEnd() {
   const stream = $("stream");
   if (stream) stream.scrollTop = stream.scrollHeight;
 }
+
+/** Show the attention bar only while what it points at is off screen.
+ *
+ *  The card was rendering correctly and sitting below a long reply, so a
+ *  traveller reading that reply had nothing telling them a decision was
+ *  waiting. This is the pointer; it goes quiet the moment the card is
+ *  actually visible. */
+function paintAttention() {
+  const bar = $("attentionBar");
+  const want = attentionSummary();
+  // While the agent works, what it is doing is the more useful news, and the
+  // two share this slot.
+  if (!want || S.busy) { bar.hidden = true; return; }
+
+  const targets = [...document.querySelectorAll(want.selector)];
+  const stream = $("stream");
+  if (!targets.length || !stream) { bar.hidden = true; return; }
+  // Silent if *any* of them is on screen: seeing one card is enough to know
+  // decisions are waiting, and a bar pointing at what you are looking at is
+  // just noise.
+  const s = stream.getBoundingClientRect();
+  const anyOnScreen = targets.some((el) => {
+    const t = el.getBoundingClientRect();
+    return t.top < s.bottom - 40 && t.bottom > s.top + 40;
+  });
+
+  bar.hidden = anyOnScreen;
+  if (!anyOnScreen) $("attentionText").textContent = want.text;
+}
+
+/** Bring an element to the top of the stream by arithmetic rather than by
+ *  `scrollIntoView`, whose smooth mode is a request the browser may ignore -
+ *  and a "show me" button that sometimes does nothing is worse than none. */
+function scrollStreamTo(el) {
+  const stream = $("stream");
+  if (!stream || !el) return;
+  stream.scrollTop += el.getBoundingClientRect().top
+    - stream.getBoundingClientRect().top - 16;
+  paintAttention();
+}
+
+$("attentionGo").onclick = () => {
+  const want = attentionSummary();
+  if (want) scrollStreamTo(document.querySelector(want.selector));
+};
 
 /* Overview -- the trip's own facts, editable in place. */
 function overviewHtml() {
@@ -1820,18 +1900,20 @@ const CHOICE_TITLES = {
 };
 const CHOICE_ORDER = ["hotel_area", "hotel", "flights", "departure_airport", "arrival_airport"];
 
-function pendingChoice() {
-  if (!Array.isArray(S.decisions)) return null;
-  for (const name of CHOICE_ORDER) {
-    if (S.dismissedChoosers.has(name)) continue;
+/** Every decision genuinely waiting on the traveller, in the order they should
+ *  be made. All of them, not the first: the agent counts what the state holds
+ *  and says "two decisions", so a screen showing one sends them hunting for a
+ *  card that was never rendered. */
+function pendingChoices() {
+  if (!Array.isArray(S.decisions)) return [];
+  return CHOICE_ORDER.map((name) => {
+    if (S.dismissedChoosers.has(name)) return null;
     const view = S.decisions.find((d) => d.name === name);
-    if (!view || view.locked || view.booked || view.selected) continue;
-    if (view.status !== "shortlisted") continue;
-    const open = (view.options || []).filter((o) => !o.selected);
-    if (open.length < 2) continue;
-    return view;
-  }
-  return null;
+    if (!view || view.locked || view.booked || view.selected) return null;
+    if (view.status !== "shortlisted") return null;
+    // Two real options or it is not a choice.
+    return (view.options || []).filter((o) => !o.selected).length >= 2 ? view : null;
+  }).filter(Boolean);
 }
 
 function chooserHtml(view) {
@@ -2150,7 +2232,10 @@ function hydratePhotos() {
 /** Scrolling brings more cards into view; nothing is fetched before then. */
 function watchForPhotos() {
   let tick = null;
-  const soon = () => { clearTimeout(tick); tick = setTimeout(hydratePhotos, 150); };
+  const soon = () => {
+    clearTimeout(tick);
+    tick = setTimeout(() => { hydratePhotos(); paintAttention(); }, 150);
+  };
   $("stream")?.addEventListener("scroll", soon, { passive: true });
   addEventListener("resize", soon);
 }
@@ -2937,6 +3022,7 @@ function setBusyUI(on) {
   send.disabled = on || !S.tripId;
   send.textContent = "Send";
   if (!on) $("busyStrip").hidden = true;
+  paintAttention();      // the two bars share one slot
 }
 
 function startRunPoll(tripId) {
