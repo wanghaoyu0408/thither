@@ -147,6 +147,13 @@ def summarize(state: TripState) -> dict[str, Any]:
             "start": state.brief.dates.start.isoformat() if state.brief.dates.start else None,
             "end": state.brief.dates.end.isoformat() if state.brief.dates.end else None,
             "timezone": state.brief.timezone,
+            # Where the trip starts. This was missing, so a traveller who typed
+            # their origin into the very first form was asked for it again in
+            # the chat - the fact was stored and the model could not see it.
+            "origin": {
+                "city": state.brief.origin.city,
+                "airport_codes": state.brief.origin.airport_codes,
+            },
             "party": state.brief.party.model_dump(),
             "budget": state.brief.budget.model_dump(),
             "priorities": state.brief.priorities,

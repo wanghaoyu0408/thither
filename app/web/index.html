@@ -97,6 +97,16 @@ main {
 main.norail { grid-template-columns: var(--left) var(--gw) 1fr; }
 main.norail aside.right, main.norail .grip[data-grip="right"] { display: none; }
 @media (max-width: 820px) { main.norail { grid-template-columns: 1fr; } }
+
+/* The trip list folds away on request - the ☰ in the header. */
+main.noleft { grid-template-columns: 1fr var(--gw) var(--right); }
+main.noleft aside.left, main.noleft .grip[data-grip="left"] { display: none; }
+main.noleft.norail { grid-template-columns: 1fr; }
+.side-toggle {
+  font-size: 15px; color: var(--ink-3); width: 28px; height: 28px;
+  border-radius: 7px; line-height: 1;
+}
+.side-toggle:hover { background: var(--panel-2); color: var(--ink); }
 aside, section.work { min-height: 0; display: flex; flex-direction: column; }
 aside.left  { background: var(--panel); }
 aside.right { background: var(--panel); }
@@ -221,6 +231,38 @@ section.work { background: var(--bg); }
   position: absolute; right: 12px; bottom: 8px; font-size: 10.5px;
   color: rgba(255,255,255,.75); text-shadow: 0 1px 4px rgba(0,0,0,.5);
 }
+
+/* --- the chooser ---------------------------------------------------------- */
+.chooser {
+  background: var(--accent-soft); border-radius: 14px;
+  padding: 14px 16px; margin-bottom: 20px;
+}
+.chooser-head { display: flex; align-items: baseline; gap: 10px; }
+.chooser-head b { font-size: 15px; }
+.chooser-head .empty { font-size: 12px; }
+.chooser-x {
+  font-size: 15px; color: var(--ink-3); width: 22px; height: 22px;
+  border-radius: 6px; line-height: 1;
+}
+.chooser-x:hover { color: var(--error); background: var(--error-soft); }
+.choice-row {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px; margin-top: 11px;
+}
+.choice {
+  background: var(--panel); border-radius: var(--r); padding: 11px 13px;
+  box-shadow: var(--elev); border: 1px solid var(--card-line);
+  display: flex; flex-direction: column;
+}
+.choice > b { font-size: 13.5px; }
+.choice .pro { font-size: 12px; color: var(--ink-2); margin-top: 3px; }
+.choice .con { font-size: 12px; color: var(--warn); margin-top: 3px; }
+.choice .go { margin-top: auto; padding-top: 10px; }
+
+/* Whole-trip map legend. */
+.legend { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 5px; font-size: 11.5px; color: var(--ink-2); }
+.legend-day { display: inline-flex; align-items: center; gap: 4px; }
+.legend-day .dot { width: 9px; height: 9px; }
 
 /* The selected stop's context card in the rail. */
 .selstop {
@@ -666,6 +708,7 @@ details.debug li { font: 11.5px/1.7 var(--mono); color: var(--ink-3); }
 <body>
 <div class="app">
   <header>
+    <button class="side-toggle" id="sideToggle" title="Show or hide the trip list">☰</button>
     <h1 class="brand">Travel Agent<span id="sub">no trip selected</span></h1>
     <div class="spacer"></div>
     <button class="chip" id="validChip" hidden></button>
@@ -765,6 +808,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
 const S = { tripId: null, trip: null, over: null, view: "itinerary", busy: false,
             lastDiff: null, mapDay: null, decisions: null, intake: null,
             hasMessages: false, pollTimer: null,
+            dismissedChoosers: new Set(), loadingDecisions: false,
             // The conversation starts folded away: this is a travel plan with
             // a command bar, not a chat app with a plan attached.
             chatOpen: (() => { try { return localStorage.getItem("ta.chatOpen") === "1"; }
@@ -1194,6 +1238,17 @@ function render() {
   document.querySelectorAll(".tab").forEach((el) =>
     el.classList.toggle("on", el.dataset.view === S.view));
   const out = [];
+  // A pending choice travels with the traveller instead of waiting on the
+  // Decisions tab. When decisions have not been fetched yet, fetch once and
+  // repaint - after a turn they are nulled, so this is one GET per turn.
+  if (["overview", "itinerary", "intake"].includes(S.view) && S.tripId) {
+    const choice = pendingChoice();
+    if (choice) out.push(chooserHtml(choice));
+    else if (S.decisions === null && !S.loadingDecisions) {
+      S.loadingDecisions = true;
+      loadDecisions().then(() => { S.loadingDecisions = false; render(); });
+    }
+  }
   if (S.view === "intake") out.push(intakeHtml());
   else if (S.view === "overview") out.push(overviewHtml());
   else if (S.view === "itinerary") out.push(itineraryHtml());
@@ -1659,33 +1714,57 @@ function quickPicksHtml() {
     class="pick ${on ? "on" : ""}" data-pickpath="${esc(path)}"
     data-pickvalue="${esc(JSON.stringify(on ? unset : value))}">${esc(label)}</button>`;
 
-  const car = b.scope.rental_car;
-  const budget = b.budget.hotel_per_night;
-  const shopping = (b.priorities || []).includes("shopping");
-  const withShopping = [...(b.priorities || []).filter((p) => p !== "shopping"), "shopping"];
-  const withoutShopping = (b.priorities || []).filter((p) => p !== "shopping");
+  // The two questions that gate planning, askable as ticks rather than typed
+  // into the chat. Answering them here is what enables Start planning.
+  const scopeRow = (label, part) => {
+    const current = b.scope[part];
+    const path = `/brief/scope/${part}`;
+    return `<div class="pickrow"><span>${esc(label)}</span>
+      ${chip(path, "plan", "Find them for me", current === "plan", "unknown")}
+      ${chip(path, "already_arranged", "Already booked", current === "already_arranged", "unknown")}
+      ${chip(path, "not_needed", "Not needed", current === "not_needed", "unknown")}
+    </div>`;
+  };
 
+  const budget = b.budget.hotel_per_night;
   const budgetChip = (amount) => chip(
     "/brief/budget/hotel_per_night", amount, `≤ $${amount}`, budget === amount, null);
 
+  // Multi-select: a trip can be about culture and shopping at once. Each chip
+  // toggles its own value in priorities; the stored words are what discovery
+  // and the agent already read.
+  const styleChip = (value, label) => {
+    const current = b.priorities || [];
+    const on = current.includes(value);
+    const next = on ? current.filter((p) => p !== value)
+      : [...current.filter((p) => p !== value), value];
+    return `<button class="pick ${on ? "on" : ""}" data-pickpath="/brief/priorities"
+      data-pickvalue="${esc(JSON.stringify(next))}">${esc(label)}</button>`;
+  };
+
+  const car = b.scope.rental_car;
   return `<div class="picks">
-    <p class="eyebrow">Preferences — optional</p>
+    <p class="eyebrow">A few choices — tick what you know</p>
+    ${scopeRow("Flights", "flights")}
+    ${scopeRow("Stay", "lodging")}
+    ${b.scope.lodging === "plan" ? `<div class="pickrow"><span>Hotel budget</span>
+      ${budgetChip(150)}${budgetChip(300)}${budgetChip(600)}
+      <input type="number" min="0" step="10" placeholder="custom" title="Per night"
+        data-field="/brief/budget/hotel_per_night" value="${budget ?? ""}"> <small>/ night</small>
+    </div>` : ""}
+    ${b.scope.flights === "plan" ? `<div class="pickrow"><span>Red-eye flights</span>
+      ${chip("/brief/avoid_red_eye", false, "Fine by us", b.avoid_red_eye === false, null)}
+      ${chip("/brief/avoid_red_eye", true, "Avoid them", b.avoid_red_eye === true, null)}
+    </div>` : ""}
     <div class="pickrow"><span>Rental car</span>
       ${chip("/brief/scope/rental_car", "plan", "Plan it for me", car === "plan", "unknown")}
       ${chip("/brief/scope/rental_car", "already_arranged", "Already arranged", car === "already_arranged", "unknown")}
       ${chip("/brief/scope/rental_car", "not_needed", "Not needed", car === "not_needed", "unknown")}
     </div>
-    <div class="pickrow"><span>Hotel budget</span>
-      ${budgetChip(150)}${budgetChip(300)}${budgetChip(600)}
-      <input type="number" min="0" step="10" placeholder="custom" title="Per night"
-        data-field="/brief/budget/hotel_per_night" value="${budget ?? ""}"> <small>/ night</small>
-    </div>
-    <div class="pickrow"><span>Red-eye flights</span>
-      ${chip("/brief/avoid_red_eye", false, "Fine by us", b.avoid_red_eye === false, null)}
-      ${chip("/brief/avoid_red_eye", true, "Avoid them", b.avoid_red_eye === true, null)}
-    </div>
-    <div class="pickrow"><span>Shopping</span>
-      ${chip("/brief/priorities", withShopping, "Set aside shopping time", shopping, withoutShopping)}
+    <div class="pickrow"><span>Trip style</span>
+      ${styleChip("culture", "人文 Culture")}
+      ${styleChip("nature", "自然 Nature")}
+      ${styleChip("shopping", "商业 City & shopping")}
     </div>
   </div>`;
 }
@@ -1763,6 +1842,60 @@ function briefCardHtml(view, { confirmed }) {
 /* Decisions -- rendered wholly from the server's projection. There is no
    frontend idea of what a decision is: relevance, lock state and which options
    were refused are all decided in one place, and that place is not here. */
+/* --- the chooser -----------------------------------------------------------
+   When a search has shortlisted real options - a neighbourhood, a hotel, a
+   flight - the choice comes to the traveller as cards, wherever they are
+   standing. Rendered from the persisted decision projection and wired to the
+   same select/why endpoints as the Decisions tab: the agent asking "reply
+   with the name of the area" in prose is exactly the admin-console habit
+   this exists to end. */
+
+const CHOICE_TITLES = {
+  hotel_area: "Where should you stay?",
+  hotel: "Which hotel?",
+  flights: "Which flight?",
+  departure_airport: "Fly out of which airport?",
+  arrival_airport: "Fly into which airport?",
+};
+const CHOICE_ORDER = ["hotel_area", "hotel", "flights", "departure_airport", "arrival_airport"];
+
+function pendingChoice() {
+  if (!Array.isArray(S.decisions)) return null;
+  for (const name of CHOICE_ORDER) {
+    if (S.dismissedChoosers.has(name)) continue;
+    const view = S.decisions.find((d) => d.name === name);
+    if (!view || view.locked || view.booked || view.selected) continue;
+    if (view.status !== "shortlisted") continue;
+    const open = (view.options || []).filter((o) => !o.selected);
+    if (open.length < 2) continue;
+    return view;
+  }
+  return null;
+}
+
+function chooserHtml(view) {
+  const card = (o) => `<div class="choice">
+    <b>${esc(o.label)}</b>
+    ${figuresHtml(o.figures)}
+    ${(o.pros || []).slice(0, 3).map((p) => `<p class="pro">✓ ${esc(p)}</p>`).join("")}
+    ${(o.cons || []).slice(0, 2).map((c) => `<p class="con">✕ ${esc(c)}</p>`).join("")}
+    <div class="go">
+      <button class="btn sm" data-decselect="${esc(view.name)}|${esc(o.option_id)}">Choose this</button>
+      <button class="btn ghost sm" data-decwhy="${esc(view.name)}|${esc(o.option_id)}">Why?</button>
+    </div>
+  </div>`;
+  return `<div class="chooser">
+    <div class="chooser-head">
+      <b>${esc(CHOICE_TITLES[view.name] || view.title)}</b>
+      <span class="empty">Your call — planning waits for it.</span>
+      <div class="spacer"></div>
+      <button class="linkish" data-godecisions="1">See all in Decisions</button>
+      <button class="chooser-x" data-dismisschooser="${esc(view.name)}" title="Not now">×</button>
+    </div>
+    <div class="choice-row">${(view.options || []).slice(0, 3).map(card).join("")}</div>
+  </div>`;
+}
+
 function decisionsHtml() {
   const views = S.decisions;
   if (views === null) return '<p class="empty">Loading…</p>';
@@ -2126,10 +2259,14 @@ async function paintMap() {
   wrap.hidden = !days.length;
   if (!days.length) return;
 
-  if (!days.some((d) => d.date === S.mapDay)) S.mapDay = days[0].date;
+  const ALL = "__all__";
+  if (S.mapDay !== ALL && !days.some((d) => d.date === S.mapDay)) S.mapDay = days[0].date;
   const picker = $("mapDay");
-  picker.innerHTML = days.map((d) =>
-    `<option value="${esc(d.date)}"${d.date === S.mapDay ? " selected" : ""}>${esc(dayLabel(d.date))}</option>`).join("");
+  picker.innerHTML =
+    (days.length > 1
+      ? `<option value="${ALL}"${S.mapDay === ALL ? " selected" : ""}>Whole trip</option>` : "")
+    + days.map((d) =>
+      `<option value="${esc(d.date)}"${d.date === S.mapDay ? " selected" : ""}>${esc(dayLabel(d.date))}</option>`).join("");
   picker.onchange = () => { S.mapDay = picker.value; paintMap(); };
 
   const status = await mapsReady();
@@ -2138,7 +2275,81 @@ async function paintMap() {
     $("mapnote").innerHTML = noteFor(status);
     return;
   }
-  drawDay(days.find((d) => d.date === S.mapDay));
+  if (S.mapDay === ALL) drawAllStops(days);
+  else drawDay(days.find((d) => d.date === S.mapDay));
+}
+
+/* One colour per day, small and fixed; day six reuses the palette. */
+const DAY_COLORS = ["#2f5d50", "#3d5878", "#8a5a12", "#7c4a86", "#a3352b", "#4a7a3a"];
+
+/** Every stop of every day on one canvas. Markers only: a route is a per-day
+ *  fact drawn on per-day views, and this view draws none rather than fake ones. */
+function drawAllStops(days) {
+  const canvas = $("map");
+  canvas.classList.remove("gone");
+  const allStops = [];
+  const unmapped = [];
+  days.forEach((day, dayIndex) => {
+    const split = stopsFor(day);
+    split.stops.forEach((stop, stopIndex) =>
+      allStops.push({ ...stop, day, dayIndex, stopIndex }));
+    unmapped.push(...split.unmapped);
+  });
+
+  if (!allStops.length) {
+    canvas.classList.add("gone");
+    $("mapnote").innerHTML = `<div class="mapnote">Nothing has coordinates stored yet.</div>`;
+    return;
+  }
+
+  const first = { lat: allStops[0].entity.lat, lng: allStops[0].entity.lng };
+  if (!M.map) {
+    M.map = new google.maps.Map(canvas, {
+      center: first, zoom: 12,
+      mapTypeControl: false, streetViewControl: false, fullscreenControl: false,
+    });
+    M.info = new google.maps.InfoWindow();
+  }
+  M.markers.forEach((m) => m.setMap(null));
+  M.markers = [];
+  M.parking.forEach((m) => m.setMap(null));
+  M.parking = [];
+  if (M.line) M.line.setMap(null);
+
+  const bounds = new google.maps.LatLngBounds();
+  for (const { item, entity, day, dayIndex, stopIndex } of allStops) {
+    const at = { lat: entity.lat, lng: entity.lng };
+    bounds.extend(at);
+    const marker = new google.maps.Marker({
+      map: M.map, position: at, title: item.title,
+      label: { text: String(stopIndex + 1), color: "#fff", fontSize: "10px", fontWeight: "600" },
+      icon: {
+        path: google.maps.SymbolPath.CIRCLE, scale: 11,
+        fillColor: DAY_COLORS[dayIndex % DAY_COLORS.length], fillOpacity: 1,
+        strokeColor: "#fff", strokeWeight: 2,
+      },
+    });
+    marker.itemId = item.item_id;
+    marker.addListener("click", () => {
+      M.info.setContent(`<div class="iw"><b>${esc(item.title)}</b><span>${
+        esc([dayLabel(day.date), clock(item.start_at)].filter(Boolean).join(" · "))}</span></div>`);
+      M.info.open({ map: M.map, anchor: marker });
+      selectStop(item.item_id);
+      document.querySelector(`[data-item="${item.item_id}"]`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    M.markers.push(marker);
+  }
+  M.map.fitBounds(bounds, 36);
+
+  const legend = days.map((d, i) =>
+    `<span class="legend-day"><span class="dot" style="background:${
+      DAY_COLORS[i % DAY_COLORS.length]};animation:none"></span>${esc(shortDay(d.date))}</span>`).join(" ");
+  $("mapnote").innerHTML = `<p class="unmapped straight">All ${allStops.length} stops ·
+    colour = day. Pick a single day to see its route.</p>
+    <p class="legend">${legend}</p>
+    ${unmapped.length ? `<p class="unmapped">${unmapped.length} stop(s) have no stored
+    coordinates and are not drawn.</p>` : ""}`;
 }
 
 function drawDay(day) {
@@ -2446,6 +2657,14 @@ function wireWorkspace() {
       menu.hidden = !wasHidden;
     });
 
+  // Chooser controls. Choose/Why? reuse the decselect/decwhy bindings below.
+  on("dismisschooser", (name) => { S.dismissedChoosers.add(name); render(); });
+  $("work").querySelectorAll("[data-godecisions]").forEach((b) => b.onclick = () => {
+    S.view = "decisions";
+    render();
+    if (S.decisions === null) loadDecisions().then(render);
+  });
+
   // Quick-picks: each chip writes one brief fact; the selected chip unsets.
   $("work").querySelectorAll("[data-pickpath]").forEach((btn) =>
     btn.onclick = () => {
@@ -2569,7 +2788,13 @@ async function patchBrief(path, value, reason) {
     toast(result.errors?.[0]?.message || "The server refused that change");
     return false;
   }
-  await refresh(); render(); await loadTrips();
+  await refresh();
+  // Intake is derived from the brief: a scope tick closes a blocking gap, and
+  // a screen that does not re-read it shows a disabled confirm button the
+  // server would honour. Third write path to learn the same ledger rule.
+  await loadIntake();
+  render();
+  await loadTrips();
   return true;
 }
 
@@ -2981,6 +3206,20 @@ function autosize() {
   box.style.height = Math.min(box.scrollHeight, 150) + "px";
 }
 $("input").addEventListener("input", autosize);
+
+// The trip list folds away and stays folded across reloads.
+const applySidebar = () => {
+  let hidden = false;
+  try { hidden = localStorage.getItem("ta.sidebar") === "0"; } catch {}
+  document.querySelector("main").classList.toggle("noleft", hidden);
+};
+$("sideToggle").onclick = () => {
+  const main = document.querySelector("main");
+  const nowHidden = !main.classList.contains("noleft");
+  main.classList.toggle("noleft", nowHidden);
+  try { localStorage.setItem("ta.sidebar", nowHidden ? "0" : "1"); } catch {}
+};
+applySidebar();
 
 $("newTripToggle").onclick = () => {
   const form = $("newTrip");

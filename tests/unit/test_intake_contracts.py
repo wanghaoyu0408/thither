@@ -334,6 +334,19 @@ async def test_ready_to_confirm_predicts_what_confirm_actually_does(client, sess
     )
 
 
+def test_the_origin_reaches_the_model():
+    """A traveller typed Cupertino into the very first form; the agent asked
+    for the departure city again in chat. The origin was stored all along -
+    `summarize()` simply did not carry it, so the model could not see it."""
+    state = trip(destination_city="Kyoto")
+    state.brief.origin.city = "Cupertino"
+    state.brief.origin.airport_codes = ["SFO"]
+
+    brief = summarize(state)["brief"]
+
+    assert brief["origin"] == {"city": "Cupertino", "airport_codes": ["SFO"]}
+
+
 async def test_the_model_is_not_shown_a_question_it_no_longer_needs_to_ask():
     """`questions_awaiting_answer` is what stops the agent re-asking. A spent
     question left in there is an instruction to ask it again, every turn."""
