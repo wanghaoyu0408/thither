@@ -3,6 +3,8 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from app.models.common import Cabin, ClockTime, Importance, Pace, new_id, utcnow
+from app.models.learning import LearnedProvenance
+from app.models.rejection import RejectionRecord
 
 
 class FlightPreferences(BaseModel):
@@ -44,6 +46,11 @@ class PacePreferences(BaseModel):
     preferred_start_time: ClockTime = "09:00"
     max_daily_walking_km: float = 12.0
     intensity: Pace = "balanced"
+    # Lives here rather than in a new section because pace is the body-cost
+    # block (walking budget, start time) and parking overhead is that axis -
+    # and because AFFECTED_BY_SECTION["pace"] == ("itinerary",) is exactly the
+    # staleness this field should trigger.
+    parking_sensitive: bool = False
 
 
 class TravelerProfile(BaseModel):
@@ -71,6 +78,17 @@ class TravelerProfile(BaseModel):
     pace_preferences: PacePreferences = PacePreferences()
 
     notes: str | None = None
+
+    # Dotted field path -> why that value is there. Written only by the
+    # learning accept endpoint, at the same moment as the value itself, so a
+    # learned field can never exist without its provenance.
+    learned: dict[str, LearnedProvenance] = {}
+
+    # Hypotheses this person said no to. scope="profile" and durable: new
+    # evidence never resurrects a dismissed pattern. This is the first real
+    # use of RejectionRecord's profile scope - the docstring promised it,
+    # and until now nothing implemented it.
+    learning_rejections: list[RejectionRecord] = []
 
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)

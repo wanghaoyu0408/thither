@@ -4,11 +4,20 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.repository import TripNotFound, TripRepository
+from app.config import get_settings
+from app.db.repository import (
+    LearningRepository,
+    ProfileNotFound,
+    ProfileRepository,
+    TripNotFound,
+    TripRepository,
+)
 from app.db.session import get_session
 from app.models.patch import PatchResult, TripPatch
 from app.models.trip import TripBrief, TripState, TripSummary, TripTraveler
 from app.services.conflict_service import detect_conflicts, unresolved_blocking
+from app.services.intake_service import today_at
+from app.services.learning_service import derive_hypotheses
 from app.services.validation_service import validate_itinerary
 
 router = APIRouter(prefix="/trips", tags=["trips"])
@@ -115,6 +124,45 @@ async def get_trip_overview(trip_id: str, session: SessionDep) -> dict[str, Any]
     state = await _load(session, trip_id)
     validation = validate_itinerary(state)
 
+    # Reflection is due when the trip has ended, nobody has answered, and
+    # there is at least one traveller a lesson could belong to. Judged against
+    # the destination's clock, never the browser's.
+    end = state.brief.dates.end if state.brief.dates else None
+    reflection_due = (
+        end is not None
+        and today_at(state) > end
+        and state.reflection is None
+        and any(t.profile_id for t in state.travelers)
+    )
+
+    # Per-traveler learning counts, so the attention bar can say "your call"
+    # without the browser fanning out N learning fetches to find out.
+    learning: list[dict[str, Any]] = []
+    profiles = ProfileRepository(session)
+    signals_repo = LearningRepository(session)
+    settings = get_settings()
+    for traveler in state.travelers:
+        if not traveler.profile_id:
+            continue
+        try:
+            profile = await profiles.get(traveler.profile_id)
+        except ProfileNotFound:
+            continue  # a dangling id must not take the overview down
+        hypotheses = derive_hypotheses(
+            profile,
+            await signals_repo.list_for_profile(traveler.profile_id),
+            settings=settings,
+        )
+        learning.append(
+            {
+                "traveler_id": traveler.traveler_id,
+                "name": traveler.name,
+                "profile_id": traveler.profile_id,
+                "proposable": sum(1 for h in hypotheses if h.status == "proposable"),
+                "emerging": sum(1 for h in hypotheses if h.status == "emerging"),
+            }
+        )
+
     return {
         "trip": state.model_dump(mode="json"),
         "validation": {
@@ -128,6 +176,8 @@ async def get_trip_overview(trip_id: str, session: SessionDep) -> dict[str, Any]
         "blocking": [
             conflict.model_dump(mode="json") for conflict in unresolved_blocking(state)
         ],
+        "reflection": {"due": reflection_due, "submitted": state.reflection is not None},
+        "learning": learning,
     }
 
 

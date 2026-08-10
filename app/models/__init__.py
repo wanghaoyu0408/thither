@@ -41,6 +41,13 @@ from app.models.intake import (
     PlanScope,
 )
 from app.models.itinerary import DaySummary, ItineraryDay, ItineraryItem, TripItinerary
+from app.models.learning import (
+    HypothesisEvidence,
+    LearnedProvenance,
+    LearningSignal,
+    PreferenceHypothesis,
+    TripReflection,
+)
 from app.models.lock import LockRecord
 from app.models.patch import (
     ApplyTripPatchInput,
@@ -123,7 +130,12 @@ __all__ = [
     "HotelPreferences",
     "HotelPriceQuote",
     "HotelRating",
+    "HypothesisEvidence",
     "Importance",
+    "LearnedProvenance",
+    "LearningSignal",
+    "PreferenceHypothesis",
+    "TripReflection",
     "ItineraryDay",
     "ItineraryItem",
     "LatLng",

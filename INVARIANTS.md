@@ -192,6 +192,58 @@ by walking the import graph — no ranking module is reachable from
 
 ---
 
+## 6. Learning proposes; only the traveller applies
+
+> A learning hypothesis is derived from stored signals on every read, with a
+> content-hash identity, and is never stored. The only write path from
+> learning into a `TravelerProfile` is the accept endpoint — revision-guarded,
+> writing the value and its provenance in the same update. A dismissal is a
+> profile-scope `RejectionRecord` consulted at derivation, so "no" survives
+> any amount of new evidence. Trip snapshots move only through the existing
+> explicit refresh.
+
+**Why.** A system that quietly rewrites who it thinks you are is the confident
+wrongness of invariant 1 applied to a person instead of a pizzeria. One
+dragged activity is scheduling, not personality; the profile's own docstring
+("never from weak inference") predates this milestone, and until now nothing
+enforced it. Strength (how intensely expressed) and confidence (how much
+evidence) stay separate ordinal words for the same reason score and coverage
+do in invariant 2 — and behavioural signals are recorded only where "who did
+that?" has an answer: a solo trip, a named speaker, a signed reflection.
+
+**Enforced in.** `app/services/learning_service.py` (`derive_hypotheses` —
+pure, statuses `dismissed > applied > proposable/emerging`;
+`behavioral_signal_allowed` — the attribution gate; `profile_changes_for` —
+deep-merges the sub-model so the repository's shallow merge cannot reset
+siblings); `app/api/learning.py` (accept / dismiss / remove, all taking
+`expected_revision`); `app/db/repository.py::ProfileRepository.update`
+(`ProfileRevisionConflict`); `app/agent/tool_registry.py`
+(`_record_stated_preference` refuses unnamed speakers,
+`_review_learned_preferences` is read-only); the consumption seams in
+`app/services/itinerary_service.py` (`effective_start`/`_shifted`,
+`arrival_penalty`).
+
+**Pinned by.** `tests/scenarios/test_milestone9_acceptance.py`: all nine
+criteria, one test each —
+`test_moving_one_early_activity_later_never_touches_the_profile`,
+`test_the_same_late_start_pattern_across_trips_becomes_a_hypothesis`,
+`test_the_agent_proposes_and_never_applies`,
+`test_rejecting_the_proposal_leaves_the_profile_unchanged`,
+`test_accepting_updates_the_long_term_profile_with_provenance`,
+`test_the_current_trips_snapshot_survives_acceptance`,
+`test_a_future_trip_starts_later_because_of_what_was_learned`,
+`test_why_traces_a_learned_preference_to_persisted_evidence_only`,
+`test_signals_are_never_assigned_to_the_wrong_traveler`.
+`tests/unit/test_learning_service.py`:
+`test_a_dismissed_hypothesis_never_becomes_proposable_however_much_evidence_arrives`,
+`test_strength_is_the_strongest_expression_not_an_average`,
+`test_every_catalogue_key_names_its_consumer`.
+`tests/unit/test_slot_shift.py`:
+`test_default_preferences_leave_every_template_exactly_as_authored`,
+`test_dinner_never_slips_past_eight`.
+
+---
+
 ## Ledger — defects found by running it
 
 Reasoning about the code did not find these. Running it did. Each has a test so

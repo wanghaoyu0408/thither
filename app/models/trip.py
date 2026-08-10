@@ -12,6 +12,7 @@ from app.models.evidence import EvidenceRecord
 from app.models.group import TravelerPreferences
 from app.models.intake import ClarificationQuestion, IntakeStatus, PlanScope
 from app.models.itinerary import TripItinerary
+from app.models.learning import TripReflection
 from app.models.lock import LockRecord
 from app.models.rejection import RejectionRecord
 from app.models.validation import ValidationState
@@ -257,6 +258,11 @@ class TripState(BaseModel):
     # A registry like `entities` and `evidence`: facts about places, shared by
     # every day that visits one, and additive under a day-scoped patch.
     arrival: dict[str, ArrivalContext] = {}
+
+    # Answered once, after the trip ends. Written through the patch engine so
+    # it is audited and cannot be re-asked. A day-scoped patch freezes it like
+    # any other sibling, which is correct: reflection is never day-scoped.
+    reflection: TripReflection | None = None
 
     validation: ValidationState = ValidationState()
 

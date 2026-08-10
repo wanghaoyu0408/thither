@@ -10,6 +10,7 @@ from app.api import (
     chat_router,
     decisions_router,
     intake_router,
+    learning_router,
     profiles_router,
     tools_router,
     trips_router,
@@ -37,7 +38,8 @@ app = FastAPI(
         "driven conversationally. M4: web research resolved against Google. "
         "M5: flights, airport comparison and ranking with stated trade-offs. "
         "M6: hotels, with the neighbourhood decided before anything is priced. "
-        "M7: multi-traveler preferences, group scoring and named conflicts."
+        "M7: multi-traveler preferences, group scoring and named conflicts. "
+        "M9: a learning layer that proposes profile updates and never applies one itself."
     ),
     version="0.1.0",
     lifespan=lifespan,
@@ -52,6 +54,7 @@ app.include_router(chat_router)
 app.include_router(actions_router)
 app.include_router(decisions_router)
 app.include_router(intake_router)
+app.include_router(learning_router)
 
 
 @app.get("/health", tags=["meta"])

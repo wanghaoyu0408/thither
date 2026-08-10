@@ -10,6 +10,9 @@ RejectionTargetKind = Literal[
     "decision_option",
     "destination",
     "hotel_area",
+    # A dismissed learning hypothesis, stored on the profile with
+    # scope="profile". Safe to add: check_rejections never branches on kind.
+    "hypothesis",
 ]
 
 

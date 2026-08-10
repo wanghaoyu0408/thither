@@ -13,7 +13,7 @@ same question in English: **whither goest thou?** Both are a question, not a pro
 which is the right register for something whose whole discipline is saying what it does
 not know.
 
-## Status: Milestones 1-5 complete
+## Status: Milestones 1-9 complete
 
 The architectural claim this project rests on is that **`TripState` is the source of
 truth and the LLM may never overwrite it freely**. Every mutation goes through a
@@ -28,6 +28,7 @@ validated `TripPatch` with revision control, lock enforcement and rejection memo
 | 5 | Flights (Duffel), airport comparison, ranking with trade-offs | done |
 | 6 | Hotels: neighbourhood decided first, then priced inventory | done |
 | 7 | Multi-traveler preferences, group scoring, fairness | done |
+| 9 | Evolving travel twin: learning signals, consent, Travel DNA | done |
 
 ## Setup
 
@@ -336,6 +337,61 @@ Defects the live runs exposed, most of them older than this milestone:
   and stopped. The prompt now says so, and `review_group_preferences` returns immediately
   for a solo trip rather than spending a planning round proving one person agrees with
   themselves.
+
+### Milestone 9 acceptance
+
+```bash
+.venv/Scripts/python.exe scripts/learn_from_trips.py
+```
+
+Offline, keyless, deterministic: two trips' worth of behaviour, a reflection,
+a consent, a durable "no", and a generated day that finally starts later.
+
+```
+Prefers later mornings     proposable  strength=moderate  confidence=likely
+    - Kyoto in July — moved 'Fushimi Inari at dawn' from 08:00 to 11:00
+    - Kyoto in July — moved 'Arashiyama bamboo early' from 08:30 to 10:30
+    - Kyoto again, August — reflection: skipped Kiyomizu at sunrise (07:30)
+
+old profile      first slot of the day: 10:00
+learned profile  first slot of the day: 11:00
+```
+
+**Learning proposes; only the traveller applies.** Signals are stored facts —
+an activity dragged later, a sentence said, a reflection submitted. Hypotheses
+are derived from them on every read, never stored, with content-hash ids so
+"not really" said today still matches the same pattern derived tomorrow. The
+only path into `TravelerProfile` is the accept endpoint, which writes the
+value and its provenance in one revision-guarded update. The trip that taught
+the lesson keeps its own snapshot untouched.
+
+**Strength is not confidence.** How intensely a preference was expressed (a
+click is `weak`, a post-trip statement `moderate`, words `strong`) and how
+much evidence there is (`emerging` / `likely` / `strong`, needing
+`learning_min_signals` across `learning_min_trips` distinct trips) are two
+ordinal words, reported apart and never folded into a number — a percentage
+computed from three clicks would be fake precision wearing a decimal point.
+
+**Attribution or abstention.** Behavioural signals are recorded only on a trip
+with exactly one profiled traveller, because only there does "who did that?"
+have an answer. On a group trip the agent's `record_stated_preference` must
+name the speaker, and the reflection asks who is answering. A preference
+pinned on the wrong person is worse than one never recorded.
+
+**A "no" is durable.** Dismissing a proposal appends a profile-scope
+`RejectionRecord` — the first real use of the scope the model always
+promised — and however much evidence arrives later, the same hypothesis
+derives as dismissed. Removing a learned value reverts to what the field held
+*before* learning touched it, and appends the same dismissal so the untouched
+evidence cannot re-propose it on the next read.
+
+**The learned field finally moves something.** `preferred_start_time` had
+been stored, snapshotted, diffed and displayed — and consumed by nothing (the
+ledger-10 defect class). Generation now shifts every day template to the most
+morning-averse traveller's floor, capped so dinner never slips past 20:00,
+and `parking_sensitive` doubles parking friction in substitute ranking. Every
+key in the learnable catalogue names its consumer in code, because a
+preference that influences nothing is a lie told slowly.
 
 ## How a change reaches the database
 

@@ -19,6 +19,7 @@ researched and says so plainly when there is nothing to pick; it does not invent
 a venue, and it does not quietly leave a hole.
 """
 
+import logging
 from datetime import date as date_type
 from datetime import datetime, time
 from typing import Annotated, Any, Literal
@@ -27,9 +28,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.repository import TripNotFound, TripRepository
+from app.db.repository import LearningRepository, TripNotFound, TripRepository
 from app.db.session import get_session, get_sessionmaker
 from app.models.itinerary_plan import ItineraryProposal, ReplanParams
+from app.models.learning import LearningSignal
 from app.models.lock import LockRecord
 from app.models.patch import PatchError, TripPatch
 from app.models.rejection import RejectionRecord
@@ -41,6 +43,11 @@ from app.services.explanation_service import Explanation, explain, explain_item
 from app.services.intake_service import today_at
 from app.services.itinerary_diff import DayDiff, changed_days
 from app.services.itinerary_service import replan_day, substitute_item
+from app.services.learning_service import (
+    behavioral_signal_allowed,
+    signal_for_move,
+    signal_for_replan,
+)
 from app.services.toolbox import MissingCredentials, Toolbox
 from app.services.validation_service import (
     TravelLookup,
@@ -48,6 +55,8 @@ from app.services.validation_service import (
     mode_between,
     validate_itinerary,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/trips/{trip_id}", tags=["actions"])
 
@@ -198,6 +207,22 @@ def _find_item(state: TripState, item_id: str):
         if item.item_id == item_id:
             return day, item
     raise HTTPException(status.HTTP_404_NOT_FOUND, f"no item {item_id} on this trip")
+
+
+async def _note_signals(session: AsyncSession, signals: list[LearningSignal | None]) -> None:
+    """Record learning signals after the action already committed.
+
+    Fire-and-forget on purpose: a signal is a bonus fact about the click,
+    never a reason the click fails. Its own commit, because signals are not
+    under trip revision control.
+    """
+    real = [signal for signal in signals if signal is not None]
+    if not real:
+        return
+    try:
+        await LearningRepository(session).record_many(real)
+    except Exception:  # noqa: BLE001 - degraded learning must not break the action
+        logger.warning("learning signal not recorded", exc_info=True)
 
 
 def _day_index(state: TripState, when: date_type) -> int:
@@ -647,7 +672,7 @@ async def move_item(
         # exists to catch, so the patch claims none.
         scope = None
 
-    return await _commit(
+    result = await _commit(
         session,
         state,
         [
@@ -662,9 +687,31 @@ async def move_item(
         summary=f"moved {item.title}",
     )
 
+    # A later start, observed. Attribution is the gate: on a group trip nobody
+    # knows whose hand was on the mouse, so nothing is recorded (M9).
+    if result.applied and item.start_at is not None:
+        profile_id = behavioral_signal_allowed(state)
+        if profile_id:
+            await _note_signals(
+                session,
+                [
+                    signal_for_move(
+                        state,
+                        item_title=item.title,
+                        old_start=item.start_at.time(),
+                        new_start=clock,
+                        profile_id=profile_id,
+                    )
+                ],
+            )
+    return result
+
 
 @router.delete("/items/{item_id}", response_model=ActionResult)
 async def remove_item(trip_id: str, item_id: str, session: SessionDep) -> ActionResult:
+    # Deliberately no learning signal: no catalogue key captures "dropped this
+    # stop" - it could mean tired, closed, raining, or ate too much. Post-trip
+    # reflection is where a skip becomes evidence, with the traveller saying so.
     state = await _load(session, trip_id)
     _refuse_if_locked(state, item_id, "remove")
     day, item = _find_item(state, item_id)
@@ -736,6 +783,9 @@ async def reject_entity(
 
     Both halves matter. The record stops it being re-suggested; unscheduling it
     stops the user from having said no to something still sitting in their day.
+
+    No learning signal here either: a bare rejection maps to no catalogue key.
+    The RejectionRecord itself is already the durable memory of this "no".
     """
     state = await _load(session, trip_id)
     entity = state.entities.get(entity_id)
@@ -827,13 +877,31 @@ async def replan_one_day(
             warnings=proposal.warnings,
         )
 
-    return await _commit(
+    result = await _commit(
         session,
         state,
         _proposal_patches(state, proposal, f"replan {when}"),
         summary=proposal.summary,
         warnings=proposal.warnings,
     )
+
+    # Asking for an easier (or fuller) day, in so many words, is a pace
+    # statement. Same attribution gate as move: solo trips only.
+    if result.applied and payload.intensity:
+        profile_id = behavioral_signal_allowed(state)
+        if profile_id:
+            await _note_signals(
+                session,
+                [
+                    signal_for_replan(
+                        state,
+                        intensity=payload.intensity,
+                        when=when.isoformat(),
+                        profile_id=profile_id,
+                    )
+                ],
+            )
+    return result
 
 
 # --- explanations ------------------------------------------------------------

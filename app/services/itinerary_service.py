@@ -31,6 +31,7 @@ from app.models.itinerary_plan import (
 )
 from app.models.patch import PatchOperation, PatchScope
 from app.models.trip import TripState
+from app.services import preference_service
 from app.services.clustering import cluster_places, label_clusters
 from app.services.day_metrics import summarize_day
 from app.services.geo import haversine_km
@@ -61,6 +62,12 @@ class Slot:
         return start, start + timedelta(minutes=self.minutes)
 
 
+# The latest a meal slot may drift when learned start times shift the day.
+# Dinner at eight is late dinner; dinner at ten is a different trip. Non-meal
+# slots ride along uncapped - a 21:00 activity drifting later is the packed
+# template being packed.
+LATEST_MEAL_START = time(20, 0)
+
 # Day templates by pace. Ordered, and deliberately unambitious at the relaxed
 # end - "make it easier" has to mean something concrete.
 _TEMPLATES: dict[Pace, list[Slot]] = {
@@ -87,6 +94,56 @@ _TEMPLATES: dict[Pace, list[Slot]] = {
         Slot("activity", time(21, 0), 90),
     ],
 }
+
+
+def effective_start(state: TripState) -> time | None:
+    """The earliest the day may start, from the travellers' own snapshots.
+
+    The most morning-averse traveller wins the max - a day that starts before
+    someone's stated floor starts without them. Reads the resolved snapshots,
+    never live profiles: this is how an accepted `avoid_early_mornings` in the
+    profile reaches a future trip's slots and only after the trip refreshed
+    (M9; the field's first consumer, closing the class of defect where a
+    stored preference influenced nothing).
+    """
+    resolved, _warnings = preference_service.effective(state)
+    if not resolved:
+        return None
+    return max(
+        time.fromisoformat(prefs.pace.preferred_start_time) for prefs in resolved.values()
+    )
+
+
+def _shifted(slots: list[Slot], earliest: time | None) -> list[Slot]:
+    """The template, delayed to respect a learned start. Order and lengths keep.
+
+    A uniform shift, capped so no meal drifts past LATEST_MEAL_START. Default
+    profiles (09:00) never beat any template's first slot, so every template
+    stays byte-identical unless someone actually asked for later.
+    """
+    if earliest is None or not slots:
+        return slots
+    minutes = lambda t: t.hour * 60 + t.minute  # noqa: E731
+    delta = minutes(earliest) - minutes(slots[0].start)
+    if delta <= 0:
+        return slots
+    cap = min(
+        (minutes(LATEST_MEAL_START) - minutes(slot.start) for slot in slots if slot.kind == "meal"),
+        default=delta,
+    )
+    shift = min(delta, max(cap, 0))
+    if shift <= 0:
+        return slots
+    return [
+        Slot(
+            slot.kind,
+            (
+                datetime.combine(date.min, slot.start) + timedelta(minutes=shift)
+            ).time(),
+            slot.minutes,
+        )
+        for slot in slots
+    ]
 
 
 def slot_kind_for(entity: PlaceEntity) -> SlotKind:
@@ -244,6 +301,19 @@ def _substitution_summary(
     return f"{head} — {'; '.join(reasons)}" if reasons else head
 
 
+# For a group that told us parking pain matters, every parking figure counts
+# double: a known 20-minute trek scores like a confirmed absence. Any one
+# sensitive traveller is enough - group comfort, the worst_weight ethos.
+PARKING_SENSITIVITY_FACTOR = 2.0
+
+
+def _parking_weight(state: TripState) -> float:
+    resolved, _warnings = preference_service.effective(state)
+    if any(prefs.pace.parking_sensitive for prefs in resolved.values()):
+        return PARKING_SENSITIVITY_FACTOR
+    return 1.0
+
+
 def arrival_penalty(state: TripState, entity: PlaceEntity) -> float:
     """How much harder this place is to arrive at, from what the trip knows.
 
@@ -251,23 +321,33 @@ def arrival_penalty(state: TripState, entity: PlaceEntity) -> float:
     and stays in the running - it just loses to somewhere we know you can park.
     Only a *confirmed* absence weighs heavily, which is the parking invariant
     applied to ranking rather than to validation.
+
+    A parking-sensitive traveller in the group scales the whole penalty
+    (learned or stated - the snapshot does not care). Living inside this
+    function means the substitute ranking and the recorded DecisionScore both
+    inherit it - the number that chose the swap and the number stored on it
+    cannot disagree. Not a renormalisation no-op: `_ease` adds this to the
+    weather term, so doubling parking genuinely trades weather for parking.
+    On a transit trip the driving gate still returns zero, because parking
+    sensitivity honestly changes nothing where nobody parks.
     """
     if long_haul_mode(state) != "driving":
         return 0.0
+    weight = _parking_weight(state)
     arrival = state.arrival.get(entity.entity_id)
     if arrival is None:
-        return 1.0
+        return 1.0 * weight
     availability = arrival.parking.availability
     if availability == "unavailable":
-        return 3.0
+        return 3.0 * weight
     if availability == "unknown":
-        return 1.0
+        return 1.0 * weight
     walk = arrival.overhead_minutes
     if walk is None:
-        return 1.0
+        return 1.0 * weight
     # A five-minute walk is nothing; twenty is the difference between an easy
     # stop and a trek. Scaled rather than banded so it orders smoothly.
-    return min(walk / 10.0, 2.0)
+    return min(walk / 10.0, 2.0) * weight
 
 
 def weather_penalty(state: TripState, entity: PlaceEntity, day: ItineraryDay) -> float:
@@ -416,7 +496,7 @@ def build_itinerary(
     # were suggested in, so a Shibuya day ends up labelled "Asakusa".
     label_clusters(clusters, _area_names(candidates, params.areas))
 
-    slots = _TEMPLATES[pace]
+    slots = _shifted(_TEMPLATES[pace], effective_start(state))
     used: set[str] = set()
     new_days: list[ItineraryDay] = []
 
@@ -768,7 +848,11 @@ def replan_day(
     taken = {(item.start_at, item.end_at) for item in fixed}
 
     retimed: list[ItineraryItem] = list(fixed)
-    available = [slot for slot in _TEMPLATES[pace] if slot.window(target_date) not in taken]
+    available = [
+        slot
+        for slot in _shifted(_TEMPLATES[pace], effective_start(state))
+        if slot.window(target_date) not in taken
+    ]
 
     unplaceable: list[str] = []
     for item in movable:

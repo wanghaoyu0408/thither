@@ -20,7 +20,7 @@ from app.agent.prompts import build_instructions
 from app.agent.run_control import RunControl
 from app.agent.tool_registry import TOOL_SCHEMAS, ToolContext, dispatch, serialize
 from app.config import Settings, get_settings
-from app.db.repository import ProfileRepository, TripRepository
+from app.db.repository import LearningRepository, ProfileRepository, TripRepository
 from app.models.patch import PatchResult, TripPatch
 from app.models.trip import TripState
 from app.providers.openai_llm import LLMClient, LLMTurn
@@ -104,6 +104,8 @@ class AgentRunner:
         # Profiles live in their own table. Reading them is how a snapshot gets
         # made in the first place; planning still only ever reads the snapshot.
         self._profiles = ProfileRepository(session)
+        # Signals commit at record time - no pending buffer, nothing to clear.
+        self._learning = LearningRepository(session)
         self._settings = settings or get_settings()
         self._proposals = proposals or ProposalStore()
 
@@ -126,6 +128,7 @@ class AgentRunner:
             proposals=self._proposals,
             settings=self._settings,
             profiles=self._profiles,
+            learning=self._learning,
         )
 
         conversation: list[Any] = list(history or [])

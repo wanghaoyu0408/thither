@@ -10,8 +10,15 @@ from typing import Any
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import TravelerProfileRow, TripEventRow, TripMessageRow, TripRow
+from app.db.models import (
+    LearningSignalRow,
+    TravelerProfileRow,
+    TripEventRow,
+    TripMessageRow,
+    TripRow,
+)
 from app.models.common import utcnow
+from app.models.learning import LearningSignal
 from app.models.patch import PatchError, PatchOperation, PatchResult, TripPatch
 from app.models.traveler import TravelerProfile
 from app.models.trip import TripState
@@ -28,6 +35,10 @@ class TripNotFound(RepositoryError):
 
 class ProfileNotFound(RepositoryError):
     pass
+
+
+class ProfileRevisionConflict(RepositoryError):
+    """The profile moved between read and write. The caller must re-read."""
 
 
 # Maps a patched path onto a readable audit event, so `GET /trips/{id}/events`
@@ -51,6 +62,7 @@ _EVENT_RULES: tuple[tuple[str, str, str], ...] = (
     ("/decisions/hotel", "*", "hotel_updated"),
     ("/brief", "*", "brief_updated"),
     ("/travelers", "*", "travelers_updated"),
+    ("/reflection", "*", "reflection_recorded"),
 )
 
 
@@ -93,10 +105,27 @@ class ProfileRepository:
         )
         return [TravelerProfile.model_validate(row.profile) for row in result.scalars()]
 
-    async def update(self, profile_id: str, changes: dict[str, Any]) -> TravelerProfile:
+    async def update(
+        self,
+        profile_id: str,
+        changes: dict[str, Any],
+        *,
+        expected_revision: int | None = None,
+    ) -> TravelerProfile:
         row = await self._session.get(TravelerProfileRow, profile_id)
         if row is None:
             raise ProfileNotFound(profile_id)
+
+        # Optimistic check for callers that read before they write - the
+        # learning accept path, where applying a proposal derived from stale
+        # evidence onto a moved profile would be a silent overwrite. Existing
+        # callers pass nothing and keep last-writer-wins, which for a plain
+        # PATCH of a field the user just typed is the behaviour they expect.
+        current = int(row.profile.get("revision", 0))
+        if expected_revision is not None and current != expected_revision:
+            raise ProfileRevisionConflict(
+                f"profile {profile_id} is at revision {current}, not {expected_revision}"
+            )
 
         # Pydantic ignores unknown keys, which would turn a typo into a silent no-op.
         unknown = sorted(set(changes) - set(TravelerProfile.model_fields))
@@ -115,6 +144,44 @@ class ProfileRepository:
         row.profile = profile.model_dump(mode="json")
         await self._session.commit()
         return profile
+
+
+class LearningRepository:
+    """Append-only store of observed facts about travellers.
+
+    Signals are not under trip revision control - they are cross-trip and
+    profile-scoped - so this is a plain insert path, like trip_events, with
+    ordering by observation so evidence reads chronologically.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def record(self, signal: LearningSignal) -> LearningSignal:
+        return (await self.record_many([signal]))[0]
+
+    async def record_many(self, signals: list[LearningSignal]) -> list[LearningSignal]:
+        for signal in signals:
+            self._session.add(
+                LearningSignalRow(
+                    id=signal.signal_id,
+                    profile_id=signal.profile_id,
+                    trip_id=signal.trip_id,
+                    payload=signal.model_dump(mode="json"),
+                )
+            )
+        if signals:
+            await self._session.commit()
+        return signals
+
+    async def list_for_profile(self, profile_id: str, limit: int = 500) -> list[LearningSignal]:
+        result = await self._session.execute(
+            select(LearningSignalRow)
+            .where(LearningSignalRow.profile_id == profile_id)
+            .order_by(LearningSignalRow.created_at.asc(), LearningSignalRow.id)
+            .limit(limit)
+        )
+        return [LearningSignal.model_validate(row.payload) for row in result.scalars()]
 
 
 class TripRepository:

@@ -301,6 +301,34 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 .choice .con { font-size: 12px; color: var(--warn); margin-top: 3px; }
 .choice .go { margin-top: auto; padding-top: 10px; }
 
+/* Travel DNA: learned rows and their ordinal badges. Words, never numbers -
+   the confidence tiers are emerging/likely/strong and nothing more precise. */
+.dna-traveler { margin-bottom: 14px; }
+.dna-row {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13.5px;
+}
+.dna-row:last-child { border-bottom: none; }
+.dna-row.thin b { font-weight: 500; color: var(--ink-2); }
+.dna-row .meta { font-size: 11.5px; color: var(--ink-3); }
+.dna-row details { flex-basis: 100%; }
+.dna-badge {
+  font-size: 10.5px; padding: 1px 7px; border-radius: 999px;
+  text-transform: uppercase; letter-spacing: 0.05em;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--ink-3);
+}
+.dna-badge.strong, .dna-badge.learned { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+.dna-badge.likely { background: var(--info-soft); border-color: transparent; color: var(--info); }
+.dna-badge.moderate { background: var(--info-soft); border-color: transparent; color: var(--info); }
+.dna-card .meta { font-size: 11.5px; color: var(--ink-3); margin-top: 3px; }
+.dna-card code { font: 11px var(--mono); }
+.dna-card .pickrow { margin-top: 8px; }
+.linkish.danger { color: var(--error); }
+
+/* Reflection card: intake's question shapes, reused. */
+.reflect .q { margin-bottom: 12px; }
+.reflect .acts { margin-top: 4px; }
+
 /* Whole-trip map legend. */
 .legend { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 5px; font-size: 11.5px; color: var(--ink-2); }
 .legend-day { display: inline-flex; align-items: center; gap: 4px; }
@@ -830,6 +858,9 @@ const S = { tripId: null, trip: null, over: null, busy: false,
             lastDiff: null, mapDay: null, decisions: null, intake: null,
             messages: [], pollTimer: null, selectedItem: null,
             dismissedChoosers: new Set(), loadingDecisions: false,
+            // profile_id -> GET /profiles/{id}/learning payload. Fetched when
+            // the Travel DNA panel opens, re-fetched after every consent action.
+            learning: {},
             // Artifacts the traveller opened on purpose. A set, not a single
             // slot: this is a stream, and wanting the map open should not shut
             // the itinerary you are reading it against.
@@ -986,7 +1017,7 @@ async function createTrip(e) {
 
 async function selectTrip(id) {
   S.tripId = id; S.lastDiff = null; S.mapDay = null; S.decisions = null; S.intake = null;
-  S.open.clear(); S.selectedItem = null; S.messages = [];
+  S.open.clear(); S.selectedItem = null; S.messages = []; S.learning = {};
   S.dismissedChoosers.clear();
   stopRunPoll();
   setBusyUI(false);
@@ -1016,6 +1047,9 @@ function adopt(result) {
   S.over = {
     trip: result.trip, validation: result.validation,
     conflicts: result.conflicts, blocking: result.blocking,
+    // ActionResult carries neither; keep what the overview last said rather
+    // than blanking the reflection card because someone moved a museum.
+    reflection: S.over?.reflection, learning: S.over?.learning,
   };
   S.lastDiff = result.diff && result.diff.length ? result.diff : null;
   // The decisions view is derived server-side - relevance, lock state and which
@@ -1033,6 +1067,23 @@ function adopt(result) {
 async function loadDecisions() {
   try { S.decisions = await api(`/trips/${S.tripId}/decisions`); }
   catch (err) { S.decisions = []; toast(err.message); }
+}
+
+/** One traveller's learning view. Cached until a consent action invalidates it. */
+async function loadLearning(profileId) {
+  try { S.learning[profileId] = await api(`/profiles/${profileId}/learning`); }
+  catch (err) { S.learning[profileId] = { error: err.message }; }
+}
+
+function profiledTravelers() {
+  return (S.trip?.travelers || []).filter((t) => t.profile_id);
+}
+
+/** Re-fetch one profile's learning and the overview counts, then repaint. */
+async function reloadLearning(profileId) {
+  await loadLearning(profileId);
+  await refresh();
+  render();
 }
 
 /** Collect every answered question and send them in one go. A choice and a
@@ -1197,7 +1248,18 @@ function attentionArtifacts() {
     return [artifact("brief", "Your trip brief",
       intakeHtml(), { sub: "Confirm this and planning starts", collapsible: false })];
   }
-  return pendingChoices().map(chooserHtml);
+  const cards = pendingChoices().map(chooserHtml);
+  // The trip is over and nobody has said how it went. One card, once.
+  if (S.over?.reflection?.due) {
+    cards.push(artifact("reflection", "How did this trip go?",
+      reflectionHtml(), { sub: "Two minutes — it makes the next trip better",
+                          collapsible: false }));
+  }
+  return cards;
+}
+
+function proposableCount() {
+  return (S.over?.learning || []).reduce((n, t) => n + (t.proposable || 0), 0);
 }
 
 /** What the attention bar points at, and what it should say. */
@@ -1207,11 +1269,19 @@ function attentionSummary() {
     return { selector: '[data-art="brief"]', text: "Confirm your trip brief to start planning" };
   }
   const n = pendingChoices().length;
-  if (!n) return null;
-  return {
+  if (n) return {
     selector: '[data-art="choice"]',
     text: `${n} decision${n === 1 ? "" : "s"} need${n === 1 ? "s" : ""} you`,
   };
+  if (S.over?.reflection?.due) {
+    return { selector: '[data-art="reflection"]',
+             text: "Your trip is over — tell me how it went" };
+  }
+  if (proposableCount() > 0) {
+    return { selector: '[data-art="dna"]',
+             text: "I think I've learned something about how you travel — your call" };
+  }
+  return null;
 }
 
 /** Artifacts the traveller opened on purpose. */
@@ -1225,6 +1295,13 @@ function openedArtifact(kind) {
   if (kind === "research") return artifact("research", "Research", researchHtml());
   if (kind === "brief") return artifact("brief", "Trip brief", intakeHtml());
   if (kind === "overview") return artifact("overview", "Trip facts", overviewHtml());
+  if (kind === "dna") {
+    // Fetch on first open; render() is called again when the data lands.
+    for (const t of profiledTravelers())
+      if (!(t.profile_id in S.learning)) loadLearning(t.profile_id).then(render);
+    return artifact("dna", "Travel DNA",
+      dnaHtml(), { sub: "What I've learned — you decide what sticks" });
+  }
   return "";
 }
 
@@ -1245,6 +1322,11 @@ function chipsHtml() {
     chips.push(`<button class="chip" data-open="decisions">Decisions</button>`);
   if (Object.keys(S.trip.evidence || {}).length)
     chips.push(`<button class="chip" data-open="research">Research</button>`);
+  if (profiledTravelers().length) {
+    const waiting = proposableCount();
+    chips.push(`<button class="chip${waiting ? " warn" : ""}" data-open="dna">Travel DNA${
+      waiting ? ` · ${waiting} waiting` : ""}</button>`);
+  }
   return chips.length ? `<div class="chips">${chips.join("")}</div>` : "";
 }
 
@@ -1384,7 +1466,7 @@ function render() {
   // Opened on purpose, in a stable order, and never a second copy of what is
   // already shown above.
   const briefIsWaiting = S.intake && S.intake.status !== "confirmed";
-  for (const kind of ["itinerary", "map", "decisions", "research", "brief", "overview"]) {
+  for (const kind of ["itinerary", "map", "decisions", "research", "brief", "overview", "dna"]) {
     if (!S.open.has(kind)) continue;
     if (briefIsWaiting && kind === "brief") continue;
     out.push(openedArtifact(kind));
@@ -2107,6 +2189,160 @@ function chooserHtml(view) {
       <button class="chooser-x" data-dismisschooser="${esc(view.name)}" title="Not now">×</button>
     </div>
     <div class="choice-row">${(view.options || []).slice(0, 3).map(card).join("")}</div>
+  </div>`;
+}
+
+/* --- Travel DNA -----------------------------------------------------------
+   What the system has learned, is starting to suspect, and was told "no"
+   about - per traveller, with the evidence one click away. Confidence is a
+   word, never a percentage: a number computed from three clicks would be
+   fake precision. */
+
+const DNA_EDIT_VALUES = {
+  // Start time is the one learned field with more than one sensible value.
+  "pace_preferences.preferred_start_time": ["09:30", "10:00", "10:30", "11:00"],
+};
+
+function dnaWhy(hypothesis) {
+  if (!hypothesis || !(hypothesis.evidence || []).length) return "";
+  return `<details class="notscored"><summary>Why?</summary>
+    <ul>${hypothesis.evidence.map((e) => `<li>${esc(e.line)}</li>`).join("")}</ul>
+  </details>`;
+}
+
+function dnaBadge(word) {
+  return `<span class="dna-badge ${esc(word)}">${esc(word)}</span>`;
+}
+
+function dnaProposalCard(profileId, revision, h) {
+  const editable = DNA_EDIT_VALUES[h.field_path];
+  const value = (v) => `${esc(v)}`;
+  return `<div class="choice dna-card">
+    <b>${esc(h.summary)}</b>
+    <p class="meta">${dnaBadge(h.strength)} ${dnaBadge(h.confidence)} ·
+      based on ${h.trip_ids.length} trip${h.trip_ids.length === 1 ? "" : "s"}</p>
+    <p class="meta">would set <code>${esc(h.field_path)}</code> → <b>${value(h.proposed_value)}</b></p>
+    ${dnaWhy(h)}
+    ${editable ? `<div class="pickrow">${editable.map((v) =>
+      `<button class="pick${v === h.proposed_value ? " on" : ""}"
+        data-dnaeditval="${esc(profileId)}|${revision}|${esc(h.hypothesis_id)}|${esc(v)}">${esc(v)}</button>`
+    ).join("")}</div>` : ""}
+    <div class="go">
+      <button class="btn sm"
+        data-dnaaccept="${esc(profileId)}|${revision}|${esc(h.hypothesis_id)}">Add to my travel profile</button>
+      <button class="btn ghost sm"
+        data-dnadismiss="${esc(profileId)}|${revision}|${esc(h.hypothesis_id)}">Not really</button>
+    </div>
+  </div>`;
+}
+
+function dnaTravelerHtml(traveler) {
+  const view = S.learning[traveler.profile_id];
+  if (!view) return `<p class="empty">Loading…</p>`;
+  if (view.error) return `<p class="empty">${esc(view.error)}</p>`;
+
+  const revision = view.profile_revision;
+  const byId = {};
+  for (const h of view.hypotheses || []) byId[h.hypothesis_id] = h;
+
+  const learned = Object.entries(view.learned || {});
+  const proposable = (view.hypotheses || []).filter((h) => h.status === "proposable");
+  const emerging = (view.hypotheses || []).filter((h) => h.status === "emerging");
+  const dismissed = view.dismissed || [];
+
+  const learnedRow = ([path, record]) => {
+    const hypothesis = byId[record.hypothesis_id];
+    return `<div class="dna-row">
+      <b>${esc(record.summary)}</b>
+      ${dnaBadge("learned")}
+      <span class="meta">since ${esc((record.accepted_at || "").slice(0, 10))}${
+        record.value_source === "edited" ? " · edited by you" : ""}</span>
+      <div class="spacer"></div>
+      <button class="linkish danger"
+        data-dnaremove="${esc(traveler.profile_id)}|${revision}|${esc(record.hypothesis_id)}">Remove</button>
+      ${dnaWhy(hypothesis) ||
+        `<details class="notscored"><summary>Why?</summary>
+           <ul><li>${esc(record.summary)} — accepted ${esc((record.accepted_at || "").slice(0, 10))};
+           the signals behind it have aged out of the store</li></ul></details>`}
+    </div>`;
+  };
+
+  const emergingRow = (h) => `<div class="dna-row thin">
+    <b>${esc(h.summary)}</b> ${dnaBadge("emerging")}
+    <span class="meta">${h.trip_ids.length} trip${h.trip_ids.length === 1 ? "" : "s"} —
+      nothing is proposed until more than one agrees</span>
+    ${dnaWhy(h)}
+  </div>`;
+
+  const empty = !learned.length && !proposable.length && !emerging.length && !dismissed.length;
+
+  return `<div class="dna-traveler">
+    <p class="eyebrow">${esc(traveler.name)}</p>
+    ${empty ? `<p class="empty">Nothing yet. As trips happen, patterns show up here —
+      and nothing reaches the profile without asking.</p>` : ""}
+    ${proposable.length ? `<div class="choice-row">${
+      proposable.map((h) => dnaProposalCard(traveler.profile_id, revision, h)).join("")
+    }</div>` : ""}
+    ${learned.map(learnedRow).join("")}
+    ${emerging.length ? `<p class="eyebrow" style="margin-top:12px">Emerging</p>${
+      emerging.map(emergingRow).join("")}` : ""}
+    ${dismissed.length ? `<details class="rejected-list">
+      <summary style="font-size:12px;color:var(--ink-3)">${dismissed.length} you said no to</summary>
+      ${dismissed.map((r) => `<div class="dna-row thin"><b>${esc(r.label || r.target_id)}</b>
+        <span class="meta">${esc(r.reason || "dismissed")} — it will not be proposed again</span></div>`).join("")}
+    </details>` : ""}
+  </div>`;
+}
+
+function dnaHtml() {
+  const travelers = profiledTravelers();
+  if (!travelers.length) {
+    return `<p class="empty">Nobody on this trip has a stored profile, so there is
+      nothing to learn into.</p>`;
+  }
+  return travelers.map(dnaTravelerHtml).join("");
+}
+
+/* --- post-trip reflection -------------------------------------------------
+   Shown once, when the overview says the trip is over and unanswered. The
+   answers become learning signals attributed to whoever answered - never to
+   a guess. */
+
+function reflectionHtml() {
+  const days = S.trip.itinerary.days || [];
+  const items = days.flatMap((d) => d.items);
+  const travelers = profiledTravelers();
+  const answerers = S.trip.travelers || [];
+
+  const dayBoxes = days.map((d) => `<label>
+    <input type="checkbox" name="reflect_day" value="${esc(d.date)}">
+    <span>${esc(d.date)}${d.theme ? ` · ${esc(d.theme)}` : ""}</span>
+  </label>`).join("");
+
+  const itemBoxes = items.map((i) => `<label>
+    <input type="checkbox" name="reflect_skip" value="${esc(i.item_id)}">
+    <span>${esc(i.title)}</span>
+  </label>`).join("");
+
+  const who = answerers.length === 1
+    ? `<input type="hidden" id="reflectWho" value="${esc(answerers[0].traveler_id)}">`
+    : `<div class="q"><b>Who is answering?</b>${answerers.map((t, i) => `<label>
+        <input type="radio" name="reflect_who" value="${esc(t.traveler_id)}"
+          ${i === 0 && t.profile_id ? "checked" : ""}>
+        <span>${esc(t.name)}${t.profile_id ? "" : " (no profile — nothing will be learned)"}</span>
+      </label>`).join("")}</div>`;
+
+  return `<div class="reflect">
+    ${days.length ? `<div class="q"><b>Which days felt too busy?</b>${dayBoxes}</div>` : ""}
+    ${items.length ? `<div class="q"><b>What did you skip?</b>${itemBoxes}</div>` : ""}
+    <div class="q"><b>What did you love?</b>
+      <div class="free"><input type="text" id="reflectLoved"
+        placeholder="the market, the quiet morning in Ueno…"></div></div>
+    <div class="q"><b>Anything I should remember next time?</b>
+      <div class="free"><input type="text" id="reflectNotes"
+        placeholder="in your own words"></div></div>
+    ${who}
+    <div class="acts"><button class="btn" id="reflectBtn">Save reflection</button></div>
   </div>`;
 }
 
@@ -2902,6 +3138,62 @@ function wireWorkspace() {
   on("decunbooked", (name) =>
     act(`/decisions/${name}/booked`, post({ booked: false }), (r) => r.summary));
 
+  // Travel DNA consent. Values are "profileId|revision|hypothesisId" (+"|value"
+  // for the edit chips); every action re-reads the learning view afterwards,
+  // because the derivation is server-side and anything held here is now stale.
+  const dnaAct = async (value, path, body) => {
+    const parts = value.split("|");
+    const [profileId, revision, hypothesisId] = parts;
+    try {
+      await api(`/profiles/${profileId}/learning/${hypothesisId}/${path}`,
+        post({ expected_revision: Number(revision), ...body }));
+      toast(path === "accept" ? "Added to the travel profile"
+            : path === "dismiss" ? "Noted — it won't come up again" : "Removed");
+    } catch (err) { toast(err.message); }
+    await reloadLearning(profileId);
+  };
+  on("dnaaccept", (v) => dnaAct(v, "accept", {}));
+  on("dnadismiss", (v) => dnaAct(v, "dismiss", {}));
+  on("dnaremove", (v) => {
+    if (confirm("Remove this from the profile? The trip keeps its snapshot either way."))
+      dnaAct(v, "remove", {});
+  });
+  on("dnaeditval", (v) => {
+    const parts = v.split("|");
+    dnaAct(parts.slice(0, 3).join("|"), "accept", { value: parts[3] });
+  });
+
+  // Reflection. One POST; the response is an ordinary ActionResult, and a
+  // full refresh afterwards flips reflection.due off from the store's truth.
+  const reflectBtn = $("reflectBtn");
+  if (reflectBtn) reflectBtn.onclick = async () => {
+    const checked = (name) =>
+      [...document.querySelectorAll(`input[name="${name}"]:checked`)].map((el) => el.value);
+    const who = $("reflectWho")?.value
+      || document.querySelector('input[name="reflect_who"]:checked')?.value;
+    if (!who) return toast("Say who is answering");
+    const loved = ($("reflectLoved")?.value || "").trim();
+    reflectBtn.disabled = true;
+    try {
+      const result = await api(`/trips/${S.tripId}/reflection`, post({
+        answered_by: who,
+        days_too_busy: checked("reflect_day"),
+        skipped_item_ids: checked("reflect_skip"),
+        loved: loved ? [loved] : [],
+        notes: ($("reflectNotes")?.value || "").trim() || null,
+      }));
+      adopt(result);
+      if (result.warnings?.length) toast(result.warnings[0]);
+      else toast("Thank you — noted for next time");
+      await refresh();   // reflection.due and the learning counts moved
+      S.learning = {};   // evidence changed; refetch on next open
+      render();
+    } catch (err) {
+      toast(err.message);
+      reflectBtn.disabled = false;
+    }
+  };
+
   on("parkto", (itemId) => {
     // Navigation targets the car park, not the attraction's centroid - routing
     // to the middle of a beach can mean routing into the sea.
@@ -3083,6 +3375,8 @@ const TOOL_LABELS = {
   search_hotels: "Searched hotels",
   review_group_preferences: "Reviewed everyone's preferences",
   refresh_traveler_preferences: "Refreshed traveller profiles",
+  record_stated_preference: "Noted a preference you stated",
+  review_learned_preferences: "Reviewed what I've learned about you",
   generate_itinerary: "Built a draft itinerary",
   replace_item: "Looked for a substitute",
   replan_day: "Reworked a day",
@@ -3097,7 +3391,8 @@ const toolLabel = (name) => TOOL_LABELS[name] || name.replace(/_/g, " ");
 const PHASES = [
   ["understand", "Understanding your trip", ["update_trip_brief", "ask_clarifications"]],
   ["prefs", "Reviewing everyone's preferences",
-    ["review_group_preferences", "refresh_traveler_preferences"]],
+    ["review_group_preferences", "refresh_traveler_preferences",
+     "record_stated_preference", "review_learned_preferences"]],
   ["places", "Finding places worth going",
     ["search_places", "discover_restaurants", "research_web", "get_place_details"]],
   ["areas", "Comparing neighbourhoods", ["recommend_hotel_areas"]],

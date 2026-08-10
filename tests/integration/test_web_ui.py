@@ -73,6 +73,21 @@ async def test_the_post_helper_takes_the_body_first(client):
     assert calls, "expected the UI to use the post helper"
 
 
+async def test_the_page_names_the_travel_dna_surface_and_the_new_tools(client):
+    """The learning layer's whole UI ships in the one file, like everything else."""
+    body = (await client.get("/")).text
+
+    assert "Travel DNA" in body
+    assert "Add to my travel profile" in body      # the consent card's yes
+    assert "Not really" in body                    # and its durable no
+    assert "How did this trip go?" in body         # the reflection card
+    assert "record_stated_preference" in body      # TOOL_LABELS knows both tools
+    assert "review_learned_preferences" in body
+    # Ordinal words, never percentages: the badge tiers are the only vocabulary.
+    for word in ("emerging", "likely", "strong"):
+        assert f"dna-badge.{word}" in body or word in body
+
+
 async def test_the_overview_endpoint_derives_what_the_trip_cannot_store(client, session):
     """Validation and conflicts are computed at read time, so a client cannot
     get them by reading the trip - and should not reimplement either rule."""

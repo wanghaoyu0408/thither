@@ -105,6 +105,29 @@ class ToolCacheRow(Base):
     __table_args__ = (Index("ix_tool_cache_expires_at", "expires_at"),)
 
 
+class LearningSignalRow(Base):
+    """Append-only, like trip_events. One row per observed fact about a traveller.
+
+    No FK to trips: learning must outlive the trip that produced it - deleting
+    last year's trip must not delete what it taught us - so the payload's
+    `context` carries whatever "Why?" needs to stay renderable. No FK to
+    traveler_profiles either; profiles have no delete path today.
+    """
+
+    __tablename__ = "learning_signals"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+    profile_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    trip_id: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    payload: Mapped[dict[str, Any]] = mapped_column("payload_jsonb", JSONType, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(TimestampType, default=utcnow, nullable=False)
+
+    __table_args__ = (Index("ix_learning_signals_profile_id", "profile_id"),)
+
+
 class TripEventRow(Base):
     """Append-only audit trail. Never updated, never deleted."""
 

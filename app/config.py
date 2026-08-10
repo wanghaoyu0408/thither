@@ -84,6 +84,14 @@ class Settings(BaseSettings):
     rain_warning_probability: float = 0.5
     wind_warning_kph: float = 40.0
 
+    # Evidence needed before a learned pattern may be proposed to the
+    # traveller. At 1, a single misclick becomes a personality trait; at 10,
+    # nothing is ever learned. Signals *and* distinct trips, because one
+    # bad-weather week generates any amount of behaviour - a preference is
+    # what survives a change of city.
+    learning_min_signals: int = 3
+    learning_min_trips: int = 2
+
     @property
     def weather_key(self) -> str | None:
         """The key Google Weather is called with.

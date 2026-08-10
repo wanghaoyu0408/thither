@@ -28,6 +28,7 @@ from app.models.group import TravelerPreferences
 from app.models.hotel import SearchHotelsInput
 from app.models.intake import SCOPE_LABELS, ClarificationChoice, ClarificationQuestion
 from app.models.itinerary_plan import ItineraryProposal, PlanParams, ReplanParams
+from app.models.learning import LearningSignal
 from app.models.place import GetPlaceDetailsInput, PlaceFieldSet, SearchPlacesInput
 from app.models.research import ResearchWebInput
 from app.models.route import GetRoutesInput, LocationRef
@@ -59,6 +60,7 @@ from app.services.intake_service import (
     resolve_date,
     today_at,
 )
+from app.services.learning_service import CATALOGUE, derive_hypotheses
 from app.services.itinerary_service import (
     arrival_penalty,
     build_itinerary,
@@ -569,6 +571,63 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "type": "function",
+        "name": "record_stated_preference",
+        "description": (
+            "Record something a traveller SAID about themselves that should outlast this "
+            "trip - 'I hate queueing', 'I'm not a morning person'. It stores a signal and "
+            "changes no profile and no trip: when enough evidence agrees across trips, a "
+            "card asks the traveller, and only the traveller answers. On a group trip you "
+            "must know who said it; if you cannot tell, ask - never guess."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "traveler_id": {
+                    "type": "string",
+                    "description": "Who said it. On a solo trip, the one traveller.",
+                },
+                "preference_key": {
+                    "type": "string",
+                    "enum": [
+                        "avoid_early_mornings",
+                        "relaxed_pace",
+                        "packed_pace",
+                        "parking_sensitive",
+                        "dislikes_queueing",
+                    ],
+                },
+                "quote": {
+                    "type": "string",
+                    "description": "Their words, verbatim - this is what 'Why?' will show them later.",
+                },
+            },
+            "required": ["traveler_id", "preference_key", "quote"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "review_learned_preferences",
+        "description": (
+            "What the system has learned or is starting to suspect about each traveller, "
+            "with the evidence behind it. Read-only: you may mention a proposable pattern "
+            "once and point at the Travel DNA card; you can never accept, dismiss or apply "
+            "one - only the traveller can."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "traveler_id": {
+                    "type": "string",
+                    "description": "Limit to one traveller. Omit for everyone.",
+                },
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
         "name": "generate_itinerary",
         "description": (
             "Lay out the whole trip from the places already stored: clusters them "
@@ -715,6 +774,10 @@ class ToolContext:
     pending_questions: list = field(default_factory=list)
     # Reads profiles so a snapshot can be made. Planning never reads them.
     profiles: Any = None
+    # Records learning signals immediately - a signal is a fact about what
+    # happened, not a proposal, so it takes no pending buffer (the _commit_now
+    # lesson: staged work the model must remember to apply sometimes is not).
+    learning: Any = None
     # decision name -> why it is now questionable, from a confirmed refresh.
     pending_stale: dict = field(default_factory=dict)
     # Brief facts learned this turn, as patch operations on /brief/...
@@ -2042,6 +2105,145 @@ async def _refresh_traveler_preferences(
     return payload
 
 
+_NEVER_APPLY_NOTE = (
+    "Recorded. If this becomes a proposable pattern, the Travel DNA card asks the "
+    "traveller; only the traveller answers - never apply it yourself."
+)
+
+
+async def _record_stated_preference(
+    context: ToolContext, args: dict[str, Any]
+) -> dict[str, Any]:
+    """Store one stated preference as a learning signal. Nothing else moves.
+
+    The signal is committed immediately rather than staged: it is a fact about
+    what was said, not a proposal awaiting apply_trip_patch - and staged work
+    the model must remember to apply sometimes is not (the intake lesson).
+    """
+    traveler_id = args.get("traveler_id", "")
+    traveler = next(
+        (t for t in context.state.travelers if t.traveler_id == traveler_id), None
+    )
+    if traveler is None:
+        known = [
+            {"traveler_id": t.traveler_id, "name": t.name} for t in context.state.travelers
+        ]
+        return {
+            "error": f"no traveler {traveler_id!r} on this trip",
+            "travelers": known,
+            "note": "Attribution is the whole point: name the person who said it, or ask.",
+        }
+    if not traveler.profile_id:
+        return {
+            "recorded": False,
+            "note": (
+                f"{traveler.name} has no stored profile, so nothing durable can be "
+                "recorded. Offer to create one if they want the system to learn."
+            ),
+        }
+    if context.learning is None:
+        return {"error": "learning storage is not available in this run"}
+
+    key = args.get("preference_key")
+    if key not in CATALOGUE:
+        return {"error": f"unknown preference_key {key!r}", "known": sorted(CATALOGUE)}
+
+    signal = LearningSignal(
+        profile_id=traveler.profile_id,
+        trip_id=context.state.trip_id,
+        preference_key=key,
+        strength="strong",  # said in words, not inferred from a click
+        source="stated",
+        context={
+            "quote": args.get("quote", ""),
+            "trip_title": context.state.metadata.title,
+        },
+    )
+    await context.learning.record(signal)
+
+    profile = None
+    if context.profiles is not None:
+        try:
+            profile = await context.profiles.get(traveler.profile_id)
+        except Exception:  # noqa: BLE001 - a dangling id degrades, not crashes
+            profile = None
+
+    pattern: dict[str, Any] | None = None
+    if profile is not None:
+        signals = await context.learning.list_for_profile(traveler.profile_id)
+        hypotheses = derive_hypotheses(profile, signals, settings=context.settings)
+        match = next((h for h in hypotheses if h.preference_key == key), None)
+        if match is not None:
+            pattern = {
+                "hypothesis_id": match.hypothesis_id,
+                "strength": match.strength,
+                "confidence": match.confidence,
+                "status": match.status,
+                "trips": len(match.trip_ids),
+            }
+
+    return {
+        "recorded": {
+            "traveler": traveler.name,
+            "preference_key": key,
+            "quote": signal.context["quote"],
+        },
+        "pattern": pattern,
+        "note": _NEVER_APPLY_NOTE,
+    }
+
+
+async def _review_learned_preferences(
+    context: ToolContext, args: dict[str, Any]
+) -> dict[str, Any]:
+    """What the evidence currently says about each traveller. Read-only."""
+    if context.learning is None or context.profiles is None:
+        return {"error": "learning storage is not available in this run"}
+
+    wanted = args.get("traveler_id")
+    travelers = [
+        t
+        for t in context.state.travelers
+        if t.profile_id and (wanted is None or t.traveler_id == wanted)
+    ]
+    if wanted and not travelers:
+        return {"error": f"no traveler {wanted!r} with a stored profile on this trip"}
+
+    report: list[dict[str, Any]] = []
+    for traveler in travelers:
+        try:
+            profile = await context.profiles.get(traveler.profile_id)
+        except Exception:  # noqa: BLE001
+            report.append({"traveler": traveler.name, "error": "profile not found"})
+            continue
+        signals = await context.learning.list_for_profile(traveler.profile_id)
+        hypotheses = derive_hypotheses(profile, signals, settings=context.settings)
+        report.append(
+            {
+                "traveler": traveler.name,
+                "traveler_id": traveler.traveler_id,
+                "learned": {
+                    path: {"summary": rec.summary, "accepted_at": rec.accepted_at.isoformat()}
+                    for path, rec in profile.learned.items()
+                },
+                "patterns": [
+                    {
+                        "hypothesis_id": h.hypothesis_id,
+                        "preference_key": h.preference_key,
+                        "status": h.status,
+                        "strength": h.strength,
+                        "confidence": h.confidence,
+                        "evidence": [e.line for e in h.evidence],
+                    }
+                    for h in hypotheses
+                ],
+                "dismissed_count": sum(1 for h in hypotheses if h.status == "dismissed"),
+            }
+        )
+
+    return {"travelers": report, "note": _NEVER_APPLY_NOTE}
+
+
 MAX_AUTO_DETAILS = 24
 
 
@@ -2504,6 +2706,8 @@ HANDLERS = {
     "research_web": _research_web,
     "review_group_preferences": _review_group_preferences,
     "refresh_traveler_preferences": _refresh_traveler_preferences,
+    "record_stated_preference": _record_stated_preference,
+    "review_learned_preferences": _review_learned_preferences,
     "discover_restaurants": _discover_restaurants,
     "get_weather_context": _get_weather_context,
     "search_airports": _search_airports,
