@@ -338,6 +338,27 @@ Defects the live runs exposed, most of them older than this milestone:
   for a solo trip rather than spending a planning round proving one person agrees with
   themselves.
 
+### A turn's findings no longer depend on the model remembering
+
+The same defect returned a fourth time, reported by a traveller who saw a reply pointing
+at flight and neighbourhood cards that were not there. The turn had run twelve tools
+successfully; `run_log` said `patches: None`. Thirteen revisions of brief edits, not one
+decision event, every option dead in a buffer.
+
+The prompt had promised those cards — *"every decision still open appears to the
+traveller as a card directly below your reply"* — without ever naming the tool that made
+it true. The model did exactly what it was told.
+
+**The runner now flushes staged findings at the end of every turn**, through the same
+`apply_patches`, the same gates, the same atomicity and revision bump. Committing a
+shortlist decides nothing: it puts the options in front of the traveller, and the choice
+stays theirs. Stopping a turn still writes nothing — stop means stop. A refused flush is
+recorded rather than swallowed, because silence is the failure this ends.
+
+Fixing it surfaced a second, unreached bug: `_apply_all` cleared every staging buffer on
+success, not just the ones its plan consumed, so any tool committing mid-turn would have
+discarded an earlier tool's places. A commit now drains the whole context.
+
 ### Milestone 9 acceptance
 
 ```bash

@@ -360,7 +360,37 @@ async def test_intake_writes_itself_rather_than_waiting_to_be_applied(session):
     assert "/brief/destination/city" in paths
     assert "/brief/party/adults" in paths
     assert "/brief/scope/flights" in paths
-    assert [op["path"] for op in asked["__patches__"][0]["operations"]] == ["/intake/questions/-"]
+    # A commit drains the whole context, so calling these two back to back
+    # without the runner in between re-sends the brief facts alongside the
+    # question. Harmless - they are the same `set` ops with the same values -
+    # and in a real turn the runner clears the buffers after each commit, so
+    # each fact is written once. What matters is that the question is in there.
+    assert "/intake/questions/-" in [
+        op["path"] for op in asked["__patches__"][0]["operations"]
+    ]
+
+
+async def test_a_commit_mid_turn_does_not_discard_earlier_staged_places(session):
+    """`_apply_all` clears every buffer on success, not just the ones its plan
+    consumed. So a tool that committed only its own work would wipe whatever an
+    earlier tool had staged and never written - thirty discovered places gone
+    because the traveller happened to mention a date afterwards. A commit
+    therefore drains the whole context, which is what makes the blanket clear
+    correct rather than lucky."""
+    from tests.conftest import make_entity
+
+    repo = TripRepository(session)
+    stored = await repo.create(blank_trip())
+    context = context_for(stored)
+
+    # A search ran first and staged a place.
+    context.pending_entity_ops.append(make_entity("ent_found", "Fuglen Tokyo"))
+
+    plan = await _update_trip_brief(context, {"destination_city": "Maui", "adults": 2})
+
+    paths = [op["path"] for op in plan["__patches__"][0]["operations"]]
+    assert "/entities/ent_found" in paths, "the earlier search's place must ride along"
+    assert "/brief/destination/city" in paths
 
 
 async def test_the_brief_reaches_the_store_through_the_normal_gates(session):

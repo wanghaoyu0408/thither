@@ -10,6 +10,7 @@ from datetime import date
 
 import pytest
 
+from app.agent import runner as runner_module
 from app.agent.context import summarize
 from app.agent.runner import AgentRunner
 from app.agent.tool_registry import TOOL_SCHEMAS
@@ -413,6 +414,143 @@ async def test_words_spoken_before_the_cap_are_kept_and_qualified(session, setti
     assert run.hit_iteration_limit is True
     assert "Here is what I have so far." in run.reply
     assert "ran out of steps" in run.reply
+
+
+# --- the end-of-turn flush ----------------------------------------------------
+
+
+class StagingLLM(ScriptedLLM):
+    """Scripts a turn that stages work and then just replies.
+
+    Standing in for the live turn that ran twelve real tools - airports,
+    flights, places, restaurants, neighbourhoods - and never called
+    `apply_trip_patch`.
+    """
+
+
+async def test_a_turn_that_never_applies_still_saves_what_it_found(session, settings):
+    """The bug this exists for: a reply pointing at cards that were never made.
+
+    A live turn searched flights and neighbourhoods, told the traveller to
+    choose from "the cards just below", and committed nothing - so the trip's
+    audit trail held only brief edits and the workspace showed no cards at
+    all. The turn's findings now land whether or not the model remembers.
+    """
+    from app.db.repository import TripRepository
+
+    stored = await TripRepository(session).create(sample_state())
+
+    llm = ScriptedLLM([call("validate_itinerary", {}), say("Pick one of the cards below.")])
+    runner = await make_runner(session, llm, settings)
+
+    # Stage a decision the way search_flights would, on the context the runner
+    # builds - reachable because dispatch runs against that same context.
+    original_dispatch = runner_module.dispatch
+
+    async def staging_dispatch(context, name, arguments):
+        context.pending_decisions["hotel_area"] = {
+            "decision_id": "dec_area",
+            "status": "shortlisted",
+            "options": [
+                {"option_id": "opt_ueno", "data": {"area_name": "Ueno"}, "status": "candidate"},
+                {"option_id": "opt_gion", "data": {"area_name": "Gion"}, "status": "candidate"},
+            ],
+        }
+        return {"ok": True}
+
+    runner_module.dispatch = staging_dispatch
+    try:
+        run = await runner.run(stored, "where should we stay?")
+    finally:
+        runner_module.dispatch = original_dispatch
+
+    assert run.reply == "Pick one of the cards below."
+    assert run.error is None
+    assert [p.applied for p in run.patches] == [True]
+
+    reread = await TripRepository(session).get(stored.trip_id)
+    assert reread.decisions.hotel_area is not None
+    assert len(reread.decisions.hotel_area.options) == 2
+    assert reread.revision == stored.revision + 1
+
+
+async def test_stopping_a_turn_saves_nothing(session, settings):
+    """Stop means stop: the searches are discarded rather than written."""
+    from app.agent.run_control import RunControl
+    from app.db.repository import TripRepository
+
+    stored = await TripRepository(session).create(sample_state())
+    control = RunControl(trip_id=stored.trip_id)
+
+    original_dispatch = runner_module.dispatch
+
+    async def staging_then_cancel(context, name, arguments):
+        context.pending_decisions["hotel_area"] = {
+            "decision_id": "dec_area",
+            "status": "shortlisted",
+            "options": [],
+        }
+        control.cancel()
+        return {"ok": True}
+
+    llm = ScriptedLLM([call("validate_itinerary", {}), say("never reached")])
+    runner = await make_runner(session, llm, settings)
+    runner_module.dispatch = staging_then_cancel
+    try:
+        run = await runner.run(stored, "where should we stay?", control=control)
+    finally:
+        runner_module.dispatch = original_dispatch
+
+    assert run.cancelled is True
+    assert run.patches == []
+
+    reread = await TripRepository(session).get(stored.trip_id)
+    assert reread.revision == stored.revision
+    assert reread.decisions.hotel_area is None
+
+
+async def test_a_failed_flush_is_reported_not_swallowed(session, settings):
+    """A refused flush means the reply describes cards that are not there.
+
+    Reporting nothing would be the same silence the flush exists to end, so
+    the rejection reaches the run log.
+    """
+    from app.db.repository import TripRepository
+
+    stored = await TripRepository(session).create(sample_state())
+
+    original_dispatch = runner_module.dispatch
+
+    async def stage_something_invalid(context, name, arguments):
+        # A decision option citing evidence the trip does not hold: exactly
+        # what check_integrity refuses.
+        context.pending_decisions["hotel_area"] = {
+            "decision_id": "dec_area",
+            "status": "shortlisted",
+            "options": [
+                {
+                    "option_id": "opt_x",
+                    "data": {"area_name": "Ueno"},
+                    "status": "candidate",
+                    "evidence_refs": ["ev_does_not_exist"],
+                }
+            ],
+        }
+        return {"ok": True}
+
+    llm = ScriptedLLM([call("validate_itinerary", {}), say("Pick one of the cards below.")])
+    runner = await make_runner(session, llm, settings)
+    runner_module.dispatch = stage_something_invalid
+    try:
+        run = await runner.run(stored, "where should we stay?")
+    finally:
+        runner_module.dispatch = original_dispatch
+
+    assert run.error is not None
+    assert "could not be saved" in run.error
+
+    reread = await TripRepository(session).get(stored.trip_id)
+    assert reread.revision == stored.revision  # all-or-nothing, as ever
 
 
 async def test_a_model_outage_changes_nothing_and_says_so(session, settings):

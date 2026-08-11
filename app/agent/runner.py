@@ -8,6 +8,7 @@ arithmetic lives in the services.
 
 import asyncio
 import json
+import logging
 import time
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -18,7 +19,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent.context import summarize
 from app.agent.prompts import build_instructions
 from app.agent.run_control import RunControl
-from app.agent.tool_registry import TOOL_SCHEMAS, ToolContext, dispatch, serialize
+from app.agent.tool_registry import (
+    TOOL_SCHEMAS,
+    ToolContext,
+    dispatch,
+    serialize,
+    staged_operations,
+)
 from app.config import Settings, get_settings
 from app.db.repository import LearningRepository, ProfileRepository, TripRepository
 from app.models.patch import PatchResult, TripPatch
@@ -26,6 +33,8 @@ from app.models.trip import TripState
 from app.providers.openai_llm import LLMClient, LLMTurn
 from app.services.proposal_store import ProposalStore
 from app.services.toolbox import Toolbox
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -173,6 +182,7 @@ class AgentRunner:
 
             if not turn.wants_tools:
                 run.reply = turn.text or ""
+                await self._flush_staged(context, run)
                 return run
 
             for call in turn.tool_calls:
@@ -228,6 +238,7 @@ class AgentRunner:
             "had more to do. Tell me which part to focus on and I will do that one thing."
         )
         run.reply = f"{turn.text}\n\n{cut_short}" if turn.text else cut_short
+        await self._flush_staged(context, run)
         return run
 
     async def _respond(
@@ -264,6 +275,53 @@ class AgentRunner:
         with suppress(asyncio.CancelledError):
             await respond
         return None
+
+    async def _flush_staged(self, context: ToolContext, run: AgentRun) -> None:
+        """Save what this turn found but nobody committed.
+
+        The fourth appearance of the same defect (ledger 12, 14, 22). A live
+        turn ran twelve tools - airports, flights, places, restaurants,
+        neighbourhoods - wrote a reply pointing at "the cards just below", and
+        never called `apply_trip_patch`. So there were no cards: every option
+        died in a buffer, the trip's audit trail showed nothing but brief
+        edits, and the traveller was told to choose from a list that did not
+        exist. Twice before, the answer was to strengthen the prompt; twice it
+        came back.
+
+        The prompt already promises those cards. This is what makes the
+        promise true rather than hopeful. Nothing is weakened: the same
+        `_apply_all`, the same `apply_patches`, the same gates, atomicity and
+        revision bump - the only change is that the model cannot forget.
+
+        Deliberately not called from `_stopped`: a traveller who hits stop is
+        asking for nothing further to be written, and that is worth more than
+        the searches it discards.
+        """
+        entity_ops, other_ops = staged_operations(context)
+        operations = entity_ops + other_ops
+        if not operations:
+            return
+
+        outcome = await self._apply_all(
+            context,
+            run,
+            [
+                {
+                    "operations": operations,
+                    "scope": None,
+                    "reason": "save what this turn found",
+                    "unlock_targets": [],
+                }
+            ],
+        )
+        if not outcome.get("applied"):
+            # Never silent. A flush that was refused means the reply describes
+            # cards that are not there, which is exactly the failure this
+            # method exists to end - so it is recorded rather than swallowed.
+            errors = outcome.get("errors") or []
+            detail = errors[0]["message"] if errors else "the staged work was refused"
+            run.error = f"this turn's findings could not be saved: {detail}"
+            logger.warning("end-of-turn flush rejected for %s: %s", run.trip_id, detail)
 
     def _stopped(self, run: AgentRun) -> AgentRun:
         """The turn as it stands at the moment the traveller stopped it."""

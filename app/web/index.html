@@ -956,6 +956,7 @@ function resetWorkspace() {
   S.tripId = null; S.trip = null; S.over = null; S.intake = null;
   S.decisions = null; S.lastDiff = null; S.mapDay = null;
   S.messages = []; S.open.clear(); S.selectedItem = null;
+  rememberTrip(null);
   parkMap();
   $("work").innerHTML = `<div class="welcome">
     <h2>A trip you can see, not just read about</h2>
@@ -1015,10 +1016,23 @@ async function createTrip(e) {
   finally { btn.disabled = false; }
 };
 
+/** Which trip was open, so closing the laptop does not lose your place.
+ *  Wrapped because a browser with storage disabled must not take the app
+ *  down over a convenience. */
+const TRIP_KEY = "whither.trip";
+function rememberTrip(id) {
+  try { id ? localStorage.setItem(TRIP_KEY, id) : localStorage.removeItem(TRIP_KEY); }
+  catch {}
+}
+function rememberedTrip() {
+  try { return localStorage.getItem(TRIP_KEY); } catch { return null; }
+}
+
 async function selectTrip(id) {
   S.tripId = id; S.lastDiff = null; S.mapDay = null; S.decisions = null; S.intake = null;
   S.open.clear(); S.selectedItem = null; S.messages = []; S.learning = {};
   S.dismissedChoosers.clear();
+  rememberTrip(id);
   stopRunPoll();
   setBusyUI(false);
   parkMap();
@@ -3646,8 +3660,24 @@ $("input").addEventListener("input", autosize);
 $("sideToggle").onclick = openTrips;
 
 watchForPhotos();
-// Nothing is selected yet, so the drawer is where a trip comes from.
-openTrips();
+
+/** Reopen whatever was open. A laptop lid is not a decision to start over, so
+ *  the last trip comes back on its own - and if it has since been deleted, the
+ *  drawer opens exactly as it always did rather than leaving a dead screen. */
+(async () => {
+  const saved = rememberedTrip();
+  if (saved) {
+    try {
+      await selectTrip(saved);
+      return;
+    } catch {
+      // Deleted, or the store moved on. resetWorkspace clears the half-set
+      // state selectTrip left behind, and forgets the id.
+      resetWorkspace();
+    }
+  }
+  openTrips();
+})();
 </script>
 </body>
 </html>

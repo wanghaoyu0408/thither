@@ -179,6 +179,11 @@ one conversation and the cards are in it - and do not ask them to type an
 option's name back at you. Choosing by card is recorded properly; choosing by
 prose depends on you re-reading it correctly later.
 
+Shortlists save themselves at the end of your turn, so you do not need
+`apply_trip_patch` for them - that tool is for applying an itinerary proposal.
+Committing a shortlist decides nothing anyway: it puts the options in front of
+the traveller, and the choice stays theirs.
+
 ## Respecting the user
 
 Never modify a locked item. If the user wants a locked thing changed, ask them

@@ -88,6 +88,22 @@ async def test_the_page_names_the_travel_dna_surface_and_the_new_tools(client):
         assert f"dna-badge.{word}" in body or word in body
 
 
+async def test_the_page_remembers_which_trip_you_had_open(client):
+    """Closing a laptop is not a decision to start over.
+
+    The page held the selected trip in memory only, so any reload landed on
+    "no trip selected" with the drawer open - which is what a traveller sees
+    after their machine sleeps and the tab is discarded.
+    """
+    body = (await client.get("/")).text
+
+    assert "whither.trip" in body
+    assert "localStorage" in body
+    # A browser with storage disabled must not take the app down over a
+    # convenience, and a deleted trip must fall back to the drawer.
+    assert "rememberedTrip" in body and "resetWorkspace()" in body
+
+
 async def test_the_overview_endpoint_derives_what_the_trip_cannot_store(client, session):
     """Validation and conflicts are computed at read time, so a client cannot
     get them by reading the trip - and should not reimplement either rule."""

@@ -794,6 +794,15 @@ class ToolContext:
         return max(0, self.settings.planning_search_budget - self.searches_used)
 
 
+# Said by every tool that shortlists something. It is true because the runner
+# flushes staged work at the end of the turn - before that it was a hope, and a
+# live turn ran twelve tools, promised "the cards below", and left none.
+SHORTLIST_SAVED = (
+    "This shortlist is saved with the trip at the end of your turn - you do not need "
+    "apply_trip_patch for it. Tell the traveller the cards are just below and let them pick."
+)
+
+
 def _proposal_view(proposal: ItineraryProposal) -> dict[str, Any]:
     return {
         "proposal_id": proposal.proposal_id,
@@ -860,6 +869,11 @@ async def _search_places(context: ToolContext, args: dict[str, Any]) -> dict[str
         ],
         "stored_in_registry": bool(stored),
         "searches_left": context.budget_left(),
+        "note": (
+            "Saved with the trip at the end of your turn; no apply_trip_patch needed."
+            if stored
+            else "Nothing was stored, because store was false."
+        ),
     }
 
 
@@ -1022,7 +1036,7 @@ async def _research_web(context: ToolContext, args: dict[str, Any]) -> dict[str,
         "warnings": result.warnings,
         "note": (
             "Discovery and taste only. Do not quote hours, addresses, prices or travel "
-            "times from these - verify with Google first."
+            f"times from these - verify with Google first. {SHORTLIST_SAVED}"
         ),
     }
 
@@ -1355,11 +1369,11 @@ async def _update_trip_brief(context: ToolContext, args: dict[str, Any]) -> dict
     working = _working_state(context)
     if ready_to_confirm(working) and working.intake.status == "collecting":
         context.pending_intake_status = "awaiting_confirmation"
-        operations = operations + [
-            {"op": "set", "path": "/intake/status", "value": "awaiting_confirmation"}
-        ]
 
-    return _commit_now(operations, "record what the traveller said")
+    # Both facts are already in the buffers, so committing the whole context
+    # writes exactly these operations - and takes anything an earlier tool
+    # staged along with them, which the blanket clear would otherwise discard.
+    return _commit_staged(context, "record what the traveller said")
 
 
 async def _ask_clarifications(context: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
@@ -1432,10 +1446,7 @@ async def _ask_clarifications(context: ToolContext, args: dict[str, Any]) -> dic
         }
 
     context.pending_clarifications.extend(staged)
-    return _commit_now(
-        [{"op": "add", "path": "/intake/questions/-", "value": q} for q in staged],
-        f"ask {len(staged)} clarification(s)",
-    )
+    return _commit_staged(context, f"ask {len(staged)} clarification(s)")
 
 
 async def _get_weather_context(context: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
@@ -1547,7 +1558,7 @@ async def _search_airports(context: ToolContext, args: dict[str, Any]) -> dict[s
             for airport in result.results
         ],
         "warnings": result.warnings,
-        "note": "Drive times come from the Routes API. Never estimate one yourself.",
+        "note": f"Drive times come from the Routes API. Never estimate one yourself. {SHORTLIST_SAVED}",
     }
 
 
@@ -1703,6 +1714,7 @@ async def _search_flights(context: ToolContext, args: dict[str, Any]) -> dict[st
         ],
         "warnings": [*result.warnings, *group_warnings],
         "profile_used": profile.name if profile else None,
+        "note": SHORTLIST_SAVED if ranked else "no flights matched; the search itself worked",
     }
 
     if trade_off is not None:
@@ -1762,7 +1774,7 @@ async def _recommend_hotel_areas(context: ToolContext, args: dict[str, Any]) -> 
         "warnings": result.warnings,
         "note": (
             "Travel minutes came from the Routes API. Present the ranking with those figures "
-            "and let the traveller choose, then call apply_trip_patch to store the decision. "
+            f"and let the traveller choose. {SHORTLIST_SAVED} "
             "Only after an area is chosen does search_hotels make sense."
         ),
     }
@@ -1871,7 +1883,7 @@ async def _search_hotels(context: ToolContext, args: dict[str, Any]) -> dict[str
         "note": (
             "Ratings are listed separately on purpose. Never average them, and never compare "
             "a star category against a guest score - they measure different things. Quote a "
-            "price with the site that offered it."
+            f"price with the site that offered it. {SHORTLIST_SAVED}"
         ),
     }
 
@@ -2529,17 +2541,26 @@ async def _validate_itinerary(context: ToolContext, args: dict[str, Any]) -> dic
     }
 
 
-async def _apply_trip_patch(context: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
-    proposal_id = args.get("proposal_id") or ""
-    proposal = context.proposals.get(proposal_id)
+def staged_operations(context: ToolContext) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Everything this turn has staged, as `(entity_ops, other_ops)`.
 
+    Places and the evidence backing them come back separately because they
+    have to land *before* anything that references them: a restaurant
+    decision's options carry `entity_id` and `evidence_refs`, and
+    `check_integrity` rejects the whole patch if either dangles. The two lists
+    are one atomic unit - concatenate them, never commit one without the other.
+
+    Shared by `_apply_trip_patch`, by the intake tools that commit as they go,
+    and by the runner's end-of-turn flush, so there is exactly one description
+    of what "staged" means.
+    """
     # Decisions are the one thing worth committing without an itinerary
     # proposal: recommending neighbourhoods produces a Decision and no days.
-    decision_ops = [
+    other_ops = [
         _decision_op(context.state, name, value)
         for name, value in context.pending_decisions.items()
     ]
-    decision_ops += _stale_ops(context)
+    other_ops += _stale_ops(context)
 
     # Preference snapshots and the questions a blocking conflict raises. Both go
     # in unscoped, alongside decisions: they are facts about the group, not
@@ -2547,12 +2568,12 @@ async def _apply_trip_patch(context: ToolContext, args: dict[str, Any]) -> dict[
     index_of = {
         traveler.traveler_id: position for position, traveler in enumerate(context.state.travelers)
     }
-    decision_ops += [
+    other_ops += [
         {"op": "set", "path": f"/travelers/{index_of[traveler_id]}/preferences", "value": value}
         for traveler_id, value in context.pending_traveler_prefs.items()
         if traveler_id in index_of
     ]
-    decision_ops += [
+    other_ops += [
         {"op": "add", "path": "/open_questions/-", "value": question}
         for question in context.pending_questions
     ]
@@ -2560,8 +2581,8 @@ async def _apply_trip_patch(context: ToolContext, args: dict[str, Any]) -> dict[
     # Intake: the brief facts learned this turn, the questions to ask, and the
     # status if the deterministic check said the brief is now complete. All
     # unscoped - the brief is not about any one day.
-    decision_ops += list(context.pending_brief_ops)
-    decision_ops += [
+    other_ops += list(context.pending_brief_ops)
+    other_ops += [
         {
             "op": "set" if entity_id in context.state.arrival else "add",
             "path": f"/arrival/{entity_id}",
@@ -2569,22 +2590,21 @@ async def _apply_trip_patch(context: ToolContext, args: dict[str, Any]) -> dict[
         }
         for entity_id, arrival in context.pending_arrival.items()
     ]
-    decision_ops += [
+    other_ops += [
         {"op": "add", "path": "/intake/questions/-", "value": question}
         for question in context.pending_clarifications
     ]
     if context.pending_intake_status:
-        decision_ops.append(
+        other_ops.append(
             {"op": "set", "path": "/intake/status", "value": context.pending_intake_status}
         )
 
-    reason = args.get("reason", "agent update")
-
     # Places discovered or refreshed this turn have to land before anything
-    # references them. Built *before* the no-proposal branch: they are staged
-    # work in their own right, and a version of this that computed them after
-    # threw away thirty discovered places whenever the model committed without
-    # an itinerary proposal - which it does routinely, having just gathered them.
+    # references them. Built unconditionally: they are staged work in their own
+    # right, and a version of this that computed them only on the proposal
+    # branch threw away thirty discovered places whenever the model committed
+    # without an itinerary proposal - which it does routinely, having just
+    # gathered them.
     entity_ops = [
         {
             "op": "add" if entity.entity_id not in context.state.entities else "set",
@@ -2602,6 +2622,29 @@ async def _apply_trip_patch(context: ToolContext, args: dict[str, Any]) -> dict[
         }
         for evidence_id, record in context.pending_evidence.items()
     ]
+
+    return entity_ops, other_ops
+
+
+def _commit_staged(context: ToolContext, reason: str) -> dict[str, Any]:
+    """Commit everything staged so far, immediately, through the one path.
+
+    Takes the *whole* context rather than a caller's own operations because
+    `_apply_all` clears every buffer on a successful commit, not just the ones
+    the plan consumed. A tool that committed only its own work would therefore
+    wipe whatever an earlier tool had staged and never written - so a commit
+    drains the context, and the blanket clear becomes correct by construction.
+    """
+    entity_ops, other_ops = staged_operations(context)
+    return _commit_now(entity_ops + other_ops, reason)
+
+
+async def _apply_trip_patch(context: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    proposal_id = args.get("proposal_id") or ""
+    proposal = context.proposals.get(proposal_id)
+
+    entity_ops, decision_ops = staged_operations(context)
+    reason = args.get("reason", "agent update")
 
     if proposal is None:
         # Asking for a specific proposal that is not there is an error, even
