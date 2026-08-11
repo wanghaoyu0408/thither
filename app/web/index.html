@@ -1061,9 +1061,12 @@ function adopt(result) {
   S.over = {
     trip: result.trip, validation: result.validation,
     conflicts: result.conflicts, blocking: result.blocking,
-    // ActionResult carries neither; keep what the overview last said rather
-    // than blanking the reflection card because someone moved a museum.
+    // ActionResult carries none of these; keep what the overview last said
+    // rather than blanking the reflection card because someone moved a museum.
+    // `next_steps` is re-read below rather than carried over - what the trip is
+    // waiting for is exactly what an action tends to change.
     reflection: S.over?.reflection, learning: S.over?.learning,
+    next_steps: S.over?.next_steps,
   };
   S.lastDiff = result.diff && result.diff.length ? result.diff : null;
   // The decisions view is derived server-side - relevance, lock state and which
@@ -1076,6 +1079,9 @@ function adopt(result) {
   // Intake is derived too: answering a question or editing a fact can change
   // what is still missing, and therefore whether planning may start.
   loadIntake().then(render);
+  // And so is next_steps - choosing a neighbourhood is what makes finding a
+  // hotel possible, and the line under the composer should say so.
+  refresh().then(render);
 }
 
 async function loadDecisions() {
@@ -1537,6 +1543,7 @@ function scrollStreamToEnd() {
  *  waiting. This is the pointer; it goes quiet the moment the card is
  *  actually visible. */
 function paintAttention() {
+  paintHint();
   const bar = $("attentionBar");
   const want = attentionSummary();
   // While the agent works, what it is doing is the more useful news, and the
@@ -1557,6 +1564,19 @@ function paintAttention() {
 
   bar.hidden = anyOnScreen;
   if (!anyOnScreen) $("attentionText").textContent = want.text;
+}
+
+/** The line under the composer. It used to be set once and never again, so a
+ *  trip sitting between steps said "Shift+Enter for a new line" and nothing
+ *  about what it was waiting for - which is how a settled trip reads as a
+ *  finished one. */
+function paintHint() {
+  const hint = $("hint");
+  if (!hint || !S.tripId || S.busy) return;
+  const steps = agentSteps();
+  hint.textContent = (!pendingChoices().length && steps.length)
+    ? `Next: ${steps.map((s) => s.label.toLowerCase()).join(", then ")}`
+    : "Enter to send · Shift+Enter for a new line";
 }
 
 /** Bring an element to the top of the stream by arithmetic rather than by
@@ -2166,6 +2186,15 @@ const CHOICE_TITLES = {
   arrival_airport: "Fly into which airport?",
 };
 const CHOICE_ORDER = ["hotel_area", "hotel", "flights", "departure_airport", "arrival_airport"];
+// The same decisions as plain nouns. CHOICE_TITLES are questions, which read
+// badly once the answer is known: "Where should you stay? Wicker Park".
+const CHOICE_NOUNS = {
+  hotel_area: "neighbourhood",
+  hotel: "hotel",
+  flights: "flight",
+  departure_airport: "departure airport",
+  arrival_airport: "arrival airport",
+};
 
 /** Every decision genuinely waiting on the traveller, in the order they should
  *  be made. All of them, not the first: the agent counts what the state holds
@@ -2183,10 +2212,49 @@ function pendingChoices() {
   }).filter(Boolean);
 }
 
+/** What the trip is waiting on the agent for, if anything. Server-derived, so
+ *  the screen, the model and the progress strip all read one answer. */
+function agentSteps() {
+  return (S.over?.next_steps || []).filter((s) => s.kind !== "choose");
+}
+
+/** Choosing the last card is the traveller saying "go on".
+ *
+ *  A selection used to be a state change with no consequence: the card
+ *  vanished, the attention bar went quiet, and planning stopped - while the
+ *  reply above still said "once you have chosen I will find flights and
+ *  hotels". Nothing carried that promise anywhere. Now the last choice starts
+ *  the next turn, once, with the choices named.
+ *
+ *  Only when nothing is left to pick, so three cards cost one turn and not
+ *  three. */
+async function continueIfSettled() {
+  // Both re-reads are load-bearing. adopt() reloads decisions asynchronously,
+  // so pendingChoices() would otherwise test the state as it was *before* this
+  // choice; and adopt() rebuilds S.over from the action's result, which
+  // carries no next_steps at all - the very thing the choice just changed.
+  await Promise.all([loadDecisions(), refresh()]);
+  if (pendingChoices().length || !agentSteps().length) return;
+  if (S.busy || !S.tripId) return;
+
+  const chosen = (S.decisions || [])
+    .filter((d) => d.selected && CHOICE_ORDER.includes(d.name))
+    .map((d) => `${CHOICE_NOUNS[d.name] || d.name}: ${d.selected.label}`);
+  if (!chosen.length) return;
+
+  // Built from the stored labels rather than composed prose. This is recorded
+  // as the traveller's own message and replayed to the model on every later
+  // turn, so it says what they chose and nothing they did not say.
+  await send(`✓ ${chosen.join(" · ")} — please carry on from here.`);
+}
+
 function chooserHtml(view) {
   const card = (o) => `<div class="choice">
     <b>${esc(o.label)}</b>
-    ${figuresHtml(o.figures)}
+    ${/* `metrics`, not `figures` - OptionView has no such field, so every
+          chooser card ever rendered showed pros and cons and not one number,
+          and the agent had to copy the whole ranking into its reply. */ ""}
+    ${figuresHtml(o.metrics)}
     ${(o.pros || []).slice(0, 3).map((p) => `<p class="pro">✓ ${esc(p)}</p>`).join("")}
     ${(o.cons || []).slice(0, 2).map((c) => `<p class="con">✕ ${esc(c)}</p>`).join("")}
     <div class="go">
@@ -3129,9 +3197,13 @@ function wireWorkspace() {
     const cut = value.lastIndexOf("|");
     return [value.slice(0, cut), value.slice(cut + 1)];
   };
-  on("decselect", (v) => {
+  on("decselect", async (v) => {
     const [name, option] = pair(v);
-    act(`/decisions/${name}/select`, post({ option_id: option }), (r) => r.summary);
+    const result = await act(
+      `/decisions/${name}/select`, post({ option_id: option }), (r) => r.summary);
+    // Only on a real change: re-choosing what is already chosen applies
+    // nothing, and must not spend a turn saying so.
+    if (result?.applied) await continueIfSettled();
   });
   on("decreject", (v) => {
     const [name, option] = pair(v);
@@ -3454,19 +3526,17 @@ function paintBusy(snap) {
 
   // Upcoming rows only when the trip's own state says that work is wanted and
   // it has not started - never a promise about what the agent will do next.
-  const brief = S.trip?.brief;
-  const upcoming = [];
-  if (brief) {
-    const started = new Set(seen.concat(currentPhase ? [currentPhase] : []));
-    if (brief.scope.flights === "plan" && !started.has("flights")
-        && !(S.trip.decisions?.flights?.options || []).length)
-      upcoming.push("Find flight options");
-    if (brief.scope.lodging === "plan" && !started.has("hotels")
-        && !(S.trip.decisions?.hotel?.options || []).length)
-      upcoming.push("Find a place to stay");
-    if (!(S.trip.itinerary.days || []).length && !started.has("itinerary"))
-      upcoming.push("Build the daily itinerary");
-  }
+  // The rules used to live here in JavaScript, a third copy beside
+  // SINGLETON_DECISIONS and CHOICE_ORDER that disagreed with both; they are
+  // now `next_steps` on the overview, derived once on the server.
+  const started = new Set(seen.concat(currentPhase ? [currentPhase] : []));
+  const PHASE_FOR_STEP = {
+    flights: "flights", departure_airport: "flights", arrival_airport: "flights",
+    hotel_area: "areas", hotel: "hotels", itinerary: "itinerary",
+  };
+  const upcoming = agentSteps()
+    .filter((step) => !started.has(PHASE_FOR_STEP[step.what]))
+    .map((step) => step.label);
 
   const secs = Math.round((snap?.elapsed_ms ?? 0) / 1000);
   const stopping = !!snap?.cancelled;

@@ -11,6 +11,7 @@ from app.models.common import utcnow
 from app.models.trip import TripState, TripTraveler
 from app.services.conflict_service import detect_conflicts
 from app.services.decision_service import label_for
+from app.services.next_step import next_steps
 from app.services.intake_service import (
     missing_blocking,
     outstanding_questions,
@@ -233,6 +234,15 @@ def summarize(state: TripState) -> dict[str, Any]:
                 "stale_reason": decision.stale_reason,
             }
             for name, decision in state.decisions.iter_decisions()
+        ],
+        # What the trip is waiting for, computed the same way the screen
+        # computes it. `iter_decisions` above only yields decisions that exist,
+        # so a trip that has never compared neighbourhoods shows no gap at all -
+        # the model could see what was chosen but never what was outstanding,
+        # let alone what a choice had just unblocked.
+        "next_steps": [
+            {"kind": step.kind, "what": step.what, "label": step.label}
+            for step in next_steps(state)
         ],
         "entities_total": len(state.entities),
         "entities": [_entity_line(state, entity_id) for entity_id in shown],

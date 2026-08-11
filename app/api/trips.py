@@ -18,6 +18,7 @@ from app.models.trip import TripBrief, TripState, TripSummary, TripTraveler
 from app.services.conflict_service import detect_conflicts, unresolved_blocking
 from app.services.intake_service import today_at
 from app.services.learning_service import derive_hypotheses
+from app.services.next_step import next_steps
 from app.services.validation_service import validate_itinerary
 
 router = APIRouter(prefix="/trips", tags=["trips"])
@@ -178,6 +179,10 @@ async def get_trip_overview(trip_id: str, session: SessionDep) -> dict[str, Any]
         ],
         "reflection": {"due": reflection_due, "submitted": state.reflection is not None},
         "learning": learning,
+        # What the trip is waiting for. Derived here rather than in the browser
+        # so the screen, the model and the progress strip cannot disagree about
+        # what comes next.
+        "next_steps": [step.model_dump(mode="json") for step in next_steps(state)],
     }
 
 

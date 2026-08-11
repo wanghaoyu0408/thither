@@ -359,6 +359,40 @@ Fixing it surfaced a second, unreached bug: `_apply_all` cleared every staging b
 success, not just the ones its plan consumed, so any tool committing mid-turn would have
 discarded an earlier tool's places. A commit now drains the whole context.
 
+### Choosing a card is the traveller saying "go on"
+
+Reported by the same traveller a day later: they picked their departure
+airport, arrival airport and neighbourhood, and planning stopped. Three
+revisions committed correctly; the audit trail ended there.
+
+A selection was a state change with no consequence. The card vanished, the
+attention bar went quiet, and the only code path in the browser that started
+an agent turn was the Send button — beside a reply promising to find flights
+and hotels once they had chosen.
+
+**The last choice now starts the next turn**, naming what was chosen, and the
+agent stops again at the next set of cards. Three cards cost one turn, not
+three; re-choosing what is already chosen costs none. Stopping is still the
+Send button, which becomes Stop while a turn runs.
+
+Fixing it needed something that did not exist: **a single answer to "what is
+this trip waiting for"**. Three places had their own — `SINGLETON_DECISIONS`,
+the browser's `CHOICE_ORDER`, and fifteen lines inside the progress strip —
+and none of them encoded a dependency, so nothing could say that a hotel waits
+on its neighbourhood. `next_step.next_steps` is now that answer, derived
+server-side and read by the overview, the model's own state projection, and
+the progress strip. The line under the composer says it out loud:
+
+```
+Next: find flight options, then find a place to stay, then build the daily itinerary
+```
+
+And the choice cards show their figures again. They had rendered `o.figures`,
+which `OptionView` does not have — so every card ever shown carried a name and
+its pros and cons and not one number, while the full decisions panel showed
+them correctly. That is why the agent kept copying whole rankings into its
+prose: the cards it pointed at were empty.
+
 ### Milestone 9 acceptance
 
 ```bash

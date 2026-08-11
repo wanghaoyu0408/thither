@@ -104,6 +104,27 @@ async def test_selecting_an_option_commits_and_reports_from_the_reloaded_row(cli
     assert persisted.decisions.hotel_area.status == "selected"
 
 
+async def test_the_overview_says_what_a_choice_has_unblocked(client, session):
+    """Choosing used to change the trip and tell nobody what it made possible.
+
+    The browser reads this after every action; it is what turns the last card
+    into "now find a hotel" instead of a screen that goes quiet.
+    """
+    trip = await stored(session)
+
+    before = (await client.get(f"/trips/{trip.trip_id}/overview")).json()["next_steps"]
+    assert ("hotel", "research") not in [(s["what"], s["kind"]) for s in before]
+    assert ("hotel_area", "choose") in [(s["what"], s["kind"]) for s in before]
+
+    await client.post(
+        f"/trips/{trip.trip_id}/decisions/hotel_area/select", json={"option_id": "opt_ginza"}
+    )
+
+    after = (await client.get(f"/trips/{trip.trip_id}/overview")).json()["next_steps"]
+    assert ("hotel", "research") in [(s["what"], s["kind"]) for s in after]
+    assert ("hotel_area", "choose") not in [(s["what"], s["kind"]) for s in after]
+
+
 async def test_selecting_again_changes_nothing_and_spends_no_revision(client, session):
     trip = await stored(session)
     first = (

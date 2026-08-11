@@ -88,6 +88,30 @@ async def test_the_page_names_the_travel_dna_surface_and_the_new_tools(client):
         assert f"dna-badge.{word}" in body or word in body
 
 
+async def test_the_choice_cards_show_their_figures(client):
+    """`OptionView` has `metrics`; the chooser card read `o.figures`.
+
+    No such field, so every card ever rendered showed a name and its pros and
+    cons and not one number - which is why the agent had to copy the whole
+    ranking into its reply, and why choosing felt like a guess.
+    """
+    body = (await client.get("/")).text
+
+    assert "figuresHtml(o.metrics)" in body
+    assert "figuresHtml(o.figures)" not in body
+
+
+async def test_the_page_carries_on_after_the_last_choice(client):
+    """A selection used to be a state change with no consequence: the card
+    vanished, the bar went quiet, and planning stopped - beside a reply
+    promising to find flights once the traveller had chosen."""
+    body = (await client.get("/")).text
+
+    assert "continueIfSettled" in body
+    assert "agentSteps" in body          # reads the server's next_steps
+    assert "paintHint" in body           # and says what is next when idle
+
+
 async def test_the_page_remembers_which_trip_you_had_open(client):
     """Closing a laptop is not a decision to start over.
 
