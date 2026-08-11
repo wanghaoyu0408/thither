@@ -131,6 +131,19 @@ async def test_the_page_starts_planning_when_the_brief_is_confirmed(client):
     assert "startPlanning" in body       # and the code that keeps it
 
 
+async def test_the_page_can_answer_a_fork(client):
+    """The agent reached a dead end, named the way out in prose, and left
+    nothing to press. Every one of its choices is a button now."""
+    body = (await client.get("/")).text
+
+    assert "pendingProposals" in body
+    assert "proposalHtml" in body
+    assert 'data-answer=' in body
+    # And a waiting fork holds back the auto-continue: planning is stuck behind
+    # it by definition.
+    assert "pendingProposals().length || pendingChoices().length" in body
+
+
 async def test_the_page_carries_on_after_the_last_choice(client):
     """A selection used to be a state change with no consequence: the card
     vanished, the bar went quiet, and planning stopped - beside a reply

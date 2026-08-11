@@ -359,6 +359,39 @@ Fixing it surfaced a second, unreached bug: `_apply_all` cleared every staging b
 success, not just the ones its plan consumed, so any tool committing mid-turn would have
 discarded an earlier tool's places. A commit now drains the whole context.
 
+### A fork in the road is a card, not a paragraph
+
+No airline flew ALB → MDW on the chosen dates. The agent worked out the right
+answer and wrote it down:
+
+> The practical next step is to reconsider the arrival airport — Chicago
+> O'Hare (ORD) was the other airport previously shortlisted.
+
+Then it stopped, with nothing on screen to do it with. Every existing surface
+refused the question: intake questions must name an outstanding requirement,
+open questions carry no choices and **no route anywhere can mark one
+answered**, and the chooser card hides a decision that is already settled —
+which the arrival airport was, with no way in the codebase to re-open it.
+
+**`propose_next_step` turns a fork into buttons.** The actions are a closed
+set — settle a decision on an option it already has, park a part, pick a parked
+part back up, or simply carry on — so the model can phrase any question it
+likes but can only ever offer something the system already knows how to do.
+Every proposal must include a way to leave it: a question with one usable
+answer is not a question.
+
+Answering "leave flights for now" writes `Decision.set_aside_reason` and
+planning continues with the neighbourhoods, the places and the days. It does
+**not** touch `brief.scope.flights`, which stays `plan`: they do still want
+flights, we just could not find any. `not_needed` would claim they are not
+flying, `already_arranged` would claim tickets exist, and `unknown` would
+re-open a blocking gap and un-confirm the brief.
+
+Fixing it turned up a second thing: a search that found nothing used to store
+nothing, so "no airline flies this route" and "nobody has looked" were the same
+state — and `next_steps` tested whether the decision *existed*, so the step
+disappeared exactly when it mattered most.
+
 ### Two airports of one city are two different airports
 
 A traveller was shown two arrival-airport cards reading, in full:

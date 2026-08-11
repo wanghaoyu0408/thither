@@ -137,9 +137,25 @@ async def select_option(
     if decision.selected_option_id == payload.option_id:
         return _view(state, state, applied=False, summary="already selected")
 
+    return await _commit(
+        session,
+        state,
+        [_patch(state, f"select {name}", select_ops(decision, name, payload.option_id))],
+        summary=f"selected for {name}",
+    )
+
+
+def select_ops(decision: Decision, name: str, option_id: str) -> list[dict[str, Any]]:
+    """The operations that settle a decision on one option.
+
+    Its own function because answering a proposal does the same thing from a
+    different button, and two spellings of "choose this" would be one place for
+    the demotion below to be forgotten.
+    """
+    index = _option_index(decision, option_id)
     base = _pointer(name)
     operations: list[dict[str, Any]] = [
-        {"op": "set", "path": f"{base}/selected_option_id", "value": payload.option_id},
+        {"op": "set", "path": f"{base}/selected_option_id", "value": option_id},
         {"op": "set", "path": f"{base}/status", "value": "selected"},
         {"op": "set", "path": f"{base}/options/{index}/status", "value": "selected"},
         {"op": "set", "path": f"{base}/updated_at", "value": utcnow().isoformat()},
@@ -151,13 +167,7 @@ async def select_option(
             operations.append(
                 {"op": "set", "path": f"{base}/options/{other}/status", "value": "shortlisted"}
             )
-
-    return await _commit(
-        session,
-        state,
-        [_patch(state, f"select {name}", operations)],
-        summary=f"selected for {name}",
-    )
+    return operations
 
 
 # --- locking -----------------------------------------------------------------

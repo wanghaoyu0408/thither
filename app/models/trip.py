@@ -14,6 +14,7 @@ from app.models.intake import ClarificationQuestion, IntakeStatus, PlanScope
 from app.models.itinerary import TripItinerary
 from app.models.learning import TripReflection
 from app.models.lock import LockRecord
+from app.models.proposal import AgentProposal
 from app.models.rejection import RejectionRecord
 from app.models.validation import ValidationState
 
@@ -258,6 +259,12 @@ class TripState(BaseModel):
     # A registry like `entities` and `evidence`: facts about places, shared by
     # every day that visits one, and additive under a day-scoped patch.
     arrival: dict[str, ArrivalContext] = {}
+
+    # Forks the agent reached and put to the traveller with the actions
+    # attached, rather than described in prose and abandoned. Frozen under a
+    # day-scoped patch like any sibling, which is right: answering one is never
+    # about a single day.
+    proposals: list[AgentProposal] = []
 
     # Answered once, after the trip ends. Written through the patch engine so
     # it is audited and cannot be re-asked. A day-scoped patch freezes it like

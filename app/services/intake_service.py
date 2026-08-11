@@ -245,7 +245,12 @@ def should_shop_for(state: TripState, part: str) -> bool:
         return False
     decision_name = "flights" if part == "flights" else "hotel"
     decision = getattr(state.decisions, decision_name, None)
-    return not (decision is not None and decision.booked)
+    if decision is None:
+        return True
+    # Three sources, three kinds of claim: the scope above is their standing
+    # instruction, `booked` is a fact about the world, and `set_aside_reason`
+    # is what a search turned up. Any one of them is enough to stop shopping.
+    return not (decision.booked or decision.set_aside_reason)
 
 
 def ready_to_confirm(state: TripState) -> bool:

@@ -67,6 +67,12 @@ def _is_settled(state: TripState, name: str) -> bool:
     return bool(decision.selected_option_id) or decision.booked
 
 
+def _has_options(state: TripState, name: str) -> bool:
+    """Whether anything was actually found - not merely whether we looked."""
+    decision = _decision(state, name)
+    return bool(decision is not None and decision.options)
+
+
 def _awaiting_choice(state: TripState, name: str) -> bool:
     """Options are on the table and nobody has picked one."""
     decision = _decision(state, name)
@@ -120,23 +126,49 @@ def next_steps(state: TripState) -> list[NextStep]:
             if _decision(state, name) is None:
                 steps.append(NextStep(kind="research", what=name, label=label))
 
-    if shopping_flights and _decision(state, "flights") is None:
+    if shopping_flights and not _has_options(state, "flights"):
         blocked = [
             name
             for name in _FLIGHTS_NEED_AIRPORT
             if _decision(state, name) is not None and not _is_settled(state, name)
         ]
         if not blocked:
-            steps.append(NextStep(kind="research", what="flights", label="Find flight options"))
+            # A search that came back empty leaves a decision with no options.
+            # Testing "does the decision exist" would have read that as done -
+            # the step vanishing the moment nothing was found, which is when it
+            # is most needed.
+            searched = _decision(state, "flights") is not None
+            steps.append(
+                NextStep(
+                    kind="research",
+                    what="flights",
+                    label=(
+                        "Try other airports or dates for flights"
+                        if searched
+                        else "Find flight options"
+                    ),
+                )
+            )
 
     if shopping_lodging:
-        if _decision(state, "hotel_area") is None:
+        if not _has_options(state, "hotel_area"):
             steps.append(
                 NextStep(kind="research", what="hotel_area", label="Compare neighbourhoods")
             )
-        elif _decision(state, "hotel") is None and _is_settled(state, "hotel_area"):
+        elif not _has_options(state, "hotel") and _is_settled(state, "hotel_area"):
             # The order hotel_service.resolve_area enforces: an area, then a hotel.
-            steps.append(NextStep(kind="research", what="hotel", label="Find a place to stay"))
+            searched = _decision(state, "hotel") is not None
+            steps.append(
+                NextStep(
+                    kind="research",
+                    what="hotel",
+                    label=(
+                        "Try another neighbourhood or dates for a hotel"
+                        if searched
+                        else "Find a place to stay"
+                    ),
+                )
+            )
 
     # Places are the raw material, so a confirmed trip holding none has an
     # obvious first move. Without this a trip whose flights and hotel are

@@ -12,6 +12,7 @@ from app.api import (
     intake_router,
     learning_router,
     profiles_router,
+    proposals_router,
     tools_router,
     trips_router,
 )
@@ -55,6 +56,7 @@ app.include_router(actions_router)
 app.include_router(decisions_router)
 app.include_router(intake_router)
 app.include_router(learning_router)
+app.include_router(proposals_router)
 
 
 @app.get("/health", tags=["meta"])

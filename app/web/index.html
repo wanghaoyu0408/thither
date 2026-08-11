@@ -300,6 +300,11 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 .choice .pro { font-size: 12px; color: var(--ink-2); margin-top: 3px; }
 .choice .con { font-size: 12px; color: var(--warn); margin-top: 3px; }
 .choice .go { margin-top: auto; padding-top: 10px; }
+/* A fork's buttons carry what each one costs, listed under them rather than
+   crammed into a label. */
+.proposal-notes { list-style: none; margin-top: 10px; font-size: 12px; color: var(--ink-2); }
+.proposal-notes li { padding: 2px 0; }
+.chooser .lede { font-size: 13px; color: var(--ink-2); margin-top: 6px; }
 
 /* Travel DNA: learned rows and their ordinal badges. Words, never numbers -
    the confidence tiers are emerging/likely/strong and nothing more precise. */
@@ -1277,7 +1282,10 @@ function attentionArtifacts() {
     return [artifact("brief", "Your trip brief",
       intakeHtml(), { sub: "Confirm this and planning starts", collapsible: false })];
   }
-  const cards = pendingChoices().map(chooserHtml);
+  // A fork comes before an ordinary choice: it is the thing planning is stuck
+  // behind, and the traveller has one to answer only because a search hit a
+  // wall.
+  const cards = [...pendingProposals().map(proposalHtml), ...pendingChoices().map(chooserHtml)];
   // The trip is over and nobody has said how it went. One card, once.
   if (S.over?.reflection?.due) {
     cards.push(artifact("reflection", "How did this trip go?",
@@ -1297,6 +1305,11 @@ function attentionSummary() {
   if (S.intake && S.intake.status !== "confirmed") {
     return { selector: '[data-art="brief"]', text: "Confirm your trip brief to start planning" };
   }
+  const forks = pendingProposals();
+  if (forks.length) return {
+    selector: '[data-art="proposal"]',
+    text: forks[0].question,
+  };
   const n = pendingChoices().length;
   if (n) return {
     selector: '[data-art="choice"]',
@@ -1583,7 +1596,7 @@ function paintHint() {
   const hint = $("hint");
   if (!hint || !S.tripId || S.busy) return;
   const steps = agentSteps();
-  hint.textContent = (!pendingChoices().length && steps.length)
+  hint.textContent = (!pendingProposals().length && !pendingChoices().length && steps.length)
     ? `Next: ${steps.map((s) => s.label.toLowerCase()).join(", then ")}`
     : "Enter to send · Shift+Enter for a new line";
 }
@@ -2278,7 +2291,9 @@ async function continueIfSettled() {
   // choice; and adopt() rebuilds S.over from the action's result, which
   // carries no next_steps at all - the very thing the choice just changed.
   await Promise.all([loadDecisions(), refresh()]);
-  if (pendingChoices().length || !agentSteps().length) return;
+  // A fork still waiting is the strongest reason not to carry on: planning is
+  // stuck behind it by definition.
+  if (pendingProposals().length || pendingChoices().length || !agentSteps().length) return;
   if (S.busy || !S.tripId) return;
 
   const chosen = (S.decisions || [])
@@ -2312,6 +2327,40 @@ async function startPlanning(extra = "") {
   // makes them durable, the message makes this turn address them.
   await send("✓ Brief confirmed — please start planning."
     + (extra ? ` They also said: “${extra}”` : ""));
+}
+
+/** Forks the agent reached and has not been answered on. */
+function pendingProposals() {
+  return (S.trip?.proposals || []).filter((p) => !p.answered_at);
+}
+
+/** A fork, as buttons.
+ *
+ *  The agent used to reach one of these and write it out in prose - "the
+ *  practical next step is to reconsider the arrival airport" - with nothing on
+ *  screen to do it with. Every other surface refused the question: intake
+ *  questions must name an outstanding requirement, open questions have no
+ *  choices and nothing can answer one, and the chooser hides a decision that is
+ *  already settled, which the airport was. */
+function proposalHtml(proposal) {
+  const button = (choice, index) => `<button
+    class="btn ${index === 0 ? "" : "ghost "}sm"
+    data-answer="${esc(proposal.proposal_id)}|${index}"
+    ${choice.note ? `title="${esc(choice.note)}"` : ""}>${esc(choice.label)}</button>`;
+
+  return `<div class="artifact chooser" data-art="proposal">
+    <div class="art-head">
+      <b>${esc(proposal.question)}</b>
+      <span class="sub">Your call — planning waits for it.</span>
+    </div>
+    ${proposal.detail ? `<p class="lede">${esc(proposal.detail)}</p>` : ""}
+    <div class="go">${(proposal.choices || []).map(button).join("")}</div>
+    ${(proposal.choices || []).some((c) => c.note)
+      ? `<ul class="proposal-notes">${(proposal.choices || [])
+          .filter((c) => c.note)
+          .map((c) => `<li><b>${esc(c.label)}</b> — ${esc(c.note)}</li>`).join("")}</ul>`
+      : ""}
+  </div>`;
 }
 
 function chooserHtml(view) {
@@ -3287,6 +3336,17 @@ function wireWorkspace() {
     const cut = value.lastIndexOf("|");
     return [value.slice(0, cut), value.slice(cut + 1)];
   };
+  // Answering a fork. The action rides in the same patch as the answer, so
+  // pressing "fly into ORD instead" both settles the airport and closes the
+  // question - then planning carries on the same way a chosen card does.
+  on("answer", async (v) => {
+    const cut = v.lastIndexOf("|");
+    const [proposalId, index] = [v.slice(0, cut), Number(v.slice(cut + 1))];
+    const result = await act(
+      `/proposals/${proposalId}/answer`, post({ choice_index: index }), (r) => r.summary);
+    if (result?.applied) await continueIfSettled();
+  });
+
   on("decselect", async (v) => {
     const [name, option] = pair(v);
     const result = await act(

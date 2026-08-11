@@ -17,6 +17,7 @@ from app.config import Settings
 from app.models.arrival import ArrivalContext
 from app.models.common import utcnow
 from app.models.constraint import TripConstraint
+from app.models.proposal import AgentProposal, ProposalChoice
 from app.models.decision import (
     Decision,
     DecisionOption,
@@ -37,6 +38,7 @@ from app.models.traveler import FlightPreferences, HotelPreferences
 from app.models.trip import OpenQuestion, TripState
 from app.services import json_pointer as jp
 from app.services.conflict_service import detect_conflicts
+from app.services.decision_service import label_for
 from app.services.entity_service import resolve_places
 from app.services.flight_ranking import cheapest_of, explain_choice, rank_flights
 from app.services.flight_service import SANDBOX_DISCLAIMER
@@ -574,6 +576,72 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 },
             },
             "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "propose_next_step",
+        "description": (
+            "Put a fork to the traveller as buttons they can press. Use this the moment a "
+            "search comes back empty, an option turns out to be impossible, or you are "
+            "about to write 'the next step would be...' - describing a next step and then "
+            "ending your turn leaves them with nothing to click. Always include a way to "
+            "leave it for now: a question with only one usable answer is not a question."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "The fork, in one sentence. 'Fly into O'Hare instead?'",
+                },
+                "detail": {
+                    "type": ["string", "null"],
+                    "description": (
+                        "Why you are asking, from what the tools returned. Never a reason "
+                        "composed after the fact."
+                    ),
+                },
+                "choices": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "label": {"type": "string"},
+                            "action": {
+                                "type": "string",
+                                "enum": ["select_option", "set_aside", "resume", "none"],
+                                "description": (
+                                    "select_option settles a decision on one of its existing "
+                                    "options; set_aside parks a part with a reason; resume "
+                                    "picks a parked part back up; none just carries on."
+                                ),
+                            },
+                            "decision": {
+                                "type": ["string", "null"],
+                                "description": "For select_option: 'arrival_airport', 'hotel'...",
+                            },
+                            "option_id": {
+                                "type": ["string", "null"],
+                                "description": "For select_option: an option that already exists.",
+                            },
+                            "part": {
+                                "type": ["string", "null"],
+                                "enum": ["flights", "lodging", None],
+                                "description": "For set_aside / resume.",
+                            },
+                            "note": {
+                                "type": ["string", "null"],
+                                "description": "What this choice costs, in their terms.",
+                            },
+                        },
+                        "required": ["label", "action"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["question", "choices"],
             "additionalProperties": False,
         },
     },
@@ -1657,9 +1725,29 @@ async def _search_flights(context: ToolContext, args: dict[str, Any]) -> dict[st
     if not result.ok:
         return {"error": result.error.message, "code": result.error.code}
     if result.found_nothing:
+        # Record the empty result rather than returning quietly. The trip used
+        # to keep nothing at all from a search that found nothing, so "no
+        # airline flies this route on these dates" and "nobody has looked yet"
+        # were the same state - absence read as never-asked. The decision is
+        # staged with no options, which is exactly what was true.
+        searched = (
+            f"{'/'.join(spec.origins)} to {'/'.join(spec.destinations)} "
+            f"on {spec.departure_date.isoformat()}"
+        )
+        context.pending_decisions["flights"] = Decision[FlightOptionData](
+            status="researching",
+            rationale=f"searched {searched}; no airline offered it",
+            updated_at=utcnow(),
+            options=[],
+        ).model_dump(mode="json")
         return {
             "offers": [],
-            "note": "no flights matched; the search itself worked",
+            "note": (
+                f"No airline offered {searched}. The search itself worked, and that is "
+                "now recorded on the trip. Do not stop here: offer the traveller the "
+                "choices with propose_next_step - other airports, other dates, or "
+                "leaving flights aside for now."
+            ),
             "warnings": result.warnings,
         }
 
@@ -1882,9 +1970,22 @@ async def _search_hotels(context: ToolContext, args: dict[str, Any]) -> dict[str
     if not result.ok:
         return {"error": result.error.message, "code": result.error.code}
     if result.found_nothing:
+        # Same as the flight search: an empty result is a finding, and the trip
+        # keeps it. Without this, "nothing available in that area on those
+        # dates" was indistinguishable from "nobody has looked".
+        context.pending_decisions["hotel"] = Decision[HotelOptionData](
+            status="researching",
+            rationale=f"searched {spec.area_name or 'the chosen area'}; nothing was available",
+            updated_at=utcnow(),
+            options=[],
+        ).model_dump(mode="json")
         return {
             "hotels": [],
-            "note": "no hotels matched; the search itself worked",
+            "note": (
+                "Nothing was available, and that is now recorded on the trip. The search "
+                "itself worked. Do not stop here: offer the choices with propose_next_step "
+                "- another neighbourhood, other dates, or leaving the hotel aside for now."
+            ),
             "warnings": result.warnings,
         }
 
@@ -2170,6 +2271,80 @@ async def _refresh_traveler_preferences(
     payload["note"] = (
         "Marked stale, not rebuilt. Tell the user which decisions are now questionable and "
         "let them choose whether to redo any of them."
+    )
+    return payload
+
+
+async def _propose_next_step(context: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    """Turn a fork into buttons. Committed at once, because it must be seen.
+
+    Every choice is checked against what the trip actually holds: a proposal
+    offering an option that does not exist would render a button that cannot
+    be pressed, which is the failure this tool exists to end wearing different
+    clothes.
+    """
+    question = (args.get("question") or "").strip()
+    if not question:
+        return {"error": "no question given"}
+
+    raw_choices = args.get("choices") or []
+    if len(raw_choices) < 2:
+        return {
+            "error": "a proposal needs at least two choices",
+            "hint": (
+                "One of them should let the traveller leave this for now - set_aside for "
+                "flights or lodging, or none to simply carry on."
+            ),
+        }
+
+    if any(not p.answered and p.question == question for p in context.state.proposals):
+        return {"asked": 0, "note": "that is already waiting for them; do not ask it twice"}
+
+    choices: list[ProposalChoice] = []
+    for raw in raw_choices:
+        choice = ProposalChoice(
+            label=(raw.get("label") or "").strip(),
+            action=raw.get("action", "none"),
+            decision=raw.get("decision"),
+            option_id=raw.get("option_id"),
+            part=raw.get("part"),
+            note=raw.get("note"),
+        )
+        if not choice.label:
+            return {"error": "every choice needs a label"}
+
+        if choice.action == "select_option":
+            decision = dict(context.state.decisions.iter_decisions()).get(choice.decision or "")
+            if decision is None:
+                return {
+                    "error": f"no decision {choice.decision!r} on this trip",
+                    "decisions": [name for name, _ in context.state.decisions.iter_decisions()],
+                }
+            known = {option.option_id: label_for(option.data) for option in decision.options}
+            if choice.option_id not in known:
+                return {
+                    "error": (
+                        f"decision {choice.decision!r} has no option {choice.option_id!r}; "
+                        "propose one that already exists rather than inventing it"
+                    ),
+                    "options": known,
+                }
+        elif choice.action in ("set_aside", "resume") and choice.part not in ("flights", "lodging"):
+            return {"error": f"{choice.action} needs part 'flights' or 'lodging'"}
+
+        choices.append(choice)
+
+    proposal = AgentProposal(
+        question=question, detail=args.get("detail"), choices=choices
+    )
+    context.pending_brief_ops.append(
+        {"op": "add", "path": "/proposals/-", "value": proposal.model_dump(mode="json")}
+    )
+    payload = _commit_staged(context, f"ask: {question[:60]}")
+    payload["note"] = (
+        "Asked. The card is directly below your reply with a button per choice - say what "
+        "the trade-off is in a sentence and let them press one. Do not also ask them to "
+        "type an answer."
     )
     return payload
 
@@ -2859,6 +3034,7 @@ HANDLERS = {
     "research_web": _research_web,
     "review_group_preferences": _review_group_preferences,
     "refresh_traveler_preferences": _refresh_traveler_preferences,
+    "propose_next_step": _propose_next_step,
     "record_constraints": _record_constraints,
     "record_stated_preference": _record_stated_preference,
     "review_learned_preferences": _review_learned_preferences,

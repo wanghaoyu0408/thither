@@ -134,14 +134,26 @@ async def test_a_flight_search_stages_a_decision_with_its_reasoning():
     assert best["data"]["live_mode"] is True
 
 
-async def test_a_flight_search_that_finds_nothing_stages_nothing():
+async def test_a_flight_search_that_finds_nothing_records_that_it_looked():
+    """An empty result is a finding, and the trip keeps it.
+
+    It used to stage nothing at all, so "no airline flies this route on these
+    dates" and "nobody has looked yet" were the same state - and the screen,
+    reading the absence, offered to go and search as if nothing had happened.
+    """
     context = context_for(FakeToolbox(flights=FakeFlights([])))
 
-    await _search_flights(
+    result = await _search_flights(
         context, {"origins": ["SFO"], "destinations": ["HND"], "departure_date": DEPART.isoformat()}
     )
 
-    assert "flights" not in context.pending_decisions
+    assert result["offers"] == []
+    decision = context.pending_decisions["flights"]
+    assert decision["options"] == [], "nothing was found, and nothing is claimed"
+    assert "no airline offered it" in decision["rationale"]
+    assert "SFO" in decision["rationale"] and "HND" in decision["rationale"]
+    # And the model is told not to end the turn on it.
+    assert "propose_next_step" in result["note"]
 
 
 async def test_the_briefs_red_eye_answer_reaches_the_ranking():

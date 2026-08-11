@@ -76,6 +76,16 @@ class Decision[T](BaseModel):
     booked_reference: str | None = None
     booked_at: datetime | None = None
 
+    # Parked at the traveller's word, with the reason they parked it - "no
+    # airline flies that route on those dates, and we would rather keep the
+    # airports". A fourth kind of claim again, and the reason none of the
+    # existing three would do: the scope states are the traveller's standing
+    # instruction, `booked` is a fact about the world, `status` is where we are
+    # in our own workflow, and this is the outcome of a search. Saying
+    # `not_needed` would claim they are not flying; `already_arranged` would
+    # claim tickets exist. Cleared only by asking for it again.
+    set_aside_reason: str | None = None
+
     updated_at: datetime = Field(default_factory=utcnow)
 
 
