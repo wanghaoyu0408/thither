@@ -359,6 +359,62 @@ Fixing it surfaced a second, unreached bug: `_apply_all` cleared every staging b
 success, not just the ones its plan consumed, so any tool committing mid-turn would have
 discarded an earlier tool's places. A commit now drains the whole context.
 
+### A return trip is two flights
+
+A card read "nonstop, 4h59m total travel time" for Albany → Chicago. The real
+nonstop is 2h43m. `duration_minutes` was summing every slice of the offer, so
+the number was the outbound *plus the flight home* — printed beside the word
+"nonstop" and an outbound-only route, which reads as one five-hour flight.
+Long-haul made it starker: SFO → Osaka came out at 36–41 hours and the agent
+faithfully called it 单程.
+
+Not a timezone bug, and worth saying why: Duffel's ISO durations already carry
+the offset. Subtracting the local clock times would have given 1h43m — an hour
+*short*, not three hours long.
+
+`arrival_at` was worse. It was the **return** landing, so three offers leaving
+at different times all showed the same arrival — and `_arrival_score` and the
+red-eye check scored the outbound on it. An offer reaching Chicago at 13:59 was
+docked for coming in at 23:08, three days later and in the other direction.
+
+Every scalar on a flight option now describes the outbound, and the card shows
+both directions:
+
+```
+Outbound   2h 43m nonstop   (30 Oct 12:16 → 13:59)
+Return     2h 16m nonstop   (02 Nov 19:52 → 23:08)
+```
+
+The renderers read `slices`, so offers already stored come out right without
+re-searching. No test could have caught this: every flight fixture in the suite
+was single-slice while **100% of stored offers are two-slice**, and `sum()` over
+one element is the identity.
+
+### Nobody was ever in the trip
+
+Milestone 9 built a learning layer — behavioural signals, preference
+hypotheses, a consent card, a Travel DNA panel, a post-trip reflection — and
+milestone 7 built per-traveller preferences, group scoring and conflict
+detection. **Both were unreachable.** Every surface is keyed to a traveller with
+a `profile_id`, and nothing in the application ever created either: the
+new-trip form collected a head count and never a person, no screen posted to
+`/profiles`, and no agent tool could make one.
+
+The live database said it plainly: 13 trips, **0 travellers, 0 profiles, 0
+learning signals**. `_record_stated_preference` was even telling the model to
+"offer to create one" — a capability that did not exist.
+
+The form now asks who the trip is for, reusing a profile across trips because
+nothing is learned from one trip alone. The snapshot is resolved at creation
+too: `review_group_preferences` returns immediately below two travellers, so a
+solo trip's preferences were never resolved at all, and a learned start time
+would have reached a future trip never.
+
+The test that looked like coverage was `assert "Travel DNA" in body` — a
+substring grep on the served HTML, green for the entire period the panel could
+not be opened. A reachability test has to travel the route a user travels, and
+`tests/integration/test_trip_creation.py` now does.
+
 ### A fork in the road is a card, not a paragraph
 
 No airline flew ALB → MDW on the chosen dates. The agent worked out the right

@@ -88,10 +88,28 @@ def _departure_score(option: FlightOptionData, avoid_red_eye: bool) -> float | N
     return 0.8
 
 
+def _legs(option: FlightOptionData) -> list:
+    """Each direction, or nothing when the offer did not record them."""
+    return list(option.slices or [])
+
+
+def _outbound_arrival(option: FlightOptionData):
+    """When the *first* leg lands.
+
+    `arrival_at` used to be the last slice's arrival - the return landing back
+    home - so an offer reaching Chicago at 13:59 was scored on getting back to
+    Albany at 23:08 three days later, and docked for arriving late. The slices
+    are read first so offers stored before that was fixed score correctly too.
+    """
+    legs = _legs(option)
+    return legs[0].arriving_at if legs else option.arrival_at
+
+
 def _arrival_score(option: FlightOptionData) -> float | None:
-    if option.arrival_at is None:
+    arrival = _outbound_arrival(option)
+    if arrival is None:
         return None
-    hour = option.arrival_at.hour
+    hour = arrival.hour
     if hour in RED_EYE_HOURS:
         return 0.3
     if 6 <= hour < 22:
@@ -127,8 +145,22 @@ def _red_eye_score(option: FlightOptionData, preferences: FlightPreferences) -> 
     """
     if not preferences.avoid_red_eye or option.departure_at is None:
         return None
-    departs_overnight = option.departure_at.hour in RED_EYE_HOURS
-    arrives_overnight = option.arrival_at is not None and option.arrival_at.hour in RED_EYE_HOURS
+
+    # Someone who asked to avoid red-eyes meant both directions, so every leg
+    # is judged - but on its own hours. This used to test the outbound's
+    # departure against the *return's* arrival, which is neither leg.
+    legs = _legs(option)
+    times = (
+        [(leg.departing_at, leg.arriving_at) for leg in legs]
+        if legs
+        else [(option.departure_at, option.arrival_at)]
+    )
+    departs_overnight = any(
+        departs is not None and departs.hour in RED_EYE_HOURS for departs, _ in times
+    )
+    arrives_overnight = any(
+        arrives is not None and arrives.hour in RED_EYE_HOURS for _, arrives in times
+    )
     if departs_overnight:
         return 0.0
     return 0.4 if arrives_overnight else 1.0
@@ -178,10 +210,23 @@ def score_flight(
 
 def _pros(option: FlightOptionData, ground: dict[str, float]) -> list[str]:
     pros: list[str] = []
-    if option.stops == 0:
-        pros.append("nonstop")
-    if option.duration_minutes:
-        pros.append(f"{_hhmm(option.duration_minutes)} total travel time")
+    # Say which direction, or say nothing. "nonstop" beside "4h59m total travel
+    # time" and an outbound-only route read as one five-hour flight, when it
+    # was two nonstops of 2h43m and 2h16m.
+    legs = _legs(option)
+    if len(legs) > 1:
+        if all(leg.stops == 0 for leg in legs):
+            pros.append("nonstop both ways")
+        elif legs[0].stops == 0:
+            pros.append("nonstop outbound")
+        if legs[0].duration_minutes:
+            pros.append(f"{_hhmm(legs[0].duration_minutes)} out, "
+                        f"{_hhmm(legs[1].duration_minutes or 0)} back")
+    else:
+        if option.stops == 0:
+            pros.append("nonstop")
+        if option.duration_minutes:
+            pros.append(f"{_hhmm(option.duration_minutes)} in the air")
     minutes = ground.get(option.origin)
     if minutes is not None and minutes <= 30:
         pros.append(f"{option.origin} is {minutes:.0f} minutes' drive")

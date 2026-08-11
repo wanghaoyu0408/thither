@@ -9,6 +9,8 @@ Everything here reads a stored option. Nothing is recomputed, estimated, or
 derived from anything but what the ranker wrote down at the time.
 """
 
+from typing import Any
+
 from pydantic import BaseModel
 
 from app.models.decision import FlightOptionData, HotelAreaOption, HotelOptionData
@@ -42,6 +44,25 @@ def _money(value) -> str | None:
     return f"{value.amount:,.0f} {value.currency}" if value else None
 
 
+def _flight_legs(data) -> list[tuple[str, Any]]:
+    """The offer's directions, named. One slice is a one-way, two is a return.
+
+    Falls back to nothing when an offer holds no slices, rather than inventing
+    a leg from the scalar fields - an option nobody recorded the legs of is not
+    an option we can describe by direction.
+    """
+    slices = list(data.slices or [])
+    if not slices:
+        return []
+    if len(slices) == 1:
+        return [("Flight", slices[0])]
+    names = ["Outbound", "Return"]
+    return [
+        (names[index] if index < len(names) else f"Leg {index + 1}", leg)
+        for index, leg in enumerate(slices)
+    ]
+
+
 def mode_note(mode: str | None) -> str | None:
     """Say when a figure was measured in a mode nobody asked for."""
     if mode == "driving":
@@ -57,13 +78,38 @@ def metrics_for(data) -> list[Metric]:
         per_person = _money(data.price_per_person or data.price)
         if per_person:
             metrics.append(Metric(label="Price", value=f"{per_person} per person"))
-        if data.stops is not None:
+        # One row per direction, read from `slices` rather than the scalars.
+        # A return trip's two legs were summed into a single "Duration", so a
+        # nonstop Albany-Chicago return read as one five-hour flight - and
+        # reading the slices means offers stored before that was fixed come out
+        # right as well.
+        legs = _flight_legs(data)
+        for label, leg in legs:
+            hours, minutes = divmod(int(leg.duration_minutes or 0), 60)
+            when = leg.departing_at.strftime("%d %b %H:%M") if leg.departing_at else None
+            lands = leg.arriving_at.strftime("%H:%M") if leg.arriving_at else None
             metrics.append(
-                Metric(label="Stops", value="Nonstop" if data.is_nonstop else f"{data.stops} stop")
+                Metric(
+                    label=label,
+                    value=f"{hours}h {minutes:02d}m"
+                    + (" nonstop" if leg.stops == 0 else f", {leg.stops} stop"),
+                    note=f"{when} → {lands}" if when and lands else None,
+                )
             )
-        if data.duration_minutes:
-            hours, minutes = divmod(int(data.duration_minutes), 60)
-            metrics.append(Metric(label="Duration", value=f"{hours}h {minutes:02d}m"))
+        if not legs:
+            # No legs recorded. The scalars are all there is, and since the
+            # provider fix they describe the outbound - report them rather than
+            # showing an option with no figures at all.
+            if data.stops is not None:
+                metrics.append(
+                    Metric(
+                        label="Stops",
+                        value="Nonstop" if data.is_nonstop else f"{data.stops} stop",
+                    )
+                )
+            if data.duration_minutes:
+                hours, minutes = divmod(int(data.duration_minutes), 60)
+                metrics.append(Metric(label="Duration", value=f"{hours}h {minutes:02d}m"))
         if data.airlines:
             metrics.append(Metric(label="Airline", value=", ".join(data.airlines)))
         if not data.live_mode:

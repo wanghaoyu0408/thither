@@ -74,7 +74,15 @@ async def test_the_post_helper_takes_the_body_first(client):
 
 
 async def test_the_page_names_the_travel_dna_surface_and_the_new_tools(client):
-    """The learning layer's whole UI ships in the one file, like everything else."""
+    """The learning layer's whole UI ships in the one file, like everything else.
+
+    A grep is all this can be, and a grep is not much: this test passed for
+    weeks while the panel was unreachable, because a string in a template
+    literal is present whether or not any code path can render it. The test
+    that actually holds the feature up is
+    `test_that_traveller_can_carry_learning` in test_trip_creation.py, which
+    goes through the real create payload and asserts the surfaces can appear.
+    """
     body = (await client.get("/")).text
 
     assert "Travel DNA" in body
@@ -86,6 +94,19 @@ async def test_the_page_names_the_travel_dna_surface_and_the_new_tools(client):
     # Ordinal words, never percentages: the badge tiers are the only vocabulary.
     for word in ("emerging", "likely", "strong"):
         assert f"dna-badge.{word}" in body or word in body
+
+
+async def test_the_new_trip_form_asks_who_the_trip_is_for(client):
+    """Without a traveller the trip has nobody in it, and everything keyed to a
+    person is unreachable rather than merely empty. The form collected a head
+    count and never a person."""
+    body = (await client.get("/")).text
+
+    assert 'id="travelerPick"' in body
+    assert 'id="travelerName"' in body
+    assert "fillTravellers" in body
+    # And the payload carries them, which is the part that was missing.
+    assert 'travelers: [{ name: travellerName, role: "organizer", profile_id: profileId }]' in body
 
 
 async def test_the_choice_cards_show_their_figures(client):

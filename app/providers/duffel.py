@@ -178,13 +178,27 @@ def normalize_offer(
         live_mode=live_mode and bool(raw.get("live_mode", live_mode)),
         price=Money(amount=round(total, 2), currency=offer_currency),
         price_per_person=Money(amount=round(per_person, 2), currency=offer_currency),
+        # Every scalar here describes the OUTBOUND, and now consistently so.
+        # `origin`, `destination` and `departure_at` always did; the other
+        # three collapsed both directions into one number and were read as if
+        # they had not. `duration_minutes` summed the slices, so a nonstop
+        # Albany-Chicago return reported 4h59m - 2h43m out plus 2h16m back -
+        # beside the word "nonstop" and an outbound-only route, which reads as
+        # one flight taking five hours. `arrival_at` was the *return* landing,
+        # so three offers leaving at different times all showed the same
+        # arrival, and the red-eye scorer docked a 13:59 outbound for coming in
+        # at 23:08 three days later.
+        #
+        # Both directions are still there in `slices`, which is where anything
+        # that wants the whole picture should look - including for offers
+        # stored before this was fixed.
         origin=slices[0].origin,
         destination=slices[0].destination,
         slices=slices,
         departure_at=slices[0].departing_at,
-        arrival_at=slices[-1].arriving_at,
-        duration_minutes=sum(s.duration_minutes or 0 for s in slices) or None,
-        stops=max(s.stops for s in slices),
+        arrival_at=slices[0].arriving_at,
+        duration_minutes=slices[0].duration_minutes,
+        stops=slices[0].stops,
         airlines=airlines,
         cabin=_cabin_of(raw) or "economy",
         baggage=_baggage(raw),

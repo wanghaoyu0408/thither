@@ -838,6 +838,13 @@ details.debug li { font: 11.5px/1.7 var(--mono); color: var(--ink-3); }
       </div>
       <form class="new" id="newTrip" hidden>
         <input name="title" placeholder="Title" required>
+        <!-- Who the trip is for. Without this the trip has no travellers at
+             all, and everything keyed to a person - what the agent has learned
+             about how you travel, the post-trip reflection, per-person
+             preferences - is silently unreachable. `party.adults` counts heads;
+             it never says whose trip this is. -->
+        <select name="traveler" id="travelerPick"></select>
+        <input name="traveler_name" id="travelerName" placeholder="Your name" hidden>
         <!-- Where from, not only where to. Without an origin the agent cannot
              search flights or judge how far anything is, and it had to ask for
              it in the chat every single time. -->
@@ -988,9 +995,33 @@ function wireNewTrip() {
     const form = $("newTrip");
     form.hidden = !form.hidden;
     $("newTripToggle").textContent = form.hidden ? "+ New" : "Cancel";
-    if (!form.hidden) form.querySelector("input").focus();
+    if (!form.hidden) { fillTravellers(); form.querySelector("input").focus(); }
   };
   $("newTrip").onsubmit = createTrip;
+}
+
+/** Whose trip this is. Reusing a profile across trips is the whole point:
+ *  nothing is learned about you from one trip alone, so a fresh profile each
+ *  time would mean nothing ever accumulated enough evidence to be worth
+ *  telling you about. */
+async function fillTravellers() {
+  const pick = $("travelerPick");
+  const name = $("travelerName");
+  if (!pick) return;
+  let profiles = [];
+  try { profiles = await api("/profiles?limit=50"); } catch { profiles = []; }
+
+  pick.innerHTML = profiles.map((p) =>
+    `<option value="${esc(p.profile_id)}">${esc(p.name)}</option>`).join("")
+    + `<option value="">+ Someone new</option>`;
+  // A first-time traveller has nothing to pick, so the name box is the form.
+  pick.value = profiles.length ? profiles[0].profile_id : "";
+  pick.hidden = !profiles.length;
+  name.hidden = !!profiles.length;
+  pick.onchange = () => {
+    name.hidden = !!pick.value;
+    if (!pick.value) name.focus();
+  };
 }
 
 async function createTrip(e) {
@@ -1014,8 +1045,24 @@ async function createTrip(e) {
       ? { airport_codes: [from.toUpperCase()] }
       : from ? { city: from } : {};
 
+    // The traveller, and a profile that outlives this trip. Without one the
+    // trip has nobody in it, and every per-person feature - what has been
+    // learned about how you travel, the reflection afterwards - is unreachable
+    // rather than merely empty.
+    let profileId = f.get("traveler") || "";
+    let travellerName = text("traveler_name");
+    if (!profileId) {
+      if (!travellerName) { toast("Say who this trip is for"); return; }
+      const profile = await api("/profiles", { method: "POST",
+        body: JSON.stringify({ name: travellerName }) });
+      profileId = profile.profile_id;
+    } else {
+      travellerName = $("travelerPick").selectedOptions[0]?.textContent || "You";
+    }
+
     const trip = await api("/trips", { method: "POST", body: JSON.stringify({
       title: text("title"),
+      travelers: [{ name: travellerName, role: "organizer", profile_id: profileId }],
       brief: {
         origin,
         destination: { city: text("city"), flexible: false },

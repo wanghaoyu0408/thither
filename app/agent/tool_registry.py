@@ -2435,7 +2435,9 @@ async def _record_stated_preference(
             "recorded": False,
             "note": (
                 f"{traveler.name} has no stored profile, so nothing durable can be "
-                "recorded. Offer to create one if they want the system to learn."
+                "recorded. Say so plainly and carry on - you cannot create one, and "
+                "offering to would be promising something you cannot do. A profile is "
+                "chosen when a trip is created."
             ),
         }
     if context.learning is None:

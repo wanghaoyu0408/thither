@@ -19,6 +19,7 @@ from app.services.conflict_service import detect_conflicts, unresolved_blocking
 from app.services.intake_service import today_at
 from app.services.learning_service import derive_hypotheses
 from app.services.next_step import next_steps
+from app.services.preference_service import resolve
 from app.services.validation_service import validate_itinerary
 
 router = APIRouter(prefix="/trips", tags=["trips"])
@@ -52,6 +53,23 @@ async def create_trip(payload: CreateTripRequest, session: SessionDep) -> TripSt
         brief=payload.brief,
         travelers=payload.travelers,
     )
+
+    # Snapshot each traveller's stored preferences now, so planning has them
+    # from the first turn. Nothing else would: `review_group_preferences`
+    # returns immediately below two travellers, so a solo trip never resolved
+    # its snapshot at all - and a preference learned last year would have
+    # reached this trip's day templates never. A profile that has since been
+    # deleted is skipped rather than failing the creation; the rankers already
+    # report a missing snapshot as a gap.
+    profiles = ProfileRepository(session)
+    for traveler in state.travelers:
+        if not traveler.profile_id or traveler.preferences is not None:
+            continue
+        try:
+            traveler.preferences = resolve(traveler, await profiles.get(traveler.profile_id))
+        except ProfileNotFound:
+            continue
+
     return await _repo(session).create(state)
 
 

@@ -248,3 +248,102 @@ def test_the_provider_exposes_nothing_that_books():
         if name.startswith("_"):
             continue
         assert not any(word in name.lower() for word in forbidden), name
+
+
+# --- return trips: the shape production always has and the suite never did ----
+
+
+def _slice(origin, destination, duration, depart, arrive, stops=()):
+    """One direction, with an optional connection."""
+    if not stops:
+        segments = [{
+            "origin": {"iata_code": origin}, "destination": {"iata_code": destination},
+            "departing_at": depart, "arriving_at": arrive, "duration": duration,
+            "marketing_carrier": {"iata_code": "AA", "name": "American"},
+            "marketing_carrier_flight_number": "100", "stops": [],
+            "passengers": [{"cabin_class": "economy", "baggages": []}],
+        }]
+    else:
+        via = stops[0]
+        segments = [
+            {"origin": {"iata_code": origin}, "destination": {"iata_code": via},
+             "departing_at": depart, "arriving_at": depart, "duration": "PT1H",
+             "marketing_carrier": {"iata_code": "AA", "name": "American"},
+             "marketing_carrier_flight_number": "1", "stops": [],
+             "passengers": [{"cabin_class": "economy", "baggages": []}]},
+            {"origin": {"iata_code": via}, "destination": {"iata_code": destination},
+             "departing_at": arrive, "arriving_at": arrive, "duration": "PT1H",
+             "marketing_carrier": {"iata_code": "AA", "name": "American"},
+             "marketing_carrier_flight_number": "2", "stops": [],
+             "passengers": [{"cabin_class": "economy", "baggages": []}]},
+        ]
+    return {
+        "duration": duration,
+        "origin": {"iata_code": origin}, "destination": {"iata_code": destination},
+        "segments": segments,
+    }
+
+
+def return_offer(return_stops=()) -> dict:
+    """The real Albany-Chicago offer, trimmed: 2h43m out, 2h16m back."""
+    return {
+        "id": "off_0000B9FvGh0HYqQMDBGcxQ",
+        "live_mode": True,
+        "total_amount": "484.00",
+        "total_currency": "USD",
+        "owner": {"iata_code": "AA", "name": "American"},
+        "conditions": {},
+        "slices": [
+            _slice("ALB", "ORD", "PT2H43M", "2026-10-30T12:16:00", "2026-10-30T13:59:00"),
+            _slice("ORD", "ALB", "PT2H16M", "2026-11-02T19:52:00", "2026-11-02T23:08:00",
+                   stops=return_stops),
+        ],
+    }
+
+
+def test_a_return_trip_reports_the_outbound_not_the_sum():
+    """163 + 136 = 299 = "4h59m", which the card printed beside the word
+    "nonstop" and an ALB→ORD route. It reads as one five-hour flight; it is
+    two nonstops of 2h43m and 2h16m."""
+    option = normalize_offer(return_offer(), live_mode=True, passengers=2, currency="USD")
+
+    assert option.duration_minutes == 163
+    assert [s.duration_minutes for s in option.slices] == [163, 136]
+
+
+def test_the_arrival_is_where_the_outbound_lands():
+    """It used to be the return landing, so three offers leaving at different
+    times all showed the same arrival - and the red-eye scorer docked a 13:59
+    outbound for coming in at 23:08 three days later."""
+    option = normalize_offer(return_offer(), live_mode=True, passengers=2, currency="USD")
+
+    assert option.arrival_at.isoformat() == "2026-10-30T13:59:00"
+    assert option.departure_at.isoformat() == "2026-10-30T12:16:00"
+
+
+def test_stops_describe_the_outbound_like_every_other_scalar():
+    """`max` across both directions could not say which leg had the stop."""
+    option = normalize_offer(return_offer(return_stops=("DFW",)), live_mode=True, passengers=2, currency="USD")
+
+    assert option.stops == 0, "the outbound is nonstop"
+    assert option.slices[1].stops == 1, "and the return is not"
+
+
+def test_both_directions_reach_the_card():
+    from app.services.option_metrics import metrics_for
+
+    option = normalize_offer(return_offer(), live_mode=True, passengers=2, currency="USD")
+    figures = {m.label: m.value for m in metrics_for(option)}
+
+    assert figures["Outbound"] == "2h 43m nonstop"
+    assert figures["Return"] == "2h 16m nonstop"
+    assert "Duration" not in figures, "one number for two flights is what went wrong"
+
+
+def test_a_one_way_is_still_called_a_flight():
+    option = normalize_offer(OFFER, live_mode=True, passengers=4, currency="USD")
+    from app.services.option_metrics import metrics_for
+
+    figures = {m.label: m.value for m in metrics_for(option)}
+    assert "Outbound" not in figures
+    assert figures["Flight"].startswith("10h 55m")

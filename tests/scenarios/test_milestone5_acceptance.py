@@ -502,3 +502,78 @@ def test_an_offer_without_an_expiry_is_not_treated_as_expired():
     forever = offer("off_forever", "SFO", price=600.0, stops=0, minutes=655, expires_in=None)
 
     assert forever.is_expired() is False
+
+
+# --- a return trip is two flights, and only one of them is the outbound -------
+
+
+def _leg(origin, destination, depart, arrive, minutes):
+    return FlightSlice(
+        origin=origin, destination=destination,
+        departing_at=depart, arriving_at=arrive, duration_minutes=minutes,
+        segments=[FlightSegment(
+            origin=origin, destination=destination,
+            departing_at=depart, arriving_at=arrive, duration_minutes=minutes,
+            marketing_carrier="AA", flight_number="100",
+        )],
+    )
+
+
+def return_trip(ref: str, *, out_arrive: datetime, back_arrive: datetime) -> FlightOptionData:
+    """Albany to Chicago and home again: lands 13:59, returns at 23:08."""
+    out_depart = out_arrive - timedelta(minutes=163)
+    back_depart = back_arrive - timedelta(minutes=136)
+    return FlightOptionData(
+        provider="duffel", offer_ref=ref, live_mode=True,
+        price=Money(amount=484.0, currency="USD"),
+        price_per_person=Money(amount=242.0, currency="USD"),
+        origin="ALB", destination="ORD",
+        slices=[
+            _leg("ALB", "ORD", out_depart, out_arrive, 163),
+            _leg("ORD", "ALB", back_depart, back_arrive, 136),
+        ],
+        departure_at=out_depart,
+        arrival_at=out_arrive,
+        duration_minutes=163,
+        stops=0,
+        airlines=["AA"],
+    )
+
+
+def test_a_late_return_does_not_penalise_a_daytime_outbound():
+    """`arrival_at` used to be the return landing, so this offer was scored on
+    getting home at 23:08 rather than on reaching Chicago at 13:59."""
+    from app.services.flight_ranking import _arrival_score
+
+    option = return_trip(
+        "off_alb",
+        out_arrive=datetime(2026, 10, 30, 13, 59),
+        back_arrive=datetime(2026, 11, 2, 23, 8),
+    )
+
+    assert _arrival_score(option) == 1.0, "13:59 is a daytime arrival"
+
+
+def test_asking_to_avoid_red_eyes_covers_the_way_home_too():
+    """Both directions are judged, each on its own hours - the old test read
+    the outbound's departure against the return's arrival, which is neither
+    leg."""
+    from app.services.flight_ranking import _red_eye_score
+
+    wants_daylight = FlightPreferences(avoid_red_eye=True)
+
+    daytime_both_ways = return_trip(
+        "off_ok",
+        out_arrive=datetime(2026, 10, 30, 13, 59),
+        back_arrive=datetime(2026, 11, 2, 17, 30),
+    )
+    assert _red_eye_score(daytime_both_ways, wants_daylight) == 1.0
+
+    overnight_home = return_trip(
+        "off_night",
+        out_arrive=datetime(2026, 10, 30, 13, 59),
+        back_arrive=datetime(2026, 11, 3, 2, 30),
+    )
+    assert _red_eye_score(overnight_home, wants_daylight) < 1.0, (
+        "someone who asked to avoid red-eyes meant the way home as well"
+    )
