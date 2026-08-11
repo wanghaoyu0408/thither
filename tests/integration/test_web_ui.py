@@ -101,6 +101,15 @@ async def test_the_choice_cards_show_their_figures(client):
     assert "figuresHtml(o.figures)" not in body
 
 
+async def test_the_page_starts_planning_when_the_brief_is_confirmed(client):
+    """The button is labelled "Start planning" and used to write four fields
+    and stop - so eight of eight trips needed the traveller to type again."""
+    body = (await client.get("/")).text
+
+    assert "Start planning" in body      # the label the button makes a promise with
+    assert "startPlanning" in body       # and the code that keeps it
+
+
 async def test_the_page_carries_on_after_the_last_choice(client):
     """A selection used to be a state change with no consequence: the card
     vanished, the bar went quiet, and planning stopped - beside a reply

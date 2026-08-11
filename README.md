@@ -359,6 +359,30 @@ Fixing it surfaced a second, unreached bug: `_apply_all` cleared every staging b
 success, not just the ones its plan consumed, so any tool committing mid-turn would have
 discarded an earlier tool's places. A commit now drains the whole context.
 
+### A button called "Start planning" now starts planning
+
+The same failure, one step earlier and on every trip: the traveller answers
+the intake questions, presses **Start planning**, and nothing happens. The
+endpoint wrote four fields, lifted the research gate, and returned — and
+nobody walked through the gate it had just opened.
+
+Measured across the whole store, this had never once worked: **8 of 8**
+confirmed trips have a user message *after* the confirmation, and not one
+assistant turn was ever unprompted. Everybody clicked, saw nothing, and typed
+again.
+
+The click now sends the first message itself. **Unconditionally** — unlike the
+card continuation, which waits until nothing is left to pick. Pressing a button
+labelled Start planning is the instruction, and it does not need corroborating:
+a trip whose flights and hotel are already booked has nothing to shop for, and
+a check for "is there work?" would have refused exactly the traveller with the
+least left to arrange.
+
+That trip also exposed a hole in `next_steps`, which reported nothing to do for
+it — no shopping, and an itinerary needs places no search had found yet.
+Finding places is a step in its own right now, which is also what the model is
+told each turn.
+
 ### Choosing a card is the traveller saying "go on"
 
 Reported by the same traveller a day later: they picked their departure

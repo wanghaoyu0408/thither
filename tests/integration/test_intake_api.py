@@ -166,6 +166,25 @@ async def test_confirmation_is_a_persisted_transition(client, session):
     assert research_allowed(persisted) is True
 
 
+async def test_confirming_leaves_the_trip_with_somewhere_to_go(client, session):
+    """Nothing used to assert what happens *after* a confirm, and nothing did.
+
+    Every test stopped at "research is now allowed" - which was true, and
+    which nobody acted on: eight of eight trips in the store needed the
+    traveller to type again after pressing Start planning. The projection the
+    screen and the model both read has to say there is work.
+    """
+    trip = await TripRepository(session).create(ready_trip())
+
+    before = (await client.get(f"/trips/{trip.trip_id}/overview")).json()["next_steps"]
+    assert before == [], "an unconfirmed brief owns the screen on its own"
+
+    await client.post(f"/trips/{trip.trip_id}/intake/confirm")
+
+    after = (await client.get(f"/trips/{trip.trip_id}/overview")).json()["next_steps"]
+    assert after, "a confirmed brief with nothing to do is how Start planning did nothing"
+
+
 async def test_confirmation_refuses_while_something_blocking_is_missing(client, session):
     trip = await TripRepository(session).create(unready_trip())
 

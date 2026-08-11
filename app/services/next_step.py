@@ -138,7 +138,16 @@ def next_steps(state: TripState) -> list[NextStep]:
             # The order hotel_service.resolve_area enforces: an area, then a hotel.
             steps.append(NextStep(kind="research", what="hotel", label="Find a place to stay"))
 
-    if state.entities and not state.itinerary.days:
+    # Places are the raw material, so a confirmed trip holding none has an
+    # obvious first move. Without this a trip whose flights and hotel are
+    # already booked reported nothing to do at all - the traveller with the
+    # least left to arrange got the emptiest answer, and the model was told
+    # the same thing in its own state projection.
+    if not state.entities:
+        steps.append(
+            NextStep(kind="research", what="places", label="Find places worth going")
+        )
+    elif not state.itinerary.days:
         steps.append(
             NextStep(kind="generate", what="itinerary", label="Build the daily itinerary")
         )

@@ -156,11 +156,39 @@ def test_an_itinerary_is_the_step_once_there_are_places_and_no_days():
     assert ("generate", "itinerary") not in kinds(state)
 
 
+def test_a_confirmed_trip_with_no_places_starts_by_finding_some():
+    state = planning_trip()
+    state.entities = {}
+    state.itinerary.days = []
+
+    steps = kinds(state)
+    assert ("research", "places") in steps
+    # Nothing to lay out yet, so laying it out is not the step.
+    assert ("generate", "itinerary") not in steps
+
+
+def test_a_trip_whose_flights_and_hotel_are_booked_still_has_work():
+    """The trap this fix exists for.
+
+    Everything arranged means nothing to shop for, and an itinerary needs
+    places nobody has searched for yet - so this trip used to report no next
+    step at all. The traveller with the least left to arrange got the emptiest
+    answer, and anything gated on "is there work?" did nothing for them.
+    """
+    state = planning_trip()
+    state.brief.scope.flights = "already_arranged"
+    state.brief.scope.lodging = "already_arranged"
+    state.entities = {}
+    state.itinerary.days = []
+
+    assert kinds(state) == [("research", "places")]
+
+
 def test_a_trip_with_nothing_left_says_so():
     state = planning_trip()
     state.brief.scope.flights = "already_arranged"
     state.brief.scope.lodging = "already_arranged"
-    # sample_state already has a day laid out.
+    # sample_state already has places and a day laid out.
     assert next_steps(state) == []
 
 

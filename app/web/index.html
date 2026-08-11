@@ -2248,6 +2248,25 @@ async function continueIfSettled() {
   await send(`✓ ${chosen.join(" · ")} — please carry on from here.`);
 }
 
+/** The button says "Start planning". This is what makes that true.
+ *
+ *  Confirming used to write four fields and stop. Across every trip in the
+ *  store - eight of eight - the traveller clicked it and then had to type
+ *  something before anything happened, which is the button not working.
+ *
+ *  Unconditional on purpose, unlike `continueIfSettled`. A trip whose flights
+ *  and hotel are already booked has nothing to shop for and no places to lay
+ *  out yet, so a check for "is there work?" would refuse exactly the traveller
+ *  with the least left to arrange. Clicking a button labelled Start planning
+ *  is the instruction; it does not need corroborating. */
+async function startPlanning() {
+  // adopt() reloads the overview and intake without awaiting either, so both
+  // still describe the unconfirmed brief at the moment act() returns.
+  await Promise.all([refresh(), loadIntake()]);
+  if (S.busy || !S.tripId) return;
+  await send("✓ Brief confirmed — please start planning.");
+}
+
 function chooserHtml(view) {
   const card = (o) => `<div class="choice">
     <b>${esc(o.label)}</b>
@@ -3179,8 +3198,12 @@ function wireWorkspace() {
   const answerBtn = $("answerBtn");
   if (answerBtn) answerBtn.onclick = () => submitAnswers();
   const confirmBtn = $("confirmBtn");
-  if (confirmBtn) confirmBtn.onclick = () =>
-    act("/intake/confirm", post({}), (r) => r.summary);
+  if (confirmBtn) confirmBtn.onclick = async () => {
+    const result = await act("/intake/confirm", post({}), (r) => r.summary);
+    // Not on the no-op paths: confirming an already-confirmed brief, or losing
+    // a revision race, must not spend a turn saying nothing happened.
+    if (result?.applied) await startPlanning();
+  };
   const editBtn = $("editBriefBtn");
   // Editing reuses the inline brief editors that already exist on Overview,
   // rather than a second set that could drift from them.
