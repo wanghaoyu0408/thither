@@ -101,6 +101,27 @@ async def test_the_choice_cards_show_their_figures(client):
     assert "figuresHtml(o.figures)" not in body
 
 
+async def test_the_brief_comes_before_the_questions(client):
+    """Read it the way the traveller works: what they have already told us
+    first, what is still being asked below it, the button that starts the trip
+    last. The questions used to sit on top, pushing the very thing being
+    confirmed below the fold."""
+    body = (await client.get("/")).text
+
+    assert body.index("briefCardHtml(view, { confirmed: false })") < body.index("Still asking")
+    assert body.index("Still asking") < body.index("finalStepHtml(view)")
+
+
+async def test_the_page_asks_whether_there_is_anything_else(client):
+    body = (await client.get("/")).text
+
+    assert "Anything else?" in body
+    assert "finalStepHtml" in body
+    # The toggle and the typed text live in S, never the DOM: render() replaces
+    # the workspace, and ticking any quick-pick chip calls it.
+    assert "S.extra" in body
+
+
 async def test_the_page_starts_planning_when_the_brief_is_confirmed(client):
     """The button is labelled "Start planning" and used to write four fields
     and stop - so eight of eight trips needed the traveller to type again."""

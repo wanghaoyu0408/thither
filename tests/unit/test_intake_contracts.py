@@ -347,6 +347,21 @@ def test_the_origin_reaches_the_model():
     assert brief["origin"] == {"city": "Cupertino", "airport_codes": ["SFO"]}
 
 
+def test_other_requirements_reach_the_model():
+    """The same defect as the origin, in a field nobody had ever read.
+
+    `brief.notes` was writable from the first milestone - the tool declared it,
+    `_brief_ops` mapped it - and `summarize()` never carried it, so anything a
+    traveller asked to be planned around went into the store and stopped there.
+    """
+    state = trip(destination_city="Kyoto")
+    state.brief.notes = "back by 9pm on the 23rd, and no long walks"
+
+    brief = summarize(state)["brief"]
+
+    assert brief["notes"] == "back by 9pm on the 23rd, and no long walks"
+
+
 async def test_the_model_is_not_shown_a_question_it_no_longer_needs_to_ask():
     """`questions_awaiting_answer` is what stops the agent re-asking. A spent
     question left in there is an instruction to ask it again, every turn."""

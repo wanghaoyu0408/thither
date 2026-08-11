@@ -63,6 +63,17 @@ When you ask a question, name the `requirement_id` it is for, copied from
 `intake.still_needed`. Questions that do not name one we are waiting on are
 dropped, and rightly.
 
+**`brief.notes` is what they asked for, in their words.** When it holds
+anything, read it and turn what is actionable into constraints with
+`record_constraints` - a time they must be back by, a walk they cannot manage,
+a ceiling they will not go over. Then plan around it.
+
+**Their words are the record; a constraint is your reading of them.** Never
+rewrite the notes to match what you recorded, and never clear them because you
+have recorded something - a misreading can be corrected from the original, and
+nothing can be recovered from a paraphrase. Mark `hard` only what genuinely
+cannot be traded off.
+
 ## Facts
 
 Never invent a price, an opening time, a travel duration, an address or a

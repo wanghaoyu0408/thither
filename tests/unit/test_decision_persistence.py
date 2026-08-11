@@ -187,7 +187,15 @@ async def test_an_airport_search_with_a_role_stages_that_decision():
     assert "departure_airport" in context.pending_decisions
     decision = context.pending_decisions["departure_airport"]
     assert [option["data"]["iata"] for option in decision["options"]] == ["SFO", "SJC"]
-    assert "18 min drive" in decision["options"][0]["pros"][0]
+
+    # The drive time still has to reach the card, but as a figure rather than a
+    # bullet: rounded to the minute it made two airports of one city read
+    # identically, so it is a metric now and keeps its decimal.
+    from app.services.option_metrics import metrics_for
+    from app.models.flight import AirportOption
+
+    figures = metrics_for(AirportOption.model_validate(decision["options"][0]["data"]))
+    assert any("18.0 min" in metric.value for metric in figures)
 
 
 async def test_an_unmeasured_drive_is_named_as_a_gap_not_scored_as_a_zero():

@@ -17,6 +17,7 @@ from app.agent.tool_registry import (
 )
 from app.config import Settings
 from app.db.repository import TripRepository
+from app.models.constraint import TripConstraint
 from app.models.entity import PlaceEntity
 from app.models.intake import ClarificationQuestion
 from app.models.trip import TripDates, TripState
@@ -418,3 +419,86 @@ async def test_the_brief_reaches_the_store_through_the_normal_gates(session):
     assert persisted.brief.destination.city == "Maui"
     assert persisted.brief.party.adults == 2
     assert persisted.revision == stored.revision + 1
+
+
+# --- what they asked for, and what we made of it -------------------------------
+
+
+async def test_a_stated_requirement_becomes_a_constraint_without_losing_its_words(session):
+    """Their words are the record; a constraint is a reading of them.
+
+    Nothing in the repo could create a `TripConstraint` before this - the model
+    saw them in its state summary and the prompt called them non-negotiable,
+    and there was no tool and no endpoint that made one. So "anything else I
+    should know" had nowhere structured to land.
+
+    A misreading can be corrected from the original sentence. Nothing can be
+    recovered from a paraphrase, which is why the notes are never rewritten to
+    match what was recorded.
+    """
+    from app.agent.tool_registry import _record_constraints
+    from app.models.patch import TripPatch
+
+    repo = TripRepository(session)
+    said = "back by 9pm on the 23rd, and no long walks - my mother is coming"
+    state = blank_trip()
+    state.brief.notes = said
+    stored = await repo.create(state)
+    context = context_for(stored)
+
+    plan = await _record_constraints(context, {"constraints": [
+        {"category": "schedule", "description": "back at the hotel by 21:00 on the 23rd",
+         "type": "hard"},
+        {"category": "mobility", "description": "no long walks", "type": "soft"},
+    ]})
+
+    result = await repo.apply_patch(
+        stored.trip_id,
+        TripPatch(base_revision=stored.revision, reason="constraints", actor="agent",
+                  operations=plan["__patches__"][0]["operations"]),
+    )
+    assert result.applied is True
+
+    persisted = await repo.get(stored.trip_id)
+    assert [c.description for c in persisted.constraints] == [
+        "back at the hotel by 21:00 on the 23rd",
+        "no long walks",
+    ]
+    assert [c.type for c in persisted.constraints] == ["hard", "soft"]
+    # They said it; nobody inferred it.
+    assert {c.source for c in persisted.constraints} == {"user_explicit"}
+    # And the sentence they actually typed is untouched.
+    assert persisted.brief.notes == said
+
+
+async def test_the_same_requirement_is_not_recorded_twice(session):
+    from app.agent.tool_registry import _record_constraints
+
+    stored = await TripRepository(session).create(blank_trip())
+    context = context_for(stored)
+    context.state.constraints = [
+        TripConstraint(category="mobility", description="No long walks", type="soft",
+                       source="user_explicit")
+    ]
+
+    result = await _record_constraints(context, {"constraints": [
+        {"category": "mobility", "description": "no long walks", "type": "soft"},
+    ]})
+
+    assert result["recorded"] == 0
+    assert "already recorded" in result["note"]
+
+
+async def test_a_constraint_cannot_be_pinned_on_someone_who_is_not_on_the_trip(session):
+    from app.agent.tool_registry import _record_constraints
+
+    stored = await TripRepository(session).create(blank_trip())
+    context = context_for(stored)
+
+    result = await _record_constraints(context, {"constraints": [
+        {"category": "food", "description": "no shellfish", "type": "hard",
+         "traveler_id": "trv_nobody"},
+    ]})
+
+    assert "error" in result
+    assert context.pending_brief_ops == []

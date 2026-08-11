@@ -96,12 +96,20 @@ class DecisionView(BaseModel):
 
 def label_for(data: Any) -> str:
     """A name a person would recognise, from whatever payload a slot holds."""
-    for attribute in ("area_name", "city", "name", "iata"):
+    # Airports first, and by name rather than by city. The loop below would
+    # return at `city`, so both Chicago airports rendered as "Chicago" - two
+    # identical cards, and the same word twice in the model's own summary,
+    # since `_selected_label` reads this too. It is the flight branch's defect
+    # one attribute away: "a shortlist of four flights renders as the same
+    # line four times". Only AirportOption carries `iata`.
+    iata = getattr(data, "iata", None)
+    if iata:
+        name = getattr(data, "name", None)
+        return f"{name} ({iata})" if name else str(iata)
+
+    for attribute in ("area_name", "city", "name"):
         value = getattr(data, attribute, None)
         if value:
-            if attribute == "iata":
-                where = getattr(data, "city", None)
-                return f"{value} ({where})" if where else str(value)
             return str(value)
     origin = getattr(data, "origin", None)
     destination = getattr(data, "destination", None)

@@ -161,6 +161,12 @@ def summarize(state: TripState) -> dict[str, Any]:
             "pace": state.brief.pace,
             # Shown so the agent neither re-asks nor forgets it when searching.
             "avoid_red_eye": state.brief.avoid_red_eye,
+            # Anything else they wanted planned around, in their own words.
+            # Writable since the beginning and readable by nobody: the tool
+            # could set it, and neither the model nor the screen ever saw it
+            # again. It is the record - constraints are derived from it, never
+            # a replacement for it.
+            "notes": state.brief.notes,
         },
         # Where intake stands, and what is still missing. A rule the model
         # cannot see the state for is not a rule - and without the questions

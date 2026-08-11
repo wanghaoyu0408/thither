@@ -12,6 +12,7 @@ derived from anything but what the ranker wrote down at the time.
 from pydantic import BaseModel
 
 from app.models.decision import FlightOptionData, HotelAreaOption, HotelOptionData
+from app.models.flight import AirportOption
 
 # Below this, a guest rating says more about who bothered to review than about
 # the hotel. One home for the threshold, so a card and an explanation cannot
@@ -136,6 +137,35 @@ def metrics_for(data) -> list[Metric]:
             )
         return metrics
 
+    if isinstance(data, AirportOption):
+        # This branch did not exist, so an airport card carried no numbers at
+        # all - and two airports serving one city rendered as the same card
+        # twice. The minutes keep a decimal on purpose: 21.5 and 21.8 both read
+        # "22" rounded, which is precisely the pair a traveller is choosing
+        # between. `distance_km` separates them most sharply of all and had
+        # never reached a screen.
+        if data.ground_travel_minutes is not None:
+            metrics.append(
+                Metric(
+                    label="Drive from the pickup point",
+                    value=f"{data.ground_travel_minutes:.1f} min",
+                    note=(
+                        None
+                        if data.ground_travel_source == "routes_api"
+                        else "not measured; this figure cannot be compared"
+                    ),
+                )
+            )
+        if data.distance_km is not None:
+            metrics.append(
+                Metric(
+                    label="Distance",
+                    value=f"{data.distance_km:.1f} km",
+                    note="straight line, not a drive",
+                )
+            )
+        return metrics
+
     return metrics
 
 
@@ -157,5 +187,12 @@ def unscored_for(data) -> list[str]:
             "Quietness - no hotel source publishes a noise measure",
             "Room size - not published, and a star category describes facilities "
             "rather than square metres",
+        ]
+    if isinstance(data, AirportOption):
+        return [
+            "Fares from this airport - nothing has been priced yet, and the "
+            "cheaper airport is not always the closer one",
+            "Time inside the airport - security, terminal transfers and how "
+            "early you must arrive are not published anywhere",
         ]
     return []

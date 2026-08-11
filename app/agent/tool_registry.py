@@ -16,6 +16,7 @@ from typing import Any
 from app.config import Settings
 from app.models.arrival import ArrivalContext
 from app.models.common import utcnow
+from app.models.constraint import TripConstraint
 from app.models.decision import (
     Decision,
     DecisionOption,
@@ -149,7 +150,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "description": "What the trip is for, in their words: food, beaches, hiking.",
                 },
                 "pace": {"type": ["string", "null"], "enum": ["relaxed", "balanced", "packed"]},
-                "notes": {"type": ["string", "null"]},
+                "notes": {
+                    "type": ["string", "null"],
+                    "description": (
+                        "Anything else they want planned around, in their own words - the "
+                        "record of what they asked for. Add to it; never paraphrase it away, "
+                        "and never clear it because you have turned it into constraints."
+                    ),
+                },
                 "scope": {
                     "type": "object",
                     "description": (
@@ -566,6 +574,51 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 },
             },
             "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "record_constraints",
+        "description": (
+            "Turn a requirement the traveller stated into one or more constraints the trip "
+            "carries - 'back by 9pm on the 23rd', 'no long walks', 'nothing over $200 a "
+            "night'. Read brief.notes for what they actually said. Their words stay exactly "
+            "as they wrote them: a constraint is your reading of them, never a replacement, "
+            "so never rewrite or clear the notes because you have recorded one. Mark hard "
+            "only what cannot be traded off; everything else is soft."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "constraints": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "category": {
+                                "type": "string",
+                                "enum": [
+                                    "budget", "flight", "hotel", "food", "mobility",
+                                    "schedule", "activity", "transport", "other",
+                                ],
+                            },
+                            "description": {
+                                "type": "string",
+                                "description": "One sentence, close to how they put it.",
+                            },
+                            "type": {"type": "string", "enum": ["hard", "soft"]},
+                            "traveler_id": {
+                                "type": ["string", "null"],
+                                "description": "Whose requirement this is, if only one person's.",
+                            },
+                        },
+                        "required": ["category", "description", "type"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["constraints"],
             "additionalProperties": False,
         },
     },
@@ -1237,13 +1290,17 @@ def _refuse_if_booked(
 
 
 def _airport_pros(airport: AirportOption) -> list[str]:
-    """Only what was measured. A straight-line distance is not a drive."""
-    pros: list[str] = []
-    if airport.ground_travel_source == "routes_api" and airport.ground_travel_minutes is not None:
-        pros.append(f"{airport.ground_travel_minutes:.0f} min drive from the pickup point")
-    if airport.city:
-        pros.append(f"serves {airport.city}")
-    return pros
+    """Nothing. An airport's case is entirely in its figures.
+
+    There used to be two bullets here and both made the card worse: the drive
+    time, rounded to the minute, turned 21.5 and 21.8 into the same "22 min",
+    and `serves {city}` is identical for every airport of one city - so ORD and
+    MDW rendered as the same card twice. Both facts are metrics now, where they
+    keep their precision and sit beside the distance that separates them. A
+    figure shown as both a pill and a bullet is noise; shown only as a bullet,
+    it was a lie about precision.
+    """
+    return []
 
 
 def _airport_cons(airport: AirportOption) -> list[str]:
@@ -2117,6 +2174,59 @@ async def _refresh_traveler_preferences(
     return payload
 
 
+async def _record_constraints(context: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    """Store what the traveller requires, derived from what they said.
+
+    Committed as it goes, like the intake tools: a requirement someone stated
+    is a fact about the trip, not a proposal about it. Nothing here touches
+    `brief.notes` - the words are the record and the constraints are a reading
+    of them, so a misreading can always be corrected from the original. That is
+    the same rule that keeps Google's facts and people's opinions in different
+    places.
+
+    Nothing could create a constraint before this: the model could see them in
+    its state summary and the prompt could call them non-negotiable, but there
+    was no tool and no endpoint that made one.
+    """
+    asked = args.get("constraints") or []
+    if not asked:
+        return {"error": "no constraints given"}
+
+    existing = {c.description.strip().lower() for c in context.state.constraints}
+    staged: list[dict[str, Any]] = []
+    for raw in asked:
+        description = (raw.get("description") or "").strip()
+        if not description or description.lower() in existing:
+            continue
+        traveler_id = raw.get("traveler_id")
+        known = {t.traveler_id for t in context.state.travelers}
+        if traveler_id and traveler_id not in known:
+            return {
+                "error": f"no traveler {traveler_id!r} on this trip",
+                "travelers": sorted(known),
+            }
+        existing.add(description.lower())
+        staged.append(
+            TripConstraint(
+                category=raw.get("category", "other"),
+                description=description,
+                type=raw.get("type", "soft"),
+                scope="traveler" if traveler_id else "trip",
+                traveler_id=traveler_id,
+                # They said it; nobody inferred it.
+                source="user_explicit",
+            ).model_dump(mode="json")
+        )
+
+    if not staged:
+        return {"recorded": 0, "note": "every one of those is already recorded"}
+
+    context.pending_brief_ops.extend(
+        {"op": "add", "path": "/constraints/-", "value": constraint} for constraint in staged
+    )
+    return _commit_staged(context, f"record {len(staged)} constraint(s)")
+
+
 _NEVER_APPLY_NOTE = (
     "Recorded. If this becomes a proposable pattern, the Travel DNA card asks the "
     "traveller; only the traveller answers - never apply it yourself."
@@ -2749,6 +2859,7 @@ HANDLERS = {
     "research_web": _research_web,
     "review_group_preferences": _review_group_preferences,
     "refresh_traveler_preferences": _refresh_traveler_preferences,
+    "record_constraints": _record_constraints,
     "record_stated_preference": _record_stated_preference,
     "review_learned_preferences": _review_learned_preferences,
     "discover_restaurants": _discover_restaurants,

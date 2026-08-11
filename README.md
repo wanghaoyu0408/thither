@@ -359,6 +359,53 @@ Fixing it surfaced a second, unreached bug: `_apply_all` cleared every staging b
 success, not just the ones its plan consumed, so any tool committing mid-turn would have
 discarded an earlier tool's places. A commit now drains the whole context.
 
+### Two airports of one city are two different airports
+
+A traveller was shown two arrival-airport cards reading, in full:
+
+```
+Chicago                                Chicago
+✓ 22 min drive from the pickup point   ✓ 22 min drive from the pickup point
+✓ serves Chicago                       ✓ serves Chicago
+```
+
+The stored options were never that alike — ORD and MDW differ by name, by code,
+and by **24.9 km against 14.7 km**. Four renderers each dropped the part that
+separated them: `label_for` returned at `city`, two attributes before the
+`iata` branch that existed for exactly this; `metrics_for` had no airport
+branch, so no figure ever reached a card; the drive time was rounded to the
+minute, turning 21.5 and 21.8 into one number; and `serves {city}` is identical
+for every airport of a city by construction.
+
+`label_for` also feeds the model's own state summary, so the agent could not
+tell them apart either — which is why it wrote "Chicago" twice.
+
+The card now reads `Chicago O'Hare International Airport (ORD)` with its
+minutes to a decimal and its distance beside them. No test caught this because
+every airport fixture set `city=iata`: two airports of one city could not exist
+in the suite at all.
+
+### The trip you have, then what is still being asked
+
+The intake panel put the outstanding questions on top and the brief — the thing
+being confirmed — below them. It reads the other way round now: what you have
+already told us, what you can tick, what is still being asked, and last the one
+button that starts the trip.
+
+Beside that button is a final question: **anything else I should know?** Say no
+and planning starts; say yes and you get a box. What you type is kept verbatim
+in `brief.notes` — a field that had been writable since the first milestone and
+read by nobody, so anything a traveller asked to be planned around went into
+the store and stopped there. It now reaches the model every turn and appears on
+the brief card, where it can be corrected.
+
+The agent turns what is actionable in it into constraints with a new
+`record_constraints` tool — nothing in the codebase could create a
+`TripConstraint` before, though the model could see them and the prompt called
+them non-negotiable. **The words stay exactly as written.** A constraint is a
+reading of them, never a replacement: a misreading can be corrected from the
+original sentence, and nothing can be recovered from a paraphrase.
+
 ### A button called "Start planning" now starts planning
 
 The same failure, one step earlier and on every trip: the traveller answers

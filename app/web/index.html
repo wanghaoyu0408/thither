@@ -517,17 +517,21 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 .q label input { margin-top: 2px; }
 .q label small { display: block; color: var(--ink-3); font-size: 11.5px; }
 .q .free { margin-top: 8px; }
-.q .free input, .q .dates input {
+.q .free input, .q .free textarea, .q .dates input {
   width: 100%; font: inherit; font-size: 13px; padding: 6px 8px;
   border: 1px solid var(--line); border-radius: var(--r-sm);
   background: var(--panel-2); color: var(--ink);
 }
+.q .free textarea { resize: vertical; min-height: 56px; }
 .q .dates { display: flex; gap: 8px; }
 .q .hint { font-size: 11.5px; color: var(--ink-3); margin-top: 6px; }
 
 .brief-card {
   background: var(--panel); border: 1px solid var(--card-line); box-shadow: var(--elev);
   border-radius: var(--r); padding: 18px 20px;
+  /* It leads the panel now rather than closing it, so it carries its own gap
+     instead of borrowing the confirm row's margin-top. */
+  margin-bottom: 22px;
 }
 .brief-card h3 { font-size: 17px; }
 .brief-card .who { color: var(--ink-2); font-size: 13px; margin-top: 2px; }
@@ -858,6 +862,11 @@ const S = { tripId: null, trip: null, over: null, busy: false,
             lastDiff: null, mapDay: null, decisions: null, intake: null,
             messages: [], pollTimer: null, selectedItem: null,
             dismissedChoosers: new Set(), loadingDecisions: false,
+            // The "anything else?" step. Held here and not in the DOM because
+            // render() replaces the whole workspace, and ticking any quick-pick
+            // chip calls it - a sentence typed into a textarea would be one
+            // click away from gone.
+            extra: { open: false, text: "" },
             // profile_id -> GET /profiles/{id}/learning payload. Fetched when
             // the Travel DNA panel opens, re-fetched after every consent action.
             learning: {},
@@ -2012,13 +2021,20 @@ function intakeHtml() {
     </div>`;
   }
 
-  // Questions go *above* the brief, never instead of it. They used to replace
-  // it, so a trip with anything outstanding had no confirm button in the page
-  // at all - while the agent went on asking to have the brief confirmed.
+  // Read down the way the traveller works: what they have already told us,
+  // then what they can tick, then what is still being asked, then the one
+  // button that starts the trip. Questions were at the top, which put the
+  // brief - the thing being confirmed - below the fold behind them. They still
+  // never *replace* it, which is what the old order was protecting against:
+  // a trip with anything outstanding once had no confirm button in the page at
+  // all, while the agent went on asking for a confirmation it had made
+  // impossible.
   const questions = view.questions.map(questionHtml).join("");
   return `<div class="intake">
-    <h2>Does this look right?</h2>
-    <p class="lede">Nothing is searched until you say so.</p>
+    <h2>Here is your trip so far</h2>
+    <p class="lede">Check it over and add anything missing. Nothing is searched until you say so.</p>
+    ${briefCardHtml(view, { confirmed: false })}
+    ${quickPicksHtml()}
     ${questions ? `<div class="asks">
       <p class="eyebrow">Still asking</p>
       ${questions}
@@ -2026,8 +2042,7 @@ function intakeHtml() {
         <span class="empty" style="font-size:12px">Or just tell the agent in the chat.</span>
       </div>
     </div>` : ""}
-    ${quickPicksHtml()}
-    ${briefCardHtml(view, { confirmed: false })}
+    ${finalStepHtml(view)}
   </div>`;
 }
 
@@ -2124,6 +2139,12 @@ function questionHtml(question) {
   return `<div class="q" data-question="${id}"><b>${esc(question.question)}</b>${body}</div>`;
 }
 
+/** The brief card, and only the card.
+ *
+ *  The confirm row used to be returned alongside it as a sibling. Once the
+ *  questions moved below the brief that put a `.go` row in the middle of the
+ *  panel and another at the foot, so the row belongs to `intakeHtml`, which
+ *  knows what comes last. */
 function briefCardHtml(view, { confirmed }) {
   const list = (rows, cls) => rows.length
     ? `<ul>${rows.map((r) => `<li class="${cls || ""}">${esc(r)}</li>`).join("")}</ul>` : "";
@@ -2155,8 +2176,30 @@ function briefCardHtml(view, { confirmed }) {
       ${sec("Preferences", list(view.preferences.map((r) => "• " + r)))}
       ${sec("I will plan", list(view.will_plan.map((r) => "✓ " + r), "yes"))}
       ${sec("I will not search", list(view.will_not_search.map((r) => "✕ " + r), "no"))}
+      ${sec("Anything else", b.notes ? `<ul><li>${esc(b.notes)}</li></ul>` : "")}
+    </div>`;
+}
+
+/** The last thing in the panel: whether there is anything else, then the one
+ *  button that starts the trip.
+ *
+ *  Both halves of the toggle live in `S`, never in the DOM. `render()` replaces
+ *  the whole workspace, and `patchBrief` (ticking any quick-pick chip) and
+ *  `adopt` both call it - so a half-typed sentence held only in a textarea is
+ *  one chip click away from being lost. */
+function finalStepHtml(view) {
+  const open = S.extra.open;
+  return `<div class="picks">
+    <p class="eyebrow">One more thing</p>
+    <div class="pickrow"><span>Anything else?</span>
+      <button class="pick ${open ? "on" : ""}" data-extra="yes">Yes, let me add it</button>
+      <button class="pick ${open ? "" : "on"}" data-extra="no">Nothing else</button>
     </div>
-    ${confirmed ? "" : `<div class="go">
+    ${open ? `<div class="q" style="margin-top:8px"><div class="free">
+      <textarea id="extraText" rows="3"
+        placeholder="Anything I should plan around — “we’re celebrating an anniversary”, “no long walks”, “back by 9pm on the 23rd”"
+      >${esc(S.extra.text)}</textarea></div></div>` : ""}
+    <div class="go">
       <button class="btn" id="confirmBtn" ${view.ready_to_confirm ? "" : "disabled"}>Start planning</button>
       <button class="btn ghost sm" id="editBriefBtn">Edit</button>
       ${view.gaps.length
@@ -2164,7 +2207,8 @@ function briefCardHtml(view, { confirmed }) {
         // smaller box, so what it is waiting for sits right beside it.
         ? `<span class="waiting">Waiting on: ${view.gaps.map((g) => esc(g.why)).join("; ")}</span>`
         : '<span class="empty" style="font-size:12px">Nothing is searched until you do.</span>'}
-    </div>`}`;
+    </div>
+  </div>`;
 }
 
 /* Decisions -- rendered wholly from the server's projection. There is no
@@ -2259,12 +2303,15 @@ async function continueIfSettled() {
  *  out yet, so a check for "is there work?" would refuse exactly the traveller
  *  with the least left to arrange. Clicking a button labelled Start planning
  *  is the instruction; it does not need corroborating. */
-async function startPlanning() {
+async function startPlanning(extra = "") {
   // adopt() reloads the overview and intake without awaiting either, so both
   // still describe the unconfirmed brief at the moment act() returns.
   await Promise.all([refresh(), loadIntake()]);
   if (S.busy || !S.tripId) return;
-  await send("✓ Brief confirmed — please start planning.");
+  // Their extra requirements ride along as well as being stored: the state
+  // makes them durable, the message makes this turn address them.
+  await send("✓ Brief confirmed — please start planning."
+    + (extra ? ` They also said: “${extra}”` : ""));
 }
 
 function chooserHtml(view) {
@@ -3197,12 +3244,32 @@ function wireWorkspace() {
   // Intake.
   const answerBtn = $("answerBtn");
   if (answerBtn) answerBtn.onclick = () => submitAnswers();
+
+  // "Anything else?" - the toggle only opens the box, it writes nothing. A
+  // chip that patched as well as revealed would re-render and destroy the very
+  // textarea it had just opened.
+  on("extra", (choice) => { S.extra.open = choice === "yes"; render(); });
+  const extraBox = $("extraText");
+  if (extraBox) {
+    extraBox.oninput = () => { S.extra.text = extraBox.value; };
+    extraBox.focus();
+    extraBox.setSelectionRange(extraBox.value.length, extraBox.value.length);
+  }
+
   const confirmBtn = $("confirmBtn");
   if (confirmBtn) confirmBtn.onclick = async () => {
+    // Their words go in first, so the confirmation snapshot records them as
+    // part of what was agreed rather than as an afterthought.
+    const extra = S.extra.open ? S.extra.text.trim() : "";
+    if (extra) {
+      try {
+        await patchBrief("/brief/notes", extra, "anything else they wanted us to know");
+      } catch (err) { return toast(err.message); }
+    }
     const result = await act("/intake/confirm", post({}), (r) => r.summary);
     // Not on the no-op paths: confirming an already-confirmed brief, or losing
     // a revision race, must not spend a turn saying nothing happened.
-    if (result?.applied) await startPlanning();
+    if (result?.applied) await startPlanning(extra);
   };
   const editBtn = $("editBriefBtn");
   // Editing reuses the inline brief editors that already exist on Overview,
