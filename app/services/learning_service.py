@@ -24,6 +24,8 @@ from datetime import time
 from typing import Any, Callable
 
 from app.config import Settings
+from app.models.common import Money
+from app.models.decision import Decision, FlightOptionData, HotelOptionData
 from app.models.learning import (
     Confidence,
     HypothesisEvidence,
@@ -58,6 +60,19 @@ EARLIEST_PROPOSED_START = "09:30"
 LATEST_PROPOSED_START = "11:30"
 
 QUEUE_TOLERANCE_PROPOSED = 0.2
+
+# What a run of choices proposes for an importance weight (default 0.5).
+# 0.7 is not a new invention: `conflict_service` already treats >= 0.7 as
+# "this person cares about price" when it decides whether a budget gap is
+# worth raising. Learning raises a weight to the codebase's own existing
+# threshold for caring - it never proposes 1.0, because a handful of clicks
+# is not somebody saying a thing is all that matters.
+IMPORTANCE_PROPOSED = 0.7
+
+# Two prices are the same price under this. Not a materiality threshold -
+# a choice between equal prices simply gave nothing up, so there is no
+# preference in it to read.
+SAME_PRICE_EPSILON = 1.0
 
 _STRENGTH_ORDER: dict[SignalStrength, int] = {"weak": 0, "moderate": 1, "strong": 2}
 
@@ -132,6 +147,34 @@ CATALOGUE: dict[PreferenceKey, CatalogueEntry] = {
         consumer="the queue-tolerance conflict row in conflict detection",
         proposed_value=lambda _s: QUEUE_TOLERANCE_PROPOSED,
         already_satisfied=lambda p, v: p.food_preferences.queue_tolerance <= v,
+    ),
+    "values_nonstop": CatalogueEntry(
+        field_path="flight_preferences.nonstop_importance",
+        label="Pays for nonstop",
+        consumer="flight_ranking weights its nonstop dimension by exactly this number",
+        proposed_value=lambda _s: IMPORTANCE_PROPOSED,
+        already_satisfied=lambda p, v: p.flight_preferences.nonstop_importance >= v,
+    ),
+    "flight_price_sensitive": CatalogueEntry(
+        field_path="flight_preferences.price_importance",
+        label="Flies on price",
+        consumer="flight_ranking weights its price dimension by exactly this number",
+        proposed_value=lambda _s: IMPORTANCE_PROPOSED,
+        already_satisfied=lambda p, v: p.flight_preferences.price_importance >= v,
+    ),
+    "hotel_location_matters": CatalogueEntry(
+        field_path="hotel_preferences.location_importance",
+        label="Pays to stay close",
+        consumer="hotel_ranking weights its location dimension by exactly this number",
+        proposed_value=lambda _s: IMPORTANCE_PROPOSED,
+        already_satisfied=lambda p, v: p.hotel_preferences.location_importance >= v,
+    ),
+    "hotel_price_sensitive": CatalogueEntry(
+        field_path="hotel_preferences.price_importance",
+        label="Books on price",
+        consumer="hotel_ranking's price dimension, and the budget-gap conflict row at >= 0.7",
+        proposed_value=lambda _s: IMPORTANCE_PROPOSED,
+        already_satisfied=lambda p, v: p.hotel_preferences.price_importance >= v,
     ),
 }
 
@@ -211,6 +254,187 @@ def signal_for_replan(
     )
 
 
+def _money(value: Money | None) -> str:
+    if value is None:
+        return "?"
+    symbol = "$" if value.currency == "USD" else f"{value.currency} "
+    return f"{symbol}{value.amount:,.0f}"
+
+
+def _total_stops(data: FlightOptionData) -> int | None:
+    """Stops in both directions. A nonstop out with a two-stop return is not
+    a nonstop trip, and the scalar field describes the outbound only.
+
+    `FlightSlice.stops` counts segments, so a slice carrying none reports
+    zero - which reads as "nonstop" and is really "nobody said". Fall back to
+    whatever the provider stated rather than learn a nonstop that isn't one.
+    """
+    if any(s.segments for s in data.slices):
+        return sum(s.stops for s in data.slices)
+    return data.stops
+
+
+def _stops_label(stops: int | None, legs: int) -> str:
+    """The stop count in the vocabulary the cards already use.
+
+    A return trip's total has to say it is a total. The card reports each
+    direction on its own line - "Outbound 1 stop", "Return 1 stop" - so a
+    bare "2 stops" beside it reads as a third, different figure rather than
+    the sum of those two.
+    """
+    if stops is None:
+        return "stops unknown"
+    both = legs > 1
+    if stops == 0:
+        return "nonstop both ways" if both else "nonstop"
+    plural = "stops" if stops > 1 else "stop"
+    return f"{stops} {plural} in all" if both else f"{stops} {plural}"
+
+
+def _flight_label(data: FlightOptionData) -> str:
+    return f"{_money(data.price)}, {_stops_label(_total_stops(data), len(data.slices) or 1)}"
+
+
+def _hotel_price(data: HotelOptionData) -> Money | None:
+    return data.nightly_price or data.total_price
+
+
+def _hotel_price_amount(data: HotelOptionData) -> float | None:
+    price = _hotel_price(data)
+    return price.amount if price is not None else None
+
+
+def _hotel_label(data: HotelOptionData) -> str:
+    minutes = data.mean_route_minutes()
+    where = f"{minutes:.0f} min from your places" if minutes is not None else "distance unknown"
+    return f"{data.name} at {_money(_hotel_price(data))}, {where}"
+
+
+def _what_the_choice_cost[T](
+    chosen: T,
+    alternatives: list[T],
+    price_of: Callable[[T], float | None],
+    cost_of: Callable[[T], float | None],
+) -> tuple[str, T] | None:
+    """Which way a tradeoff went, and against which option it was made.
+
+    `cost_of` is anything the traveller would rather have less of - stops,
+    minutes from where they are going. Returns:
+
+      * `("quality", other)` - they paid more than `other` and got a lower
+        cost for it.
+      * `("price", other)` - they took the cheaper option while `other`, on
+        the same card, had the lower cost.
+      * `None` - the choice gave nothing up. A winner that is both cheapest
+        and best teaches nothing about priorities, however firmly it was
+        clicked, and reading a preference out of it would be inventing one.
+    """
+    my_price, my_cost = price_of(chosen), cost_of(chosen)
+    if my_price is None or my_cost is None:
+        return None
+    comparable = [
+        (a, p, c)
+        for a in alternatives
+        if (p := price_of(a)) is not None and (c := cost_of(a)) is not None
+    ]
+    if not comparable:
+        return None
+
+    cheaper = [(a, p, c) for a, p, c in comparable if p < my_price - SAME_PRICE_EPSILON]
+    if cheaper:
+        # They passed over cheaper money. Only a lower cost explains that;
+        # if the cheapest was also the better one, this choice was made on
+        # something we do not measure, and we say nothing.
+        against, _, its_cost = min(cheaper, key=lambda row: row[1])
+        return ("quality", against) if my_cost < its_cost else None
+
+    # Nothing on the card was cheaper. If something dearer was better, the
+    # money is what they kept.
+    dearer_and_better = [
+        (a, p, c) for a, p, c in comparable if p > my_price + SAME_PRICE_EPSILON and c < my_cost
+    ]
+    if dearer_and_better:
+        against, _, _ = min(dearer_and_better, key=lambda row: row[2])
+        return ("price", against)
+    return None
+
+
+def signals_for_choice(
+    state: TripState,
+    *,
+    decision_name: str,
+    decision: Decision,
+    chosen_option_id: str,
+    profile_id: str,
+) -> list[LearningSignal]:
+    """What picking one card over the others says, when it says anything.
+
+    Only flights and hotels: they are the decisions whose options carry both
+    a price and something to trade it against. Airports and neighbourhoods
+    have no price on them at all, so a choice between them is not a tradeoff
+    this can read, and inventing an axis for it would be worse than silence.
+
+    Weak, like every other click. Choosing the nonstop once is a Tuesday;
+    the thresholds decide when a run of Tuesdays is a preference.
+    """
+    chosen = next((o for o in decision.options if o.option_id == chosen_option_id), None)
+    if chosen is None:
+        return []
+    # A rejected option is not a road not taken - it is one already refused,
+    # and it is not on the card being chosen from.
+    others = [
+        o for o in decision.options if o.option_id != chosen_option_id and o.status != "rejected"
+    ]
+    if not others:
+        return []
+
+    key: PreferenceKey
+    if isinstance(chosen.data, FlightOptionData):
+        flights = [o for o in others if isinstance(o.data, FlightOptionData)]
+        verdict = _what_the_choice_cost(
+            chosen.data,
+            [o.data for o in flights],
+            lambda d: d.price.amount,
+            _total_stops,
+        )
+        if verdict is None:
+            return []
+        which, against = verdict
+        key = "values_nonstop" if which == "quality" else "flight_price_sensitive"
+        chose, over = _flight_label(chosen.data), _flight_label(against)
+    elif isinstance(chosen.data, HotelOptionData):
+        hotels = [o for o in others if isinstance(o.data, HotelOptionData)]
+        verdict = _what_the_choice_cost(
+            chosen.data,
+            [o.data for o in hotels],
+            _hotel_price_amount,
+            lambda d: d.mean_route_minutes(),
+        )
+        if verdict is None:
+            return []
+        which, against = verdict
+        key = "hotel_location_matters" if which == "quality" else "hotel_price_sensitive"
+        chose, over = _hotel_label(chosen.data), _hotel_label(against)
+    else:
+        return []
+
+    return [
+        LearningSignal(
+            profile_id=profile_id,
+            trip_id=state.trip_id,
+            preference_key=key,
+            strength="weak",
+            source="behavior_choice",
+            context={
+                "decision": decision_name,
+                "chose": chose,
+                "over": over,
+                "trip_title": state.metadata.title,
+            },
+        )
+    ]
+
+
 def signals_for_reflection(
     state: TripState, reflection: TripReflection, profile_id: str
 ) -> list[LearningSignal]:
@@ -274,6 +498,8 @@ def _evidence_line(signal: LearningSignal) -> str:
         )
     if signal.source == "behavior_replan":
         return f"{trip} — asked for day {ctx.get('day', '?')} {ctx.get('asked_for', 'easier')}"
+    if signal.source == "behavior_choice":
+        return f"{trip} — chose {ctx.get('chose', '?')} over {ctx.get('over', '?')}"
     if signal.source == "stated":
         quote = ctx.get("quote", "")
         return f"{trip} — said: “{quote}”"
@@ -388,6 +614,8 @@ def derive_hypotheses(
 _SECTION_FOR_PATH = {
     "pace_preferences": "pace_preferences",
     "food_preferences": "food_preferences",
+    "flight_preferences": "flight_preferences",
+    "hotel_preferences": "hotel_preferences",
 }
 
 

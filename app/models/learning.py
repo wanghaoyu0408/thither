@@ -38,13 +38,26 @@ PreferenceKey = Literal[
     "packed_pace",
     "parking_sensitive",
     "dislikes_queueing",
+    # What choosing between priced options says. Each maps to an importance
+    # weight that the rankers already multiply by - see the catalogue's
+    # `consumer` field for which line of which ranker.
+    "values_nonstop",
+    "flight_price_sensitive",
+    "hotel_location_matters",
+    "hotel_price_sensitive",
 ]
 
 # Ordinal, never a float. "weak" is a click, "moderate" is a post-trip
 # statement, "strong" is the traveller saying it in words.
 SignalStrength = Literal["weak", "moderate", "strong"]
 
-SignalSource = Literal["behavior_move", "behavior_replan", "stated", "reflection"]
+SignalSource = Literal[
+    "behavior_move",
+    "behavior_replan",
+    "behavior_choice",
+    "stated",
+    "reflection",
+]
 
 # v1 emits only "stronger" - every catalogue key is phrased so that evidence
 # pushes toward it. The axis exists so contrary evidence can be recorded

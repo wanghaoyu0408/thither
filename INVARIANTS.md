@@ -211,6 +211,17 @@ evidence) stay separate ordinal words for the same reason score and coverage
 do in invariant 2 — and behavioural signals are recorded only where "who did
 that?" has an answer: a solo trip, a named speaker, a signed reflection.
 
+**A choice teaches only what it cost.** Picking a card is read as a signal
+(ledger 53), but only where the winner gave something up: passing over cheaper
+money for fewer stops, or over a closer hotel for a cheaper one. A winner that
+is both the cheapest and the best gave up nothing, so there is no priority in
+it to read, and reading one out anyway is how a profile fills with preferences
+its owner never held. When they paid more *and* took the worse routing, they
+bought something this does not measure, and silence is the honest record.
+Neighbourhood and airport cards carry no price at all, so no choice between
+them is a tradeoff — inventing an axis in order to have something to learn
+would be worse than learning nothing.
+
 **Enforced in.** `app/services/learning_service.py` (`derive_hypotheses` —
 pure, statuses `dismissed > applied > proposable/emerging`;
 `behavioral_signal_allowed` — the attribution gate; `profile_changes_for` —
@@ -237,7 +248,15 @@ criteria, one test each —
 `tests/unit/test_learning_service.py`:
 `test_a_dismissed_hypothesis_never_becomes_proposable_however_much_evidence_arrives`,
 `test_strength_is_the_strongest_expression_not_an_average`,
-`test_every_catalogue_key_names_its_consumer`.
+`test_every_catalogue_key_names_its_consumer`,
+`test_every_learnable_key_is_in_the_catalogue_and_can_actually_be_written`,
+`test_a_choice_that_gave_nothing_up_teaches_nothing`,
+`test_paying_more_for_more_stops_teaches_nothing`,
+`test_an_accepted_choice_preference_lands_on_the_ranker_s_own_weight`.
+`tests/integration/test_decisions_api.py`:
+`test_choosing_a_card_is_recorded_as_a_learning_signal`,
+`test_a_choice_on_a_group_trip_is_attributed_to_nobody`,
+`test_a_failed_signal_does_not_fail_the_choice`.
 `tests/unit/test_slot_shift.py`:
 `test_default_preferences_leave_every_template_exactly_as_authored`,
 `test_dinner_never_slips_past_eight`.
@@ -296,6 +315,10 @@ it cannot come back.
 | 50 | **Two milestones were unreachable.** Every M9 surface and all of M7's group machinery is keyed to a traveller with a `profile_id`, and **nothing in the application ever created either** — the new-trip form collected a head count and never a person, no UI posted to `/profiles`, and no agent tool could make one. Live: 13 trips, 0 travellers, 0 profiles, 0 learning signals. `_record_stated_preference` even told the model to "offer to create one", a capability that did not exist | user question, live, 13/13 | `tests/integration/test_trip_creation.py`, especially `test_that_traveller_can_carry_learning` |
 | 51 | And the test that looked like coverage was a substring grep on the served HTML — `assert "Travel DNA" in body` passes whether or not any code path can render it. **It was green for the entire period the feature was unreachable**, which is why nobody noticed. A reachability test has to travel the route a user travels | found while fixing 50 | `test_a_trip_created_the_way_the_page_creates_one_has_a_traveller` |
 | 52 | A solo trip's preference snapshot was **never resolved**: `review_group_preferences` returns immediately below two travellers, and nothing else filled `traveler.preferences`. So even once a profile existed, a learned `preferred_start_time` would have reached a future trip's day templates never — M9's acceptance 7 would have been empty in practice. The snapshot is resolved at creation | found while fixing 50 | `test_the_snapshot_is_resolved_at_creation` |
+| 53 | **Choosing a card taught nothing.** A complete session — five agent turns, four cards chosen, an itinerary applied — left `learning_signals` empty and the Travel DNA panel on its "Nothing yet" state. Every implemented signal source needed something the traveller had no reason to do (drag a pre-10:00 activity an hour later, ask for an easier day, wait for the trip to end), while the richest and most frequent action in the app produced nothing. Yet a card records both sides of a tradeoff: `signals_for_choice` reads what the choice *cost* — passing over cheaper money for fewer stops, or over a closer hotel for a cheaper one — and maps it onto the four importance weights the rankers already multiply by. A winner that is cheapest *and* best gives up nothing and is recorded as nothing | user report ("travel DNA好像没东西？"), live | `test_choosing_a_card_is_recorded_as_a_learning_signal`, `test_a_choice_that_gave_nothing_up_teaches_nothing` |
+| 54 | `_note_signals` guards the *write* against exceptions but its callers built the signals **outside that guard**, so any error while deriving one took the traveller's click down with it — the opposite of the "a signal is never a reason the click fails" contract in its own docstring. It now takes a callable and evaluates the derivation inside the try | found by the test written for 53 | `test_a_failed_signal_does_not_fail_the_choice` |
+| 55 | Adding a catalogue key was **two silent failures wide**: a `PreferenceKey` with no catalogue entry is dropped by `derive_hypotheses` without a word, and an entry whose section is missing from `_SECTION_FOR_PATH` derives, proposes and shows a card that raises the moment the traveller presses Add. Both were one line away while 53 was being written | found while fixing 53 | `test_every_learnable_key_is_in_the_catalogue_and_can_actually_be_written` |
+| 56 | `record_stated_preference` was called **zero times in five agent turns** of a real session, while a correct, well-argued section about it sat two thirds of the way down the prompt. A rule the model must remember to consult is a rule it will not; the instruction moved into a `## Every turn, before you reply` section at the top and says why it alone cannot be deferred — a click gets recorded by the app either way, a sentence is gone. The test pins the placement, which is the part that was wrong; it cannot pin compliance | found while fixing 53 | `test_recording_what_was_said_is_a_step_in_the_turn_not_an_optional_rule` |
 | 44 | **The agent worked out the way forward and could not offer it.** No airline flew ALB → MDW on those dates; the reply said, correctly, that the practical next step was to reconsider the arrival airport with ORD already shortlisted — and then stopped, with nothing on screen to do it with. Every surface refused the question: `ask_clarifications` only asks about an outstanding intake requirement, `OpenQuestion` has no choices and **no route anywhere can mark one answered**, the chooser hides a decision that is already settled (which the airport was), and nothing can re-open one. `AgentProposal` + `propose_next_step` turn a fork into buttons whose actions are a closed set | user report, live | `tests/unit/test_proposals.py`, especially `test_a_proposal_names_choices_that_exist` |
 | 45 | A search that found nothing **staged nothing at all**, so "no airline flies this route on these dates" and "nobody has looked yet" were the same stored state — absence read as never-asked, one more wearing of invariant 1. And `next_steps` tested whether the decision *existed*, so the step vanished the moment a search came back empty, which is when it is most needed | found while fixing 44 | `test_a_flight_search_that_finds_nothing_records_that_it_looked`, `test_a_search_that_found_nothing_is_still_work` |
 | 46 | "Park this for now" had no honest home: `not_needed` claims they are not flying, `already_arranged` claims tickets exist, and `unknown` re-opens a blocking intake gap and un-confirms the brief. `Decision.set_aside_reason` is a fourth kind of claim beside `status`, `booked` and the scope states — the outcome of a search rather than an instruction or a fact about the world — and `should_shop_for` reads all three | found while fixing 44 | `test_setting_a_part_aside_stops_it_being_a_next_step` (asserts `scope.flights` is still `plan`) |

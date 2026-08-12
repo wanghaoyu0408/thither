@@ -5,9 +5,12 @@ timestamps the signals carry - because the whole design is that a hypothesis
 is a function of the evidence, recomputed on every read.
 """
 
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 from app.config import Settings
+from app.models.common import Money
+from app.models.decision import Decision, DecisionOption, FlightOptionData, HotelOptionData
+from app.models.flight import FlightSegment, FlightSlice
 from app.models.learning import LearningSignal, TripReflection, ReflectionItem
 from app.models.rejection import RejectionRecord
 from app.models.traveler import TravelerProfile
@@ -20,6 +23,7 @@ from app.services.learning_service import (
     remove_changes_for,
     signal_for_move,
     signal_for_replan,
+    signals_for_choice,
     signals_for_reflection,
 )
 from tests.conftest import make_item, sample_state
@@ -144,6 +148,221 @@ def test_a_skipped_afternoon_item_says_nothing_about_mornings():
     assert signals == []
 
 
+# --- choosing between priced options -----------------------------------------
+#
+# The richest and most frequent thing a traveller does here, and for the whole
+# of M9 the only one that taught nothing: a complete planning session - four
+# cards chosen, an itinerary generated - left the Travel DNA panel empty,
+# because no signal came from choosing.
+
+
+def leg(stops: int, hour: int) -> FlightSlice:
+    """A slice with real segments, because `FlightSlice.stops` counts them -
+    a slice with none reports nonstop whatever the itinerary was."""
+    depart = datetime(2026, 10, 3, hour, 0)
+    return FlightSlice(
+        origin="ALB",
+        destination="ORD",
+        departing_at=depart,
+        arriving_at=depart + timedelta(hours=3),
+        duration_minutes=180,
+        segments=[
+            FlightSegment(
+                origin="ALB",
+                destination="ORD",
+                departing_at=depart + timedelta(hours=i),
+                arriving_at=depart + timedelta(hours=i + 1),
+                marketing_carrier="AA",
+            )
+            for i in range(stops + 1)
+        ],
+    )
+
+
+def flight(price: float, stops: int | list[int], ref: str = "off") -> FlightOptionData:
+    """`stops` as a list gives one entry per direction, the shape a return
+    trip actually has and the one the scalar field cannot express."""
+    per_leg = stops if isinstance(stops, list) else [stops]
+    return FlightOptionData(
+        provider="duffel",
+        offer_ref=ref,
+        live_mode=True,
+        price=Money(amount=price),
+        origin="ALB",
+        destination="ORD",
+        stops=per_leg[0],
+        slices=[leg(n, 9 + 12 * i) for i, n in enumerate(per_leg)],
+    )
+
+
+def hotel(price: float, minutes: float | None, name: str = "Hotel") -> HotelOptionData:
+    return HotelOptionData(
+        provider="serpapi",
+        live_mode=True,
+        name=name,
+        nightly_price=Money(amount=price),
+        route_minutes={"ent_1": minutes} if minutes is not None else {},
+    )
+
+
+def chosen_from(*payloads, pick: int, name: str = "flights", rejected: set[int] = frozenset()):
+    """Build the card, click one option, and report what it taught."""
+    options = [
+        DecisionOption(
+            option_id=f"opt_{i}",
+            data=payload,
+            status="rejected" if i in rejected else "candidate",
+        )
+        for i, payload in enumerate(payloads)
+    ]
+    decision = Decision(options=options)
+    return signals_for_choice(
+        solo_state(),
+        decision_name=name,
+        decision=decision,
+        chosen_option_id=f"opt_{pick}",
+        profile_id="user_test",
+    )
+
+
+def test_paying_more_for_fewer_stops_says_nonstop_matters():
+    signals = chosen_from(flight(312, 0), flight(248, 1), pick=0)
+
+    assert [s.preference_key for s in signals] == ["values_nonstop"]
+    assert signals[0].strength == "weak"  # a click is a click
+    assert signals[0].source == "behavior_choice"
+    assert "$312" in signals[0].context["chose"]
+    assert "$248" in signals[0].context["over"]
+
+
+def test_taking_the_cheap_connection_says_price_matters():
+    signals = chosen_from(flight(312, 0), flight(248, 1), pick=1)
+
+    assert [s.preference_key for s in signals] == ["flight_price_sensitive"]
+
+
+def test_a_choice_that_gave_nothing_up_teaches_nothing():
+    """The winner was both the cheapest and the nonstop. However firmly it was
+    clicked, there is no priority in it to read - and reading one out anyway
+    is how a profile fills up with preferences its owner never held."""
+    assert chosen_from(flight(248, 0), flight(312, 1), pick=0) == []
+
+
+def test_paying_more_for_more_stops_teaches_nothing():
+    """They passed over cheaper money *and* took the longer routing, so they
+    bought something this does not measure - the airline, the timing, a
+    checked bag. Silence is the honest answer."""
+    assert chosen_from(flight(312, 1), flight(248, 0), pick=0) == []
+
+
+def test_the_return_leg_counts_toward_the_stops():
+    """Nonstop out and a stop on the way home is not a nonstop trip. The
+    scalar `stops` field describes the outbound only, so reading it alone
+    would call this a nonstop and learn the opposite of what happened."""
+    assert chosen_from(flight(312, [0, 1]), flight(248, [0, 0]), pick=0) == []
+
+    signals = chosen_from(flight(312, [0, 0]), flight(248, [0, 1]), pick=0)
+    assert [s.preference_key for s in signals] == ["values_nonstop"]
+
+
+def test_a_rejected_option_is_not_a_road_not_taken():
+    """It was refused earlier and is not on the card being chosen from, so it
+    is not the thing that was given up."""
+    assert chosen_from(flight(312, 0), flight(248, 1), pick=0, rejected={1}) == []
+
+
+def test_the_only_option_on_a_card_teaches_nothing():
+    assert chosen_from(flight(312, 0), pick=0) == []
+
+
+def test_paying_more_to_stay_closer_says_location_matters():
+    signals = chosen_from(
+        hotel(180, 8, "Central"), hotel(120, 35, "Far"), pick=0, name="hotel"
+    )
+
+    assert [s.preference_key for s in signals] == ["hotel_location_matters"]
+    assert "Central" in signals[0].context["chose"]
+    assert "35 min" in signals[0].context["over"]
+
+
+def test_taking_the_cheaper_room_further_out_says_price_matters():
+    signals = chosen_from(
+        hotel(180, 8, "Central"), hotel(120, 35, "Far"), pick=1, name="hotel"
+    )
+
+    assert [s.preference_key for s in signals] == ["hotel_price_sensitive"]
+
+
+def test_an_unmeasured_option_is_skipped_rather_than_guessed():
+    """No route minutes means no distance axis. Comparing against a hotel
+    whose distance is unknown would be comparing against a made-up zero."""
+    assert chosen_from(hotel(180, 8), hotel(120, None), pick=0, name="hotel") == []
+
+
+def test_a_choice_with_no_price_on_it_is_not_a_tradeoff():
+    """Airports and neighbourhoods carry drive minutes and no price at all, so
+    a choice between them says nothing this can read. Inventing an axis to
+    have something to learn would be worse than learning nothing."""
+    from app.models.flight import AirportOption
+
+    def airport(iata: str, minutes: float) -> AirportOption:
+        return AirportOption(
+            iata=iata,
+            name=f"{iata} field",
+            city="Chicago",
+            lat=41.9,
+            lng=-87.9,
+            ground_travel_minutes=minutes,
+        )
+
+    signals = chosen_from(airport("ORD", 30), airport("MDW", 55), pick=0, name="arrival_airport")
+    assert signals == []
+
+
+def test_a_choice_signal_reads_back_without_its_trip():
+    signals = chosen_from(flight(312, 0), flight(248, 1), pick=0)
+    hyps = derive_hypotheses(profile(), signals, settings=SETTINGS)
+
+    line = hyps[0].evidence[0].line
+    assert "chose" in line and "$312" in line and "$248" in line
+    assert "nonstop" in line
+
+
+def test_a_return_trip_says_its_stop_count_is_a_total():
+    """The card reports each direction on its own line. "2 stops" beside
+    "Outbound 1 stop / Return 1 stop" reads as a third figure, not their sum."""
+    signals = chosen_from(flight(312, [0, 0]), flight(248, [1, 1]), pick=0)
+
+    assert signals[0].context["chose"].endswith("nonstop both ways")
+    assert signals[0].context["over"].endswith("2 stops in all")
+
+    # One-way keeps the plain wording - there is no total to distinguish.
+    one_way = chosen_from(flight(312, [0]), flight(248, [1]), pick=0)
+    assert one_way[0].context["chose"].endswith("nonstop")
+    assert one_way[0].context["over"].endswith("1 stop")
+
+
+def test_an_accepted_choice_preference_lands_on_the_ranker_s_own_weight():
+    """The point of the exercise: an accepted hypothesis has to change the
+    number `flight_ranking` multiplies by, or the whole loop is theatre."""
+    signals = [
+        s
+        for trip in ("trip_a", "trip_a", "trip_b")
+        for s in chosen_from(flight(312, 0), flight(248, 1), pick=0)
+        for s in [s.model_copy(update={"trip_id": trip})]
+    ]
+    hyp = derive_hypotheses(profile(), signals, settings=SETTINGS)[0]
+    assert hyp.status == "proposable"
+
+    changes, provenance = profile_changes_for(profile(), hyp, hyp.proposed_value)
+
+    assert changes["flight_preferences"]["nonstop_importance"] == hyp.proposed_value
+    assert changes["flight_preferences"]["nonstop_importance"] > 0.5  # the default
+    # Siblings survive the write, and the reason is stored beside the value.
+    assert changes["flight_preferences"]["price_importance"] == 0.5
+    assert provenance.previous_value == 0.5
+
+
 # --- derivation --------------------------------------------------------------
 
 
@@ -231,6 +450,29 @@ def test_every_catalogue_key_names_its_consumer():
     for key, entry in CATALOGUE.items():
         assert entry.consumer, f"{key} has no consumer - a preference that moves nothing"
         assert "." in entry.field_path
+
+
+def test_every_learnable_key_is_in_the_catalogue_and_can_actually_be_written():
+    """Two ways to mint a key that can never reach a profile, both silent.
+
+    A `PreferenceKey` with no catalogue entry is dropped by `derive_hypotheses`
+    without a word; a catalogue entry whose section is missing from
+    `_SECTION_FOR_PATH` derives and proposes happily and then raises at the
+    moment the traveller presses Add. Both were one line away while the
+    choice keys were being added.
+    """
+    from typing import get_args
+
+    from app.models.learning import PreferenceKey
+    from app.services.learning_service import _SECTION_FOR_PATH
+
+    assert set(get_args(PreferenceKey)) == set(CATALOGUE)
+    for key, entry in CATALOGUE.items():
+        section, field = entry.field_path.split(".", 1)
+        assert section in _SECTION_FOR_PATH, f"{key} proposes into an unwritable section"
+        assert field in type(getattr(profile(), section)).model_fields, (
+            f"{key} names {entry.field_path}, which is not a field"
+        )
 
 
 def test_evidence_lines_are_rendered_from_stored_context_only():

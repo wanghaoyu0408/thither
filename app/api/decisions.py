@@ -17,7 +17,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
-from app.api.actions import ActionResult, SessionDep, _commit, _load, _view
+from app.api.actions import ActionResult, SessionDep, _commit, _load, _note_signals, _view
 from app.models.common import utcnow
 from app.models.decision import Decision
 from app.models.lock import LockRecord
@@ -27,6 +27,7 @@ from app.models.trip import TripState
 from app.services import json_pointer as jp
 from app.services.decision_service import DecisionView, decision_views, visible
 from app.services.explanation_service import Explanation, explain_option
+from app.services.learning_service import behavioral_signal_allowed, signals_for_choice
 
 router = APIRouter(prefix="/trips/{trip_id}/decisions", tags=["decisions"])
 
@@ -137,12 +138,33 @@ async def select_option(
     if decision.selected_option_id == payload.option_id:
         return _view(state, state, applied=False, summary="already selected")
 
-    return await _commit(
+    result = await _commit(
         session,
         state,
         [_patch(state, f"select {name}", select_ops(decision, name, payload.option_id))],
         summary=f"selected for {name}",
     )
+
+    # Choosing between priced options is the richest thing a traveller does
+    # here, and for a long time it was the only one that taught nothing. Same
+    # attribution gate as move and replan: solo trips only, because on a group
+    # trip nobody knows whose hand was on the mouse (M9).
+    if result.applied:
+        profile_id = behavioral_signal_allowed(state)
+        if profile_id:
+            await _note_signals(
+                session,
+                lambda: list(
+                    signals_for_choice(
+                        state,
+                        decision_name=name,
+                        decision=decision,
+                        chosen_option_id=payload.option_id,
+                        profile_id=profile_id,
+                    )
+                ),
+            )
+    return result
 
 
 def select_ops(decision: Decision, name: str, option_id: str) -> list[dict[str, Any]]:

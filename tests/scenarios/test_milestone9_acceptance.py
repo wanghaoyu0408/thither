@@ -446,6 +446,41 @@ def test_the_prompt_forbids_silent_profile_writes():
     assert "A declined pattern stays declined" in SYSTEM_INSTRUCTIONS
 
 
+def test_recording_what_was_said_is_a_step_in_the_turn_not_an_optional_rule():
+    """Five agent turns of a real session, a traveller stating preferences in
+    two languages, and `record_stated_preference` was called zero times - while
+    a correct, well-argued section about it sat two thirds of the way down the
+    prompt.
+
+    This pins the placement, which is the part that was wrong: the instruction
+    is near the top and phrased as something the turn contains, not as a rule
+    that applies if it comes up. It cannot pin that the model complies.
+    """
+    from app.agent.prompts import SYSTEM_INSTRUCTIONS
+
+    assert "## Every turn, before you reply" in SYSTEM_INSTRUCTIONS
+    turn_section = SYSTEM_INSTRUCTIONS.index("## Every turn, before you reply")
+    assert turn_section < len(SYSTEM_INSTRUCTIONS) // 4, "buried again"
+    assert turn_section < SYSTEM_INSTRUCTIONS.index("## Learning about the traveller")
+
+    # Unwrapped: the prompt is hard-wrapped, so a phrase can straddle a newline.
+    head = " ".join(SYSTEM_INSTRUCTIONS[turn_section : turn_section + 900].split())
+    assert "record_stated_preference" in head
+    assert "before you write your reply" in head
+    # And it must say why this one is different: everything else in the turn
+    # gets recorded by the app whether the model remembers or not.
+    assert "records all of those on its own" in " ".join(SYSTEM_INSTRUCTIONS.split())
+
+
+def test_the_prompt_tells_it_not_to_narrate_what_a_click_revealed():
+    """Choices are read now. An agent that also announces what each one says
+    about the traveller turns a card into surveillance."""
+    from app.agent.prompts import SYSTEM_INSTRUCTIONS
+
+    assert "do not narrate them" in SYSTEM_INSTRUCTIONS
+    assert "records itself" in SYSTEM_INSTRUCTIONS
+
+
 async def test_the_review_tool_reports_and_never_applies(session):
     from app.agent.tool_registry import _review_learned_preferences
 

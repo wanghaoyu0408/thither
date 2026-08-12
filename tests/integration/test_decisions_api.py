@@ -7,8 +7,9 @@ locked decision refuses, a rejected option does not come back on its own, and
 """
 
 from app.db.repository import TripRepository
-from app.models.decision import Decision, DecisionOption, HotelAreaOption
+from app.models.decision import Decision, DecisionOption, FlightOptionData, HotelAreaOption
 from app.models.lock import LockRecord
+from app.models.trip import TripTraveler
 from tests.conftest import sample_state
 
 
@@ -141,6 +142,134 @@ async def test_selecting_again_changes_nothing_and_spends_no_revision(client, se
 
     assert second["applied"] is False
     assert second["revision"] == first["revision"]
+
+
+# --- what a choice teaches ---------------------------------------------------
+#
+# The pure rules are pinned in tests/unit/test_learning_service.py. What these
+# hold up is the wiring, which is the half that was missing: for the whole of
+# M9 a traveller could choose four cards in a session and the Travel DNA panel
+# stayed empty, because `select` recorded nothing.
+
+
+def state_with_flights(profile_id: str | None = "user_test"):
+    from tests.unit.test_learning_service import flight
+
+    state = sample_state()
+    state.travelers = [
+        TripTraveler(
+            traveler_id="trv_solo", profile_id=profile_id, name="Haoyu", role="organizer"
+        )
+    ]
+    state.decisions.flights = Decision[FlightOptionData](
+        decision_id="dec_flights",
+        status="shortlisted",
+        options=[
+            DecisionOption[FlightOptionData](option_id="opt_direct", data=flight(312, 0)),
+            DecisionOption[FlightOptionData](option_id="opt_cheap", data=flight(248, 1)),
+        ],
+    )
+    return state
+
+
+async def signals_for(session, profile_id="user_test"):
+    from app.db.repository import LearningRepository
+
+    return await LearningRepository(session).list_for_profile(profile_id)
+
+
+async def test_choosing_a_card_is_recorded_as_a_learning_signal(client, session):
+    trip = await stored(session, state_with_flights())
+
+    result = (
+        await client.post(
+            f"/trips/{trip.trip_id}/decisions/flights/select", json={"option_id": "opt_direct"}
+        )
+    ).json()
+
+    assert result["applied"] is True
+    signals = await signals_for(session)
+    assert [s.preference_key for s in signals] == ["values_nonstop"]
+    assert signals[0].trip_id == trip.trip_id
+    assert signals[0].source == "behavior_choice"
+
+
+async def test_a_choice_on_a_group_trip_is_attributed_to_nobody(client, session):
+    """Two travellers means nobody knows whose hand was on the mouse. The
+    same gate move and replan go through - learning less beats learning about
+    the wrong person."""
+    state = state_with_flights()
+    state.travelers.append(
+        TripTraveler(traveler_id="trv_2", profile_id="user_other", name="Wei", role="member")
+    )
+    trip = await stored(session, state)
+
+    await client.post(
+        f"/trips/{trip.trip_id}/decisions/flights/select", json={"option_id": "opt_direct"}
+    )
+
+    assert await signals_for(session) == []
+    assert await signals_for(session, "user_other") == []
+
+
+async def test_a_traveller_with_no_profile_is_not_invented_one(client, session):
+    trip = await stored(session, state_with_flights(profile_id=None))
+
+    await client.post(
+        f"/trips/{trip.trip_id}/decisions/flights/select", json={"option_id": "opt_direct"}
+    )
+
+    assert await signals_for(session) == []
+
+
+async def test_choosing_the_same_option_twice_does_not_double_the_evidence(client, session):
+    """The second POST is a no-op that spends no revision; it must not spend a
+    signal either, or a traveller with a twitchy finger out-evidences one with
+    two real trips."""
+    trip = await stored(session, state_with_flights())
+    url = f"/trips/{trip.trip_id}/decisions/flights/select"
+
+    await client.post(url, json={"option_id": "opt_direct"})
+    await client.post(url, json={"option_id": "opt_direct"})
+
+    assert len(await signals_for(session)) == 1
+
+
+async def test_a_choice_that_gave_nothing_up_records_nothing(client, session):
+    """The neighbourhood cards carry travel minutes and no price at all, so
+    there is no tradeoff in choosing one - and the endpoint must record that
+    silence rather than a guess."""
+    state = state_with_areas()
+    state.travelers = [
+        TripTraveler(
+            traveler_id="trv_solo", profile_id="user_test", name="Haoyu", role="organizer"
+        )
+    ]
+    trip = await stored(session, state)
+
+    await client.post(
+        f"/trips/{trip.trip_id}/decisions/hotel_area/select", json={"option_id": "opt_ginza"}
+    )
+
+    assert await signals_for(session) == []
+
+
+async def test_a_failed_signal_does_not_fail_the_choice(client, session, monkeypatch):
+    """A signal is a bonus fact about the click, never a reason it fails."""
+    import app.api.decisions as decisions_api
+
+    def explode(*_args, **_kwargs):
+        raise RuntimeError("learning is having a day")
+
+    monkeypatch.setattr(decisions_api, "signals_for_choice", explode)
+    trip = await stored(session, state_with_flights())
+
+    response = await client.post(
+        f"/trips/{trip.trip_id}/decisions/flights/select", json={"option_id": "opt_direct"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["applied"] is True
 
 
 async def test_a_locked_decision_refuses_a_new_choice(client, session):

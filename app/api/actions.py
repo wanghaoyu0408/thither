@@ -22,6 +22,7 @@ a venue, and it does not quietly leave a hole.
 import logging
 from datetime import date as date_type
 from datetime import datetime, time
+from collections.abc import Callable
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -209,17 +210,26 @@ def _find_item(state: TripState, item_id: str):
     raise HTTPException(status.HTTP_404_NOT_FOUND, f"no item {item_id} on this trip")
 
 
-async def _note_signals(session: AsyncSession, signals: list[LearningSignal | None]) -> None:
+async def _note_signals(
+    session: AsyncSession,
+    signals: Callable[[], list[LearningSignal | None]] | list[LearningSignal | None],
+) -> None:
     """Record learning signals after the action already committed.
 
     Fire-and-forget on purpose: a signal is a bonus fact about the click,
     never a reason the click fails. Its own commit, because signals are not
     under trip revision control.
+
+    A callable is accepted so that *deriving* the signals is inside the same
+    guard as writing them. Passing a list evaluates the derivation at the call
+    site, where an exception escapes and takes the traveller's click down with
+    it - which is precisely the failure this function exists to prevent.
     """
-    real = [signal for signal in signals if signal is not None]
-    if not real:
-        return
     try:
+        produced = signals() if callable(signals) else signals
+        real = [signal for signal in produced if signal is not None]
+        if not real:
+            return
         await LearningRepository(session).record_many(real)
     except Exception:  # noqa: BLE001 - degraded learning must not break the action
         logger.warning("learning signal not recorded", exc_info=True)

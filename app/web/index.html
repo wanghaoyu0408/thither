@@ -327,6 +327,9 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 .dna-badge.moderate { background: var(--info-soft); border-color: transparent; color: var(--info); }
 .dna-card .meta { font-size: 11.5px; color: var(--ink-3); margin-top: 3px; }
 .dna-card code { font: 11px var(--mono); }
+/* The exact path stays on the card - it is what actually gets written - but
+   behind the plain sentence, not in front of it. */
+.dna-card code.dna-path { display: block; margin-top: 2px; opacity: 0.55; }
 .dna-card .pickrow { margin-top: 8px; }
 .linkish.danger { color: var(--error); }
 
@@ -2447,6 +2450,39 @@ const DNA_EDIT_VALUES = {
   "pace_preferences.preferred_start_time": ["09:30", "10:00", "10:30", "11:00"],
 };
 
+/* What each field actually does, in the reader's words. The dotted path is
+   the literal truth of what gets written and stays on the card - but "0.7"
+   beside `flight_preferences.nonstop_importance` tells a traveller nothing
+   about what they are agreeing to, and this panel is the one place that has
+   to be legible before it is precise. */
+const DNA_FIELD_WORDS = {
+  "pace_preferences.preferred_start_time": "when your days start",
+  "pace_preferences.intensity": "how full a normal day is",
+  "pace_preferences.parking_sensitive": "counting parking as real friction",
+  "food_preferences.queue_tolerance": "how much queueing you will put up with",
+  "flight_preferences.nonstop_importance": "how much nonstop counts when ranking flights",
+  "flight_preferences.price_importance": "how much price counts when ranking flights",
+  "hotel_preferences.location_importance": "how much being close counts when ranking hotels",
+  "hotel_preferences.price_importance": "how much price counts when ranking hotels",
+};
+
+/* An importance weight runs 0 to 1, so say so. On its own, 0.7 reads as a
+   measurement of the traveller rather than a dial they are being asked to
+   turn. */
+const DNA_WEIGHTS = new Set(Object.keys(DNA_FIELD_WORDS).filter((p) => /_importance$/.test(p)));
+
+function dnaValueWords(h) {
+  // Never "up from 0.5": the hypothesis carries what it would set, not what
+  // the profile currently holds, and guessing the second would be inventing a
+  // fact on the one card that exists to keep facts straight.
+  if (DNA_WEIGHTS.has(h.field_path) && typeof h.proposed_value === "number") {
+    return `${h.proposed_value} out of 1`;
+  }
+  if (h.proposed_value === true) return "yes";
+  if (h.proposed_value === false) return "no";
+  return `${h.proposed_value}`;
+}
+
 function dnaWhy(hypothesis) {
   if (!hypothesis || !(hypothesis.evidence || []).length) return "";
   return `<details class="notscored"><summary>Why?</summary>
@@ -2460,12 +2496,14 @@ function dnaBadge(word) {
 
 function dnaProposalCard(profileId, revision, h) {
   const editable = DNA_EDIT_VALUES[h.field_path];
-  const value = (v) => `${esc(v)}`;
+  const words = DNA_FIELD_WORDS[h.field_path];
   return `<div class="choice dna-card">
     <b>${esc(h.summary)}</b>
     <p class="meta">${dnaBadge(h.strength)} ${dnaBadge(h.confidence)} ·
       based on ${h.trip_ids.length} trip${h.trip_ids.length === 1 ? "" : "s"}</p>
-    <p class="meta">would set <code>${esc(h.field_path)}</code> → <b>${value(h.proposed_value)}</b></p>
+    <p class="meta">would change ${words ? esc(words) : `<code>${esc(h.field_path)}</code>`}
+      → <b>${esc(dnaValueWords(h))}</b>
+      ${words ? `<code class="dna-path">${esc(h.field_path)}</code>` : ""}</p>
     ${dnaWhy(h)}
     ${editable ? `<div class="pickrow">${editable.map((v) =>
       `<button class="pick${v === h.proposed_value ? " on" : ""}"

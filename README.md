@@ -415,6 +415,45 @@ substring grep on the served HTML, green for the entire period the panel could
 not be opened. A reachability test has to travel the route a user travels, and
 `tests/integration/test_trip_creation.py` now does.
 
+### Reachable, and still empty
+
+With a traveller in the trip at last, a whole session ran: five agent turns,
+twelve tool calls, four cards chosen, an itinerary generated and applied. The
+Travel DNA panel still read *"Nothing yet."* — and it was telling the truth.
+`learning_signals` held zero rows.
+
+Every implemented signal needed something the traveller had no reason to do.
+Drag an activity that starts before 10:00 at least an hour later. Ask for a
+day to be made easier, in those words. Wait for the trip to end and fill in a
+reflection. Or hope the model remembered to call `record_stated_preference` —
+which, across five turns of someone stating preferences in two languages, it
+did not once.
+
+Meanwhile the richest thing a traveller does here happened four times and was
+read by nobody. **A card records both sides of a tradeoff.** The chosen option
+and the ones beside it carry prices, stop counts and travel minutes, so what a
+choice *cost* is sitting in the stored state: pass over cheaper money for
+fewer stops and that is a preference about flying; take the cheaper room
+further out and that is a preference about money. `signals_for_choice` reads
+exactly that, onto the four importance weights `flight_ranking` and
+`hotel_ranking` already multiply by — no new key that nothing consumes.
+
+The discipline is in what it declines to read. A winner that is both cheapest
+and best gave nothing up, so nothing is recorded. Pay more *and* take the
+longer routing and you bought something this does not measure, so nothing is
+recorded. Neighbourhood and airport cards have no price on them at all, so a
+choice between them is not a tradeoff and never becomes one. Learning less is
+the whole point: a profile that fills up with preferences its owner never held
+is worse than an empty one, and an empty one at least says so.
+
+The prompt fix is the weaker half and is written down as such. The rule about
+recording what someone says was correct, well argued, and two thirds of the
+way down the page; it is now a `## Every turn, before you reply` section at
+the top, saying why this one thing cannot wait — a click gets recorded by the
+app whether the model participates or not, and a sentence does not. The test
+pins where the instruction sits, which is what was wrong with it. No test can
+pin that a model complies.
+
 ### A fork in the road is a card, not a paragraph
 
 No airline flew ALB → MDW on the chosen dates. The agent worked out the right
@@ -604,9 +643,12 @@ evidence cannot re-propose it on the next read.
 been stored, snapshotted, diffed and displayed — and consumed by nothing (the
 ledger-10 defect class). Generation now shifts every day template to the most
 morning-averse traveller's floor, capped so dinner never slips past 20:00,
-and `parking_sensitive` doubles parking friction in substitute ranking. Every
-key in the learnable catalogue names its consumer in code, because a
-preference that influences nothing is a lie told slowly.
+and `parking_sensitive` doubles parking friction in substitute ranking. The
+four weights learned from card choices — nonstop and price for flights,
+location and price for hotels — are the numbers `flight_ranking` and
+`hotel_ranking` already multiply their dimensions by. Every key in the
+learnable catalogue names its consumer in code, because a preference that
+influences nothing is a lie told slowly.
 
 ## How a change reaches the database
 
