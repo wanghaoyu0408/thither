@@ -12,11 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
     LearningSignalRow,
+    OutcomeRow,
     TravelerProfileRow,
     TripEventRow,
     TripMessageRow,
     TripRow,
 )
+from app.models.calibration import Dimension, Outcome
 from app.models.common import utcnow
 from app.models.learning import LearningSignal
 from app.models.patch import PatchError, PatchOperation, PatchResult, TripPatch
@@ -182,6 +184,65 @@ class LearningRepository:
             .limit(limit)
         )
         return [LearningSignal.model_validate(row.payload) for row in result.scalars()]
+
+
+class CalibrationRepository:
+    """Append-only store of times a number met reality.
+
+    Reads are always by calibration key, never by trip or subject - there is
+    no method here that could answer "where has this person been", because
+    the row holds nothing finer than a region and no trip id at all.
+
+    `already_recorded` exists because a prediction's id is a content hash: the
+    same estimate derives to the same id on every read, so answering the same
+    question twice must not count as two journeys.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def record_many(self, outcomes: list[Outcome]) -> list[Outcome]:
+        for outcome in outcomes:
+            self._session.add(
+                OutcomeRow(
+                    id=outcome.outcome_id,
+                    provider=outcome.provider,
+                    dimension=outcome.dimension,
+                    mode=outcome.mode,
+                    scope=outcome.scope,
+                    payload=outcome.model_dump(mode="json"),
+                )
+            )
+        if outcomes:
+            await self._session.commit()
+        return outcomes
+
+    async def list_for(
+        self,
+        *,
+        provider: str | None = None,
+        dimension: Dimension | None = None,
+        limit: int = 2000,
+    ) -> list[Outcome]:
+        query = select(OutcomeRow)
+        if provider is not None:
+            query = query.where(OutcomeRow.provider == provider)
+        if dimension is not None:
+            query = query.where(OutcomeRow.dimension == dimension)
+        result = await self._session.execute(
+            query.order_by(OutcomeRow.created_at.asc(), OutcomeRow.id).limit(limit)
+        )
+        return [Outcome.model_validate(row.payload) for row in result.scalars()]
+
+    async def already_recorded(self, prediction_ids: list[str]) -> set[str]:
+        if not prediction_ids:
+            return set()
+        result = await self._session.execute(
+            select(OutcomeRow.payload["prediction_id"].as_string()).where(
+                OutcomeRow.payload["prediction_id"].as_string().in_(prediction_ids)
+            )
+        )
+        return {value for value in result.scalars() if value}
 
 
 class TripRepository:

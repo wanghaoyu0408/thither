@@ -128,6 +128,38 @@ class LearningSignalRow(Base):
     __table_args__ = (Index("ix_learning_signals_profile_id", "profile_id"),)
 
 
+class OutcomeRow(Base):
+    """Append-only record of times this system's numbers met reality.
+
+    No trip id and no coordinates - not an oversight, the point. Predictions
+    are derived from trips and die with them; this is the corpus that has to
+    survive, and a durable table keyed to where somebody went is not a thing
+    to create as a side effect of measuring a routing API. `scope` is
+    region-coarse and is the finest location that reaches this row.
+
+    Indexed on the calibration key rather than on any subject, because the
+    only question ever asked of it is "how wrong is this provider, at this,
+    here?".
+    """
+
+    __tablename__ = "outcomes"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    dimension: Mapped[str] = mapped_column(String(48), nullable=False)
+    mode: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    scope: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown")
+
+    payload: Mapped[dict[str, Any]] = mapped_column("payload_jsonb", JSONType, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(TimestampType, default=utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("ix_outcomes_key", "provider", "dimension", "mode", "scope"),
+    )
+
+
 class TripEventRow(Base):
     """Append-only audit trail. Never updated, never deleted."""
 

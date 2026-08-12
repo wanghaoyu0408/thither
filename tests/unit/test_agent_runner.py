@@ -297,6 +297,68 @@ async def test_a_scoped_replan_splits_off_its_entity_refresh(settings):
     assert all("/entities/" not in op["path"] for op in plans[1]["operations"])
 
 
+def test_the_trip_takes_its_timezone_from_the_places_it_finds(settings):
+    """`TripBrief.timezone` is what `today_at` reads to answer "what is today
+    where they are going", and nothing had ever written it.
+
+    Fourteen trips in the live database had it unset while all 332 of their
+    entities carried a correct IANA zone - so every trip that has ever existed
+    worked out its dates in UTC, including the check that decides whether a
+    trip is over and the "today" handed to the model each turn.
+    """
+    from app.agent.tool_registry import ToolContext, staged_operations
+
+    state = sample_state()
+    state.brief.timezone = None
+    for entity in state.entities.values():
+        entity.timezone = "Asia/Tokyo"
+
+    context = ToolContext(state=state, toolbox=None, proposals=ProposalStore(), settings=settings)
+    _entity_ops, other_ops = staged_operations(context)
+
+    assert {"op": "set", "path": "/brief/timezone", "value": "Asia/Tokyo"} in other_ops
+
+
+def test_a_trip_that_already_knows_its_zone_is_not_re_voted(settings):
+    """A trip's zone is a fact about it, not a running tally that a stopover
+    can flip halfway through planning."""
+    from app.agent.tool_registry import ToolContext, staged_operations
+
+    state = sample_state()
+    state.brief.timezone = "Asia/Tokyo"
+    for entity in state.entities.values():
+        entity.timezone = "America/Chicago"
+
+    context = ToolContext(state=state, toolbox=None, proposals=ProposalStore(), settings=settings)
+    _entity_ops, other_ops = staged_operations(context)
+
+    assert all(op["path"] != "/brief/timezone" for op in other_ops)
+
+
+def test_the_zone_is_the_one_most_of_the_trip_is_in(settings):
+    """A trip with a stopover has places in two zones. The itinerary is written
+    in the one it has most of."""
+    from app.agent.tool_registry import ToolContext, staged_operations
+    from tests.conftest import make_entity
+
+    state = sample_state()
+    state.brief.timezone = None
+    for entity in state.entities.values():  # two of them
+        entity.timezone = "Asia/Tokyo"
+
+    context = ToolContext(state=state, toolbox=None, proposals=ProposalStore(), settings=settings)
+    # The stopover, arriving as a staged place the way every place does.
+    context.pending_entity_ops.append(
+        make_entity("ent_layover", "Somewhere LAX").model_copy(
+            update={"timezone": "America/Los_Angeles"}
+        )
+    )
+    _entity_ops, other_ops = staged_operations(context)
+
+    zone_ops = [op for op in other_ops if op["path"] == "/brief/timezone"]
+    assert zone_ops and zone_ops[0]["value"] == "Asia/Tokyo"
+
+
 async def test_an_unscoped_proposal_stays_a_single_patch(settings):
     """Splitting when there is no scope would burn a revision for nothing."""
     from app.agent.tool_registry import ToolContext, _apply_trip_patch

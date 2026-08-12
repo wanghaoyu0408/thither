@@ -2910,7 +2910,35 @@ def staged_operations(context: ToolContext) -> tuple[list[dict[str, Any]], list[
         for evidence_id, record in context.pending_evidence.items()
     ]
 
+    # The destination's IANA zone, taken from the places themselves.
+    # `TripBrief.timezone` is what `today_at` reads to answer "what is today
+    # where they are going", and nothing had ever written it - so every trip
+    # that has ever existed worked out its dates in UTC, while every entity in
+    # the database sat there carrying the right zone. Set once and never
+    # overwritten: a trip's zone is a fact about it, not a running vote.
+    if context.state.brief.timezone is None:
+        zone = _majority_timezone(context)
+        if zone:
+            other_ops.append({"op": "set", "path": "/brief/timezone", "value": zone})
+
     return entity_ops, other_ops
+
+
+def _majority_timezone(context: ToolContext) -> str | None:
+    """The zone most of this trip's places are in.
+
+    Most common rather than first: a trip with a stopover has places in two
+    zones, and the one the itinerary is written in is the one it has most of.
+    """
+    tally: dict[str, int] = {}
+    known = list(context.state.entities.values()) + list(context.pending_entity_ops)
+    for entity in known:
+        zone = getattr(entity, "timezone", None)
+        if zone:
+            tally[zone] = tally.get(zone, 0) + 1
+    if not tally:
+        return None
+    return sorted(tally.items(), key=lambda pair: (-pair[1], pair[0]))[0][0]
 
 
 def _commit_staged(context: ToolContext, reason: str) -> dict[str, Any]:

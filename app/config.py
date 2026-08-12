@@ -92,6 +92,16 @@ class Settings(BaseSettings):
     learning_min_signals: int = 3
     learning_min_trips: int = 2
 
+    # Checks needed before this system will say anything about its own
+    # accuracy. Below the first number it reports "never enough to say" and
+    # adjusts nothing - three checks of a travel-time estimate is three
+    # journeys, one of which may have been a road closure, and "this provider
+    # runs 22% low" said on the strength of that is exactly the invented
+    # precision the rest of the codebase refuses. Between the two it is shown
+    # and still never allowed to move a ranking.
+    calibration_min_samples: int = 5
+    calibration_confident_samples: int = 12
+
     @property
     def weather_key(self) -> str | None:
         """The key Google Weather is called with.
