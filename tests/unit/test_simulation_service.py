@@ -557,3 +557,33 @@ def test_a_single_day_can_be_previewed_alone():
     )
 
     assert [d.date for d in forecast.days] == [DAY]
+
+
+def test_a_day_spent_on_a_plane_is_not_a_day_of_missed_meals():
+    """A finding nobody can act on is a finding people learn to scroll past.
+
+    The demo trip caught this: an 08:30 departure landing at 17:05, with
+    dinner at 19:30, was reported as eight hours with nothing to eat. A
+    flight is not a stretch a traveller could have planned a meal into.
+    """
+    state = trip(
+        stop("SFO → JFK", at(8, 30), at(17, 5), None, type="flight",
+             time_flexibility="fixed"),
+        stop("Late dinner", at(19, 30), at(20, 45), "ent_cafe", type="restaurant"),
+    )
+    day = only_day(forecast_for(state, travel=TravelLookup()))
+
+    assert all(f.kind != "meal_gap" for f in day.findings)
+
+
+def test_a_long_grounded_stretch_is_still_named():
+    """The flight exemption must not swallow the finding it was carved out of."""
+    state = trip(
+        stop("Museum", at(11), at(12), "ent_museum"),
+        stop("Gallery", at(12, 30), at(19, 30), "ent_cafe"),
+    )
+    day = only_day(
+        forecast_for(state, travel=measured(("ent_museum", "ent_cafe", 10.0)))
+    )
+
+    assert any(f.kind == "meal_gap" for f in day.findings)

@@ -17,9 +17,7 @@ LLM-generated facts as authoritative.
 
 > *问津* is to ask the way at a river crossing — 陶渊明's *后遂无问津者*, the line
 > that closes *Peach Blossom Spring* once nobody asks after the ford any more.
-> *Whither* is the same question in English: **whither goest thou?** Both are a
-> question, not a promise, which is the right register for something whose
-> whole discipline is saying what it does not know.
+> *Whither* is the same question in English: **whither goest thou?**
 
 ---
 

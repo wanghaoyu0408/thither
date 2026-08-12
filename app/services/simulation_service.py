@@ -529,6 +529,12 @@ def _meal_findings(day: ItineraryDay) -> list[SimulationFinding]:
     scheduled span is judged - an empty afternoon is free time, not a missed
     lunch - and only when the day is substantial enough for the gap to mean
     anything.
+
+    A flight counts as covered rather than as a gap. Not because anyone eats
+    well on one, but because it is not a stretch a traveller could have
+    planned a meal into, and a finding they can do nothing about is a finding
+    they learn to scroll past. The demo trip caught this: an 08:30 departure
+    landing at 17:05 was being reported as eight hours with nothing to eat.
     """
     ordered = _timed(day.items)
     if len(ordered) < 2:
@@ -544,22 +550,22 @@ def _meal_findings(day: ItineraryDay) -> list[SimulationFinding]:
     if span_end <= span_start:
         return []
 
-    meals = sorted(
+    covered = sorted(
         (
             (item.start_at, item.end_at or item.start_at)
             for item in ordered
-            if item.type == "restaurant"
+            if item.type in ("restaurant", "flight")
         ),
         key=lambda pair: pair[0],
     )
 
-    # The longest stretch inside the span not touching a meal.
+    # The stretches inside the span that no meal and no flight accounts for.
     gaps: list[tuple[datetime, datetime]] = []
     at = span_start
-    for meal_start, meal_end in meals:
-        if meal_start > at:
-            gaps.append((at, min(meal_start, span_end)))
-        at = max(at, meal_end)
+    for covered_start, covered_end in covered:
+        if covered_start > at:
+            gaps.append((at, min(covered_start, span_end)))
+        at = max(at, covered_end)
     if at < span_end:
         gaps.append((at, span_end))
 
