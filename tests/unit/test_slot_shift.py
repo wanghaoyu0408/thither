@@ -10,7 +10,6 @@ from datetime import datetime, time
 
 from app.models.group import TravelerPreferences
 from app.models.traveler import PacePreferences
-from app.models.trip import TripTraveler
 from app.services.itinerary_service import (
     _TEMPLATES,
     _shifted,
@@ -41,7 +40,7 @@ def test_a_late_riser_shifts_the_whole_day_not_just_the_first_slot():
 
     assert shifted[0].start == time(10, 30)
     # Every slot moved by the same 30 minutes; order and durations kept.
-    for before, after in zip(original, shifted):
+    for before, after in zip(original, shifted, strict=True):
         gap = (after.start.hour * 60 + after.start.minute) - (
             before.start.hour * 60 + before.start.minute
         )

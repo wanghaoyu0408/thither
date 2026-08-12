@@ -1,0 +1,52 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    # Both, on purpose. The documented commands used to be Windows-only
+    # (`.venv/Scripts/python.exe`), which nobody on Linux could follow - the
+    # kind of thing only a second platform notices.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Test
+        # No network, no API keys - the suite is offline by construction and
+        # live tests are excluded by the default addopts.
+        run: python -m pytest -q
+
+      - name: Lint
+        run: ruff check .
+
+      - name: The demos really do run without a key
+        # The README's first promise to a visitor. If it stops being true,
+        # this is where it should break, not in somebody's terminal.
+        env:
+          GOOGLE_MAPS_API_KEY: ""
+          OPENAI_API_KEY: ""
+          DUFFEL_ACCESS_TOKEN: ""
+          SERPAPI_API_KEY: ""
+        # demo_milestone1.py is deliberately absent: it walks the HTTP
+        # surface and needs the server up, so it is not a self-contained
+        # demo and must not pretend to be one here either.
+        run: |
+          python scripts/learn_from_trips.py
+          python scripts/check_our_own_numbers.py
+          python scripts/preview_the_trip.py

@@ -26,7 +26,7 @@ Needs no key at all: every figure here is stored or arithmetic.
 import asyncio
 import sys
 import tempfile
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -73,7 +73,10 @@ def kyoto(trip_id: str, *, ended: bool = False) -> TripState:
         brief=TripBrief.model_validate(
             {
                 "destination": {"city": "Kyoto", "flexible": False},
-                "dates": {"start": start.isoformat(), "end": (start + timedelta(days=4)).isoformat()},
+                "dates": {
+                    "start": start.isoformat(),
+                    "end": (start + timedelta(days=4)).isoformat(),
+                },
                 "timezone": SCOPE,
             }
         ),
@@ -180,7 +183,11 @@ async def main() -> None:
             asked = questions_for(ended, await store.list_for(), settings=SETTINGS)
             for prediction in asked:
                 print(f"   {question_text(prediction)}")
-            print(f"\n   figures on this trip: {len(predictions_from(ended))}, asked about: {len(asked)}")
+            print()
+            print(
+                f"   figures on this trip: {len(predictions_from(ended))}, "
+                f"asked about: {len(asked)}"
+            )
 
             # --- 5 -------------------------------------------------------
             rule("5. Answers accumulate, and it refuses to speak until they add up")

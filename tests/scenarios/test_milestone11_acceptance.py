@@ -284,8 +284,8 @@ def test_the_prompt_forbids_model_schedule_arithmetic():
 
 async def test_the_stress_tool_reads_and_never_writes(session):
     from app.agent.tool_registry import ToolContext, _run_stress_test
-    from app.services.proposal_store import ProposalStore
     from app.config import Settings
+    from app.services.proposal_store import ProposalStore
 
     state = trip(
         stop("Museum", at(14), at(16), "ent_museum"),

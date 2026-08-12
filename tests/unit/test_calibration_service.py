@@ -5,7 +5,6 @@ is a function of the corpus, recomputed on every read, and the only stored
 thing is what happened.
 """
 
-from datetime import date, datetime, timedelta
 
 import pytest
 
@@ -297,7 +296,9 @@ def test_one_road_closure_does_not_become_a_finding():
     95-minute journey against a 14-minute estimate is a +579% error; the mean
     would report it as the provider's character."""
     ordinary = answered(5)
-    with_outlier = ordinary + [outcome_for(prediction(14.0, subject="crash"), answer="", exact=95.0)]
+    with_outlier = ordinary + [
+        outcome_for(prediction(14.0, subject="crash"), answer="", exact=95.0)
+    ]
 
     def bias(corpus):
         return calibration_for(
@@ -477,8 +478,8 @@ def test_calibration_annotates_a_card_and_never_reorders_it():
     them all by the same number, and no order could change. The note is the
     consumer; the order is not.
     """
-    from app.services.decision_service import decision_views
     from app.services.calibration_service import Calibrations
+    from app.services.decision_service import decision_views
 
     state = trip_with(
         "hotel_area",

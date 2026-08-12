@@ -193,7 +193,9 @@ def _leg_scenarios(
     return scenarios, estimate
 
 
-def _assumption_scenarios(entry: AssumptionEntry, what: str) -> tuple[dict[Scenario, Interval], Estimate]:
+def _assumption_scenarios(
+    entry: AssumptionEntry, what: str
+) -> tuple[dict[Scenario, Interval], Estimate]:
     """A stated guess: expected keeps the whole band, refusing to pick a point."""
     scenarios: dict[Scenario, Interval] = {
         "optimistic": (entry.low, entry.low),
@@ -210,7 +212,9 @@ def _assumption_scenarios(entry: AssumptionEntry, what: str) -> tuple[dict[Scena
     return scenarios, estimate
 
 
-def _measured_scenarios(minutes: float, what: str, label: str) -> tuple[dict[Scenario, Interval], Estimate]:
+def _measured_scenarios(
+    minutes: float, what: str, label: str
+) -> tuple[dict[Scenario, Interval], Estimate]:
     """A measured non-route figure (a parking walk): the same in every scenario."""
     point: Interval = (minutes, minutes)
     scenarios: dict[Scenario, Interval] = {s: point for s in SCENARIOS}

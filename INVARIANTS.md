@@ -451,8 +451,8 @@ it cannot come back.
 ## Running the checks
 
 ```bash
-.venv/Scripts/python.exe -m pytest -q                                  # offline
-.venv/Scripts/python.exe -m pytest -m live --override-ini addopts=     # live, opt-in
+python -m pytest -q                                  # offline
+python -m pytest -m live --override-ini addopts=     # live, opt-in
 ```
 
 The live suite is what finds the entries in the ledger above. It costs API quota

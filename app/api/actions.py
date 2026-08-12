@@ -20,9 +20,9 @@ a venue, and it does not quietly leave a hole.
 """
 
 import logging
+from collections.abc import Callable
 from datetime import date as date_type
 from datetime import datetime, time
-from collections.abc import Callable
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -45,12 +45,12 @@ from app.services.explanation_service import Explanation, explain, explain_item
 from app.services.intake_service import today_at
 from app.services.itinerary_diff import DayDiff, changed_days
 from app.services.itinerary_service import replan_day, substitute_item
-from app.services.simulation_service import simulate_trip
 from app.services.learning_service import (
     behavioral_signal_allowed,
     signal_for_move,
     signal_for_replan,
 )
+from app.services.simulation_service import simulate_trip
 from app.services.toolbox import MissingCredentials, Toolbox
 from app.services.validation_service import (
     TravelLookup,

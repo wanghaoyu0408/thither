@@ -16,14 +16,15 @@ from typing import Any
 
 from app.config import Settings
 from app.models.arrival import ArrivalContext
+from app.models.calibration import DIMENSIONS
 from app.models.common import utcnow
 from app.models.constraint import TripConstraint
-from app.models.proposal import AgentProposal, ProposalChoice
 from app.models.decision import (
     Decision,
     DecisionOption,
     DecisionScore,
     FlightOptionData,
+    HotelOptionData,
     PlaceOption,
 )
 from app.models.flight import AirportOption, SearchAirportsInput, SearchFlightsInput
@@ -33,11 +34,17 @@ from app.models.intake import SCOPE_LABELS, ClarificationChoice, ClarificationQu
 from app.models.itinerary_plan import ItineraryProposal, PlanParams, ReplanParams
 from app.models.learning import LearningSignal
 from app.models.place import GetPlaceDetailsInput, PlaceFieldSet, SearchPlacesInput
+from app.models.proposal import AgentProposal, ProposalChoice
 from app.models.research import ResearchWebInput
 from app.models.route import GetRoutesInput, LocationRef
 from app.models.traveler import FlightPreferences, HotelPreferences
 from app.models.trip import OpenQuestion, TripState
 from app.services import json_pointer as jp
+from app.services.calibration_service import (
+    Calibrations,
+    dimensions_never_checked,
+    scope_of,
+)
 from app.services.conflict_service import detect_conflicts
 from app.services.decision_service import label_for
 from app.services.entity_service import resolve_places
@@ -64,15 +71,6 @@ from app.services.intake_service import (
     resolve_date,
     today_at,
 )
-from app.models.calibration import DIMENSIONS
-from app.services.calibration_service import (
-    Calibrations,
-    dimensions_never_checked,
-    scope_of,
-)
-from app.services.learning_service import CATALOGUE, derive_hypotheses
-from app.services.option_metrics import ROUTES_PROVIDER
-from app.services.simulation_service import simulate_trip
 from app.services.itinerary_service import (
     arrival_penalty,
     build_itinerary,
@@ -81,6 +79,8 @@ from app.services.itinerary_service import (
     substitution_candidates,
     weather_penalty,
 )
+from app.services.learning_service import CATALOGUE, derive_hypotheses
+from app.services.option_metrics import ROUTES_PROVIDER
 from app.services.preference_service import (
     diff_profile,
     effective,
@@ -89,6 +89,7 @@ from app.services.preference_service import (
     traveler_names,
 )
 from app.services.proposal_store import ProposalStore
+from app.services.simulation_service import simulate_trip
 from app.services.toolbox import Toolbox
 from app.services.validation_service import (
     TravelLookup,
@@ -728,7 +729,9 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 },
                 "quote": {
                     "type": "string",
-                    "description": "Their words, verbatim - this is what 'Why?' will show them later.",
+                    "description": (
+                        "Their words, verbatim - this is what 'Why?' shows later."
+                    ),
                 },
             },
             "required": ["traveler_id", "preference_key", "quote"],
@@ -1744,7 +1747,10 @@ async def _search_airports(context: ToolContext, args: dict[str, Any]) -> dict[s
             for airport in result.results
         ],
         "warnings": result.warnings,
-        "note": f"Drive times come from the Routes API. Never estimate one yourself. {SHORTLIST_SAVED}",
+        "note": (
+            "Drive times come from the Routes API. Never estimate one yourself. "
+            f"{SHORTLIST_SAVED}"
+        ),
     }
 
 
@@ -2597,7 +2603,8 @@ async def _review_estimate_accuracy(
                 + f" ({provider})",
                 "checks": record.sample_count,
                 "status": record.status,
-                "measured_where": record.scope_used or ("this provider overall" if record.bias is not None else None),
+                "measured_where": record.scope_used
+                or ("this provider overall" if record.bias is not None else None),
                 # Percentages, not multipliers: "runs 22% long" is the sentence
                 # a traveller would understand hearing back.
                 "usually_off_by": (

@@ -11,13 +11,13 @@ from app.models.common import utcnow
 from app.models.trip import TripState, TripTraveler
 from app.services.conflict_service import detect_conflicts
 from app.services.decision_service import label_for
-from app.services.next_step import next_steps
 from app.services.intake_service import (
     missing_blocking,
     outstanding_questions,
     research_allowed,
     today_at,
 )
+from app.services.next_step import next_steps
 from app.services.opening_hours import describe
 
 MAX_ENTITIES = 60

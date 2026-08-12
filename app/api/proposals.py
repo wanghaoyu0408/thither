@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.actions import ActionResult, _commit, _load, _view
-from app.api.decisions import _decision, _pointer, _refuse_if_locked, _patch, select_ops
+from app.api.decisions import _decision, _patch, _pointer, _refuse_if_locked, select_ops
 from app.db.session import get_session
 from app.models.common import utcnow
 from app.models.proposal import AgentProposal, ProposalChoice

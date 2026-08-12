@@ -6,9 +6,7 @@ was O'Hare. These pin the mechanism that turns that sentence into a button, and
 the honest way to park a part of the trip when the answer is "not now".
 """
 
-from datetime import date, timedelta
 
-import pytest
 
 from app.config import Settings
 from app.db.repository import TripRepository

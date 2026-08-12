@@ -7,6 +7,8 @@ answered once, after the trip is over, by a named traveller.
 
 from datetime import date, datetime, time, timedelta
 
+import pytest
+
 from app.db.repository import (
     CalibrationRepository,
     LearningRepository,
@@ -18,8 +20,6 @@ from app.models.learning import LearningSignal
 from app.models.traveler import TravelerProfile
 from app.models.trip import TripTraveler
 from tests.conftest import make_item, sample_state
-
-import pytest
 
 
 def solo_state(profile_id: str = "user_solo"):

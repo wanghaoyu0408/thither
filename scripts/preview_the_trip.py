@@ -18,7 +18,7 @@ Six acts, entirely offline and deterministic - no database, no key, no model:
 """
 
 import sys
-from datetime import date, datetime, time, timedelta
+from datetime import timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -58,7 +58,10 @@ def show_day(day) -> None:
         cons = stop_.arrival["conservative"].label()
         planned = stop_.scheduled_start.strftime("%H:%M")
         flag = "  · assumes the schedule held earlier" if stop_.rests_on_unknown else ""
-        print(f"      {stop_.title}: planned {planned} · expected {exp} · conservative {cons}{flag}")
+        print(
+            f"      {stop_.title}: planned {planned} · "
+            f"expected {exp} · conservative {cons}{flag}"
+        )
         for estimate in stop_.inputs:
             print(f"         {estimate.label}")
     for finding in day.findings:

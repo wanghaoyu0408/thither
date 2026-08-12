@@ -5,13 +5,13 @@ timestamps the signals carry - because the whole design is that a hypothesis
 is a function of the evidence, recomputed on every read.
 """
 
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta
 
 from app.config import Settings
 from app.models.common import Money
 from app.models.decision import Decision, DecisionOption, FlightOptionData, HotelOptionData
 from app.models.flight import FlightSegment, FlightSlice
-from app.models.learning import LearningSignal, TripReflection, ReflectionItem
+from app.models.learning import LearningSignal, ReflectionItem, TripReflection
 from app.models.rejection import RejectionRecord
 from app.models.traveler import TravelerProfile
 from app.models.trip import TripState, TripTraveler
@@ -51,7 +51,7 @@ def signal(
         source=source,
         context=context or {"item": "Fish market", "from": "08:30", "to": "11:00",
                             "trip_title": "Tokyo"},
-        observed_at=at or datetime(2026, 8, 1, tzinfo=timezone.utc),
+        observed_at=at or datetime(2026, 8, 1, tzinfo=UTC),
     )
 
 

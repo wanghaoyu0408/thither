@@ -24,7 +24,6 @@ from app.models.hotel import HotelPriceQuote
 from app.models.traveler import TravelerProfile
 from app.models.trip import TripTraveler
 from app.services.calibration_service import (
-    Calibrations,
     automatic_outcomes,
     calibrate,
     calibration_for,
@@ -283,7 +282,10 @@ async def test_nothing_here_ever_touches_a_traveller_s_profile(client, session):
         f"/trips/{stored.trip_id}/reflection",
         json={
             "answered_by": "trv_1",
-            "estimates": [{"prediction_id": a["prediction_id"], "answer": "much_longer"} for a in asked],
+            "estimates": [
+                {"prediction_id": a["prediction_id"], "answer": "much_longer"}
+                for a in asked
+            ],
         },
     )
 

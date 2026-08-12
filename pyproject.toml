@@ -1,7 +1,20 @@
 [project]
 name = "whither"
 version = "0.1.0"
-description = "问津 · Whither - a personal group travel planning agent"
+description = "问津 · Whither - a travel planning agent that is honest about what it does not know"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Haoyu Wang", email = "haoyu.uestc@gmail.com" }]
+keywords = ["travel", "agent", "llm", "planning", "fastapi", "pydantic"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.11",
@@ -27,6 +40,12 @@ postgres = [
     "asyncpg>=0.30",
     "psycopg[binary]>=3.2",
 ]
+
+[project.urls]
+Homepage = "https://github.com/wanghaoyu0408/travel-agent"
+Repository = "https://github.com/wanghaoyu0408/travel-agent"
+Issues = "https://github.com/wanghaoyu0408/travel-agent/issues"
+"Design invariants" = "https://github.com/wanghaoyu0408/travel-agent/blob/main/INVARIANTS.md"
 
 [build-system]
 requires = ["setuptools>=68"]

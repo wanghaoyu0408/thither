@@ -19,9 +19,10 @@ They are never folded into one another, and both are ordinal words - a
 percentage computed from three clicks would be fake precision.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import time
-from typing import Any, Callable
+from typing import Any
 
 from app.config import Settings
 from app.models.common import Money
@@ -137,7 +138,8 @@ CATALOGUE: dict[PreferenceKey, CatalogueEntry] = {
     "parking_sensitive": CatalogueEntry(
         field_path="pace_preferences.parking_sensitive",
         label="Parking matters",
-        consumer="arrival_penalty doubles parking friction in substitute ranking and its recorded score",
+        consumer="arrival_penalty doubles parking friction in substitute ranking "
+        "and in its recorded score",
         proposed_value=lambda _s: True,
         already_satisfied=lambda p, v: p.pace_preferences.parking_sensitive is True,
     ),

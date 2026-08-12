@@ -8,7 +8,7 @@ from datetime import UTC, date, datetime, time, timedelta
 
 from app.config import Settings
 from app.models.arrival import ArrivalContext, ParkingContext, ParkingSpot
-from app.models.calibration import Outcome, Prediction
+from app.models.calibration import Prediction
 from app.models.simulation import SCENARIOS
 from app.models.validation import ValidationIssue
 from app.models.weather import WeatherContext

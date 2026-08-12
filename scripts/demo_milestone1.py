@@ -28,24 +28,31 @@ def show(label: str, response: httpx.Response) -> dict:
 def main() -> int:
     with httpx.Client(base_url=BASE, timeout=10.0) as c:
         # 1. A traveler profile: long-term taste, reused across trips.
-        profile = show(
-            "1. Create a traveler profile",
-            c.post(
-                "/profiles",
-                json={
-                    "profile_id": "user_haoyu",
-                    "name": "Haoyu",
-                    "home_city": "San Francisco",
-                    "preferred_airports": ["SFO", "SJC", "OAK"],
-                    "hotel_preferences": {
-                        "location_importance": 0.95,
-                        "price_importance": 0.65,
-                        "quiet_importance": 0.7,
-                    },
-                    "pace_preferences": {"preferred_start_time": "10:00", "intensity": "relaxed"},
-                },
-            ),
-        )
+        #
+        # Re-runnable on purpose. The id is fixed so the demo reads the same
+        # every time, which means the second run finds it already there - a
+        # 409, which is the correct answer and used to be an unhandled 500.
+        # A demonstration that only works once is not much of a demonstration.
+        wanted = {
+            "profile_id": "user_haoyu",
+            "name": "Haoyu",
+            "home_city": "San Francisco",
+            "preferred_airports": ["SFO", "SJC", "OAK"],
+            "hotel_preferences": {
+                "location_importance": 0.95,
+                "price_importance": 0.65,
+                "quiet_importance": 0.7,
+            },
+            "pace_preferences": {"preferred_start_time": "10:00", "intensity": "relaxed"},
+        }
+        created = c.post("/profiles", json=wanted)
+        if created.status_code == 409:
+            profile = show(
+                "1. Traveler profile (already there from an earlier run)",
+                c.get(f"/profiles/{wanted['profile_id']}"),
+            )
+        else:
+            profile = show("1. Create a traveler profile", created)
         print(
             f"   {profile['name']}, home {profile['home_city']}, "
             f"airports {profile['preferred_airports']}"

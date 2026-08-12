@@ -14,7 +14,23 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 @router.post("", response_model=TravelerProfile, status_code=status.HTTP_201_CREATED)
 async def create_profile(profile: TravelerProfile, session: SessionDep) -> TravelerProfile:
-    return await ProfileRepository(session).create(profile)
+    """Create a profile, refusing an id that is already taken.
+
+    A duplicate used to reach the database as an unhandled IntegrityError and
+    come back as a bare `500 Internal Server Error` with an empty body - so
+    the very first call of `scripts/demo_milestone1.py` crashed on every run
+    after the first, and the client was told nothing about why. A taken id is
+    an ordinary answer to an ordinary request, and 409 is what it is called.
+    """
+    repo = ProfileRepository(session)
+    try:
+        await repo.get(profile.profile_id)
+    except ProfileNotFound:
+        return await repo.create(profile)
+    raise HTTPException(
+        status.HTTP_409_CONFLICT,
+        f"profile {profile.profile_id} already exists; PATCH it to change it",
+    )
 
 
 @router.get("", response_model=list[TravelerProfile])

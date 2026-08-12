@@ -16,7 +16,12 @@ from datetime import UTC, date, datetime, timedelta
 from app.agent.tool_registry import ToolContext, _search_airports, _search_flights
 from app.config import Settings
 from app.models.common import Money
-from app.models.decision import Decision, DecisionOption, FlightOptionData
+from app.models.decision import (
+    Decision,
+    DecisionOption,
+    FlightOptionData,
+    HotelOptionData,
+)
 from app.models.flight import AirportOption, FlightSegment, FlightSlice
 from app.models.tool import ToolResult
 from app.services.proposal_store import ProposalStore
@@ -94,9 +99,10 @@ class FakeAirports:
 
 
 class FakeToolbox:
-    def __init__(self, *, flights=None, airports=None):
+    def __init__(self, *, flights=None, airports=None, hotels=None):
         self.flights = flights
         self.airports = airports
+        self.hotels = hotels
 
 
 def context_for(toolbox, state=None) -> ToolContext:
@@ -203,8 +209,8 @@ async def test_an_airport_search_with_a_role_stages_that_decision():
     # The drive time still has to reach the card, but as a figure rather than a
     # bullet: rounded to the minute it made two airports of one city read
     # identically, so it is a metric now and keeps its decimal.
-    from app.services.option_metrics import metrics_for
     from app.models.flight import AirportOption
+    from app.services.option_metrics import metrics_for
 
     figures = metrics_for(AirportOption.model_validate(decision["options"][0]["data"]))
     assert any("18.0 min" in metric.value for metric in figures)
@@ -303,3 +309,46 @@ async def test_without_a_role_no_airport_decision_is_invented():
 
     assert reply["airports"], "the answer is still returned to the model"
     assert context.pending_decisions == {}
+
+
+class FakeHotels:
+    def __init__(self, results):
+        self._results = results
+
+    async def search_hotels(self, spec, *, state=None):
+        return ToolResult[HotelOptionData](source="serpapi_google_hotels", results=self._results)
+
+
+async def test_a_hotel_search_that_finds_nothing_records_that_it_looked():
+    """The same finding as for flights, and it used to raise instead.
+
+    `Decision[HotelOptionData]` was built on this path with `HotelOptionData`
+    never imported into the module, so the moment a hotel search came back
+    empty the tool died with a NameError - the one branch of the
+    empty-search-is-a-finding fix (ledger 45) that no offline test exercised.
+    Nothing caught it because the flights twin was tested and the hotels twin
+    was not; `ruff` found it, statically, in a second.
+    """
+    from app.agent.tool_registry import _search_hotels
+
+    state = sample_state()
+    state.brief.timezone = "Asia/Tokyo"
+    context = context_for(FakeToolbox(hotels=FakeHotels([])), state=state)
+
+    result = await _search_hotels(
+        context,
+        {
+            "area_name": "Ginza",
+            "check_in": DEPART.isoformat(),
+            "check_out": (DEPART + timedelta(days=2)).isoformat(),
+            "adults": 2,
+        },
+    )
+
+    assert "error" not in result, result
+    assert result["hotels"] == []
+    decision = context.pending_decisions["hotel"]
+    assert decision["options"] == [], "nothing was found, and nothing is claimed"
+    assert decision["status"] == "researching"
+    assert "nothing was available" in decision["rationale"]
+    assert "propose_next_step" in result["note"]

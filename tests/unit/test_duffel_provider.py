@@ -323,7 +323,12 @@ def test_the_arrival_is_where_the_outbound_lands():
 
 def test_stops_describe_the_outbound_like_every_other_scalar():
     """`max` across both directions could not say which leg had the stop."""
-    option = normalize_offer(return_offer(return_stops=("DFW",)), live_mode=True, passengers=2, currency="USD")
+    option = normalize_offer(
+        return_offer(return_stops=("DFW",)),
+        live_mode=True,
+        passengers=2,
+        currency="USD",
+    )
 
     assert option.stops == 0, "the outbound is nonstop"
     assert option.slices[1].stops == 1, "and the return is not"

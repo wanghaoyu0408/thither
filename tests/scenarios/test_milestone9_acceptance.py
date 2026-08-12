@@ -11,13 +11,11 @@ same handlers exercised here directly.
 """
 
 from datetime import date, datetime, time, timedelta
-from typing import Any
 
 from app.config import Settings
 from app.db.repository import LearningRepository, ProfileRepository, TripRepository
-from app.models.group import TravelerPreferences
 from app.models.learning import LearningSignal
-from app.models.traveler import PacePreferences, TravelerProfile
+from app.models.traveler import TravelerProfile
 from app.models.trip import TripState, TripTraveler
 from app.services.learning_service import derive_hypotheses
 from app.services.preference_service import resolve

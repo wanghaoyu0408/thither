@@ -25,9 +25,9 @@ from app.models.patch import TripPatch
 from app.models.rejection import RejectionRecord
 from app.models.trip import TripState
 from app.services import json_pointer as jp
+from app.services.calibration_service import calibrations_for
 from app.services.decision_service import DecisionView, decision_views, visible
 from app.services.explanation_service import Explanation, explain_option
-from app.services.calibration_service import calibrations_for
 from app.services.learning_service import behavioral_signal_allowed, signals_for_choice
 
 router = APIRouter(prefix="/trips/{trip_id}/decisions", tags=["decisions"])
