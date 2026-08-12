@@ -70,6 +70,32 @@ def build_client(timeout: httpx.Timeout | None = None) -> httpx.AsyncClient:
     )
 
 
+# One HTTP client for the whole process, so the keep-alive pool survives a
+# request. A `Toolbox` used to build its own, and a Toolbox is built per
+# request - so every button press opened fresh TCP connections and repeated the
+# TLS handshake with Google, for nothing. The pool above is sized for a
+# process, not for a single call.
+#
+# Created lazily rather than at import: an AsyncClient wants a running loop,
+# and importing this module must not require one.
+_SHARED_CLIENT: httpx.AsyncClient | None = None
+
+
+def shared_client() -> httpx.AsyncClient:
+    global _SHARED_CLIENT
+    if _SHARED_CLIENT is None or _SHARED_CLIENT.is_closed:
+        _SHARED_CLIENT = build_client()
+    return _SHARED_CLIENT
+
+
+async def close_shared_client() -> None:
+    """Called once on application shutdown. Never by a request."""
+    global _SHARED_CLIENT
+    if _SHARED_CLIENT is not None and not _SHARED_CLIENT.is_closed:
+        await _SHARED_CLIENT.aclose()
+    _SHARED_CLIENT = None
+
+
 def _classify(provider: str, response: httpx.Response) -> ProviderError:
     detail = response.text[:400]
     status = response.status_code

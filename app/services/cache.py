@@ -118,11 +118,27 @@ class Cache(Protocol):
     async def set(self, key: str, value: Any, policy: CachePolicy) -> None: ...
 
 
-class InProcessCache:
-    """TTL dict. Backs VOLATILE content and short-lived reuse within a run."""
+# How many entries the in-process layer will hold before evicting the oldest.
+# It has a lifetime now (see `shared_memory`), and a TTL dict that only drops
+# an entry when somebody asks for it again is a dict that never drops the keys
+# nobody asks for. A route matrix payload is small; ten thousand of them is a
+# few tens of megabytes, which is the right order for a cap that never bites in
+# ordinary use and stops the leak in a long-lived process.
+MAX_MEMORY_ENTRIES = 10_000
 
-    def __init__(self) -> None:
+
+class InProcessCache:
+    """TTL dict. Backs VOLATILE content, and it is the *only* layer allowed to.
+
+    Bounded and insertion-ordered: on overflow the oldest entries go first,
+    after a sweep for anything already expired. Nothing here is ever written to
+    disk - that is the whole reason route durations and opening hours may be
+    cached at all.
+    """
+
+    def __init__(self, max_entries: int = MAX_MEMORY_ENTRIES) -> None:
         self._entries: dict[str, tuple[datetime | None, Any]] = {}
+        self._max_entries = max_entries
 
     async def get(self, key: str, policy: CachePolicy) -> Any | None:
         entry = self._entries.get(key)
@@ -136,9 +152,56 @@ class InProcessCache:
 
     async def set(self, key: str, value: Any, policy: CachePolicy) -> None:
         self._entries[key] = (policy.expires_at(), value)
+        if len(self._entries) > self._max_entries:
+            self._evict()
+
+    def _evict(self) -> None:
+        """Expired first, then oldest, until back under the cap.
+
+        Sweeping expiries first means a busy process reclaims lapsed entries
+        rather than throwing away live ones it is about to need.
+        """
+        now = utcnow()
+        for key in [
+            key
+            for key, (expires_at, _) in self._entries.items()
+            if expires_at is not None and expires_at <= now
+        ]:
+            del self._entries[key]
+
+        while len(self._entries) > self._max_entries:
+            self._entries.pop(next(iter(self._entries)))
 
     def clear(self) -> None:
         self._entries.clear()
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+
+# One memory cache for the whole process.
+#
+# Every `Toolbox` used to build its own, and a Toolbox is built per request -
+# six construction sites, one of them `_measure`, which runs on every button
+# press. VOLATILE content is memory-only by policy, so route durations and
+# opening hours were cached for exactly the length of one HTTP request and then
+# thrown away: the durable table holds 1,210 lat/lng rows and not one route.
+#
+# Sharing it changes nothing the terms care about. It is still in-process,
+# still capped at the same one-hour TTL, still gone when the process exits -
+# the three properties this module's policy is actually about. Keys are content
+# hashes of the normalized request, so two trips asking the same question share
+# an answer, which is the point rather than a leak.
+_SHARED_MEMORY = InProcessCache()
+
+
+def shared_memory() -> InProcessCache:
+    return _SHARED_MEMORY
+
+
+def reset_shared_memory() -> None:
+    """Tests only. A cache that outlives a test would make the next one lie."""
+    _SHARED_MEMORY.clear()
 
 
 class SqliteCache:

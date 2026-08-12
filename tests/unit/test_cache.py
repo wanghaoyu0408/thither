@@ -239,3 +239,60 @@ async def test_expiry_uses_the_supplied_clock():
     now = utcnow()
 
     assert policy.expires_at(now) == now + timedelta(days=10)
+
+
+# --- the layer that has to survive a request ---------------------------------
+
+
+async def test_volatile_content_survives_between_toolboxes():
+    """The whole point of the shared memory layer.
+
+    Route durations and opening hours are VOLATILE: they may never be written
+    to disk, so the in-process cache is the only place they can live. A
+    `Toolbox` is built per request - `_measure` runs on every button press -
+    and each one used to bring its own empty `InProcessCache`, so a route
+    measured for one click was gone by the next. The durable table proved it:
+    1,210 lat/lng rows and not one route.
+    """
+    from app.services.cache import reset_shared_memory, shared_memory
+
+    reset_shared_memory()
+    first, second = shared_memory(), shared_memory()
+
+    assert first is second, "one memory cache for the process, not one per caller"
+
+    await first.set("routes:abc", {"minutes": 12.0}, VOLATILE_POLICY)
+    assert await second.get("routes:abc", VOLATILE_POLICY) == {"minutes": 12.0}
+
+    reset_shared_memory()
+    assert await second.get("routes:abc", VOLATILE_POLICY) is None
+
+
+async def test_the_shared_cache_is_bounded_so_a_long_process_cannot_leak():
+    """A TTL dict that only drops an entry when somebody asks for it again is a
+    dict that never drops the keys nobody asks for. That was harmless while it
+    died with the request, and is a leak now that it does not."""
+    cache = InProcessCache(max_entries=50)
+
+    for index in range(200):
+        await cache.set(f"k{index}", index, VOLATILE_POLICY)
+
+    assert len(cache) <= 50
+    # The newest survive; the oldest were the ones evicted.
+    assert await cache.get("k199", VOLATILE_POLICY) == 199
+    assert await cache.get("k0", VOLATILE_POLICY) is None
+
+
+async def test_eviction_takes_the_expired_before_the_merely_old():
+    """A busy process should reclaim lapsed entries rather than throw away live
+    ones it is about to need."""
+    cache = InProcessCache(max_entries=3)
+    expired = CachePolicy(ContentClass.VOLATILE, ttl=timedelta(seconds=-1))
+
+    await cache.set("stale_a", 1, expired)
+    await cache.set("stale_b", 2, expired)
+    await cache.set("live_a", 3, VOLATILE_POLICY)
+    await cache.set("live_b", 4, VOLATILE_POLICY)
+
+    assert await cache.get("live_a", VOLATILE_POLICY) == 3
+    assert await cache.get("live_b", VOLATILE_POLICY) == 4

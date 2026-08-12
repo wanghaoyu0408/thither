@@ -7,10 +7,11 @@ credentials themselves.
 
 from types import TracebackType
 
+import httpx
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.config import Settings, get_settings
-from app.providers.base import build_client
+from app.providers.base import shared_client
 from app.providers.duffel import DuffelProvider
 from app.providers.google_places import GooglePlacesProvider
 from app.providers.google_routes import GoogleRoutesProvider
@@ -19,7 +20,13 @@ from app.providers.open_meteo import OpenMeteoHistoricalProvider
 from app.providers.openai_research import OpenAIResearchProvider
 from app.providers.serpapi_hotels import SerpApiGoogleHotelsProvider
 from app.services.airport_service import AirportService
-from app.services.cache import InProcessCache, LayeredCache, RequestDeduper, SqliteCache
+from app.services.cache import (
+    InProcessCache,
+    LayeredCache,
+    RequestDeduper,
+    SqliteCache,
+    shared_memory,
+)
 from app.services.discovery_service import DiscoveryService
 from app.services.flight_service import FlightService
 from app.services.hotel_area_service import HotelAreaService
@@ -40,6 +47,9 @@ class Toolbox:
         self,
         settings: Settings | None = None,
         sessions: async_sessionmaker | None = None,
+        *,
+        client: httpx.AsyncClient | None = None,
+        memory: InProcessCache | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         if not self._settings.google_maps_api_key:
@@ -48,12 +58,18 @@ class Toolbox:
                 "Places API (New) and Routes API enabled."
             )
 
-        self._client = build_client()
+        # Both default to the process-wide ones. A Toolbox is built per request
+        # - `_measure` alone runs on every button press - so owning them
+        # privately meant the connection pool and the whole VOLATILE cache were
+        # discarded between clicks. Passing your own is for tests and scripts
+        # that want isolation.
+        self._owns_client = client is None
+        self._client = client or shared_client()
 
         durable = (
             SqliteCache(sessions) if sessions is not None and self._settings.cache_enabled else None
         )
-        self._cache = LayeredCache(InProcessCache(), durable)
+        self._cache = LayeredCache(memory or shared_memory(), durable)
         self._deduper = RequestDeduper()
 
         key = self._settings.google_maps_api_key
@@ -126,7 +142,14 @@ class Toolbox:
         )
 
     async def aclose(self) -> None:
-        await self._client.aclose()
+        """Close only a client this Toolbox created.
+
+        Every call site uses `async with`, so a borrowed client would be shut
+        on the first request and every later one would fail on a closed pool.
+        The shared client is closed once, by the application's shutdown.
+        """
+        if self._owns_client:
+            await self._client.aclose()
 
     async def __aenter__(self) -> "Toolbox":
         return self

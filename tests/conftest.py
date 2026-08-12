@@ -2,6 +2,7 @@ import os
 from collections.abc import AsyncIterator
 from datetime import date, datetime
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import (
@@ -42,6 +43,20 @@ DAY_ONE = date(2026, 10, 3)
 
 
 # --- Fixtures ----------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _fresh_process_cache():
+    """The in-process cache outlives a request now, so it would outlive a test.
+
+    Autouse and unconditional: a route measured in one test answering another
+    test's question is the kind of green suite that hides a real miss.
+    """
+    from app.services.cache import reset_shared_memory
+
+    reset_shared_memory()
+    yield
+    reset_shared_memory()
 
 
 @pytest_asyncio.fixture

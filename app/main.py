@@ -19,6 +19,7 @@ from app.api import (
 )
 from app.config import get_settings
 from app.db.session import create_all, dispose_engine
+from app.providers.base import close_shared_client
 
 WEB_ROOT = Path(__file__).parent / "web"
 
@@ -28,6 +29,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if get_settings().auto_create_tables:
         await create_all()
     yield
+    # The HTTP pool is process-wide, so it is closed once, here - never by
+    # the requests that borrow it.
+    await close_shared_client()
     await dispose_engine()
 
 
