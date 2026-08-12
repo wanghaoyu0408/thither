@@ -9,12 +9,19 @@ Everything here reads a stored option. Nothing is recomputed, estimated, or
 derived from anything but what the ranker wrote down at the time.
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
 from app.models.decision import FlightOptionData, HotelAreaOption, HotelOptionData
 from app.models.flight import AirportOption
+
+if TYPE_CHECKING:  # calibration_service imports nothing from here, and vice versa
+    from app.services.calibration_service import Calibrations
+
+# The one provider that measures ground travel. Named here rather than
+# imported so this module keeps its "reads a stored option" independence.
+ROUTES_PROVIDER = "google_routes"
 
 # Below this, a guest rating says more about who bothered to review than about
 # the hotel. One home for the threshold, so a card and an explanation cannot
@@ -70,8 +77,31 @@ def mode_note(mode: str | None) -> str | None:
     return None
 
 
-def metrics_for(data) -> list[Metric]:
-    """The objective figures this payload actually carries."""
+def _joined(*notes: str | None) -> str | None:
+    """A figure may have more than one thing to declare about itself."""
+    real = [note for note in notes if note]
+    return " · ".join(real) if real else None
+
+
+def _travel_note(
+    minutes: float, mode: str | None, calibrations: "Calibrations | None"
+) -> str | None:
+    """How wrong this provider's travel times usually are, when it is known.
+
+    Absent a corpus this returns nothing at all, which is what every caller
+    got before M10 and remains correct - the figure is still the figure.
+    """
+    if calibrations is None:
+        return None
+    return calibrations.note(minutes, ROUTES_PROVIDER, "travel_minutes", mode)
+
+
+def metrics_for(data, calibrations: "Calibrations | None" = None) -> list[Metric]:
+    """The objective figures this payload actually carries.
+
+    `calibrations` is optional and absent means silent: every caller that
+    does not have the corpus gets exactly the figures it always got.
+    """
     metrics: list[Metric] = []
 
     if isinstance(data, FlightOptionData):
@@ -129,7 +159,10 @@ def metrics_for(data) -> list[Metric]:
                 Metric(
                     label="Mean travel to your stops",
                     value=f"{data.mean_minutes:.0f} min by {mode}",
-                    note=mode_note(data.travel_mode),
+                    note=_joined(
+                        mode_note(data.travel_mode),
+                        _travel_note(data.mean_minutes, data.travel_mode, calibrations),
+                    ),
                 )
             )
         if data.worst_minutes is not None:
@@ -178,7 +211,10 @@ def metrics_for(data) -> list[Metric]:
                 Metric(
                     label="Mean travel to your stops",
                     value=f"{mean:.0f} min by {data.route_mode or 'travel'}",
-                    note=mode_note(data.route_mode),
+                    note=_joined(
+                        mode_note(data.route_mode),
+                        _travel_note(mean, data.route_mode, calibrations),
+                    ),
                 )
             )
         return metrics
@@ -196,7 +232,7 @@ def metrics_for(data) -> list[Metric]:
                     label="Drive from the pickup point",
                     value=f"{data.ground_travel_minutes:.1f} min",
                     note=(
-                        None
+                        _travel_note(data.ground_travel_minutes, "driving", calibrations)
                         if data.ground_travel_source == "routes_api"
                         else "not measured; this figure cannot be compared"
                     ),

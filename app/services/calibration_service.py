@@ -23,10 +23,11 @@ disagreement. An interval that is too generous costs a traveller nothing. One
 that is too tight is the confident wrongness this project exists to avoid.
 """
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from statistics import median
 
-from app.config import Settings
+from app.config import Settings, get_settings
 from app.models.calibration import (
     DIMENSIONS,
     CalibratedEstimate,
@@ -64,6 +65,11 @@ ANSWER_WORDS: dict[str, str] = {
 # An exact figure is an interval too, just a zero-width one - so the corpus
 # never has to know which kind it is holding.
 EXACT = "exact"
+
+# How much of the corpus is left outside the reported band, at each end. The
+# band claims eight checks in ten, and says so; the two in ten outside it are
+# what `sample_count` is travelling with the figure to let a reader weigh.
+BAND_TAIL = 0.1
 
 # Google Routes is the only provider that measures ground travel here, and it
 # only counts when it actually ran: `not_looked_up` and `unavailable` are
@@ -137,18 +143,31 @@ def predictions_from(state: TripState) -> list[Prediction]:
         if not isinstance(data, HotelOptionData):
             continue
         mean = data.mean_route_minutes()
-        if mean is None:
-            continue
-        add(
-            provider=ROUTES_PROVIDER,
-            dimension="travel_minutes",
-            mode=data.route_mode,
-            value=mean,
-            subject=f"hotel:{data.entity_id or data.name}",
-            subject_label=f"getting to your places from {data.name}",
-            decision="hotel",
-            drove_the_choice=chosen,
-        )
+        if mean is not None:
+            add(
+                provider=ROUTES_PROVIDER,
+                dimension="travel_minutes",
+                mode=data.route_mode,
+                value=mean,
+                subject=f"hotel:{data.entity_id or data.name}",
+                subject_label=f"getting to your places from {data.name}",
+                decision="hotel",
+                drove_the_choice=chosen,
+            )
+        # The advertised rate is a claim, and the cheapest quote anyone can be
+        # named for arrives in the same fetch to contradict it (ledger 4). Both
+        # halves are already here, so this one needs nobody's help to check.
+        if data.headline_nightly is not None and data.cheapest_quote is not None:
+            add(
+                provider=data.provider,
+                dimension="hotel_headline_gap",
+                value=data.headline_nightly.amount,
+                subject=f"headline:{data.entity_id or data.name}",
+                subject_label=f"the advertised rate at {data.name}",
+                decision="hotel",
+                drove_the_choice=chosen,
+                observed_at=data.observed_at,
+            )
 
     for name in ("departure_airport", "arrival_airport"):
         for option, chosen in _options_of(getattr(state.decisions, name)):
@@ -248,6 +267,41 @@ def outcome_from_measurement(
     )
 
 
+def automatic_outcomes(state: TripState) -> list[Outcome]:
+    """The checks that need nobody - no person, no network, no waiting.
+
+    Only one dimension qualifies today, and it qualifies completely: a hotel's
+    advertised nightly rate and the cheapest rate any named booking site will
+    actually honour arrive in the same fetch, so the claim and its refutation
+    are already sitting beside each other in the trip. Ledger 4 found this by
+    hand once - an advertised $70 that no listed site matched, all of them
+    wanting $90 - and nothing has counted how often it happens since.
+
+    Everything else needs a person who was there, an archive of what the
+    weather did, or time to pass. Those live elsewhere on purpose: this
+    function makes no network call and can be run over every trip in the
+    database without asking anyone anything.
+    """
+    by_subject = {p.subject: p for p in predictions_from(state)}
+    outcomes: list[Outcome] = []
+
+    for option, _chosen in _options_of(state.decisions.hotel):
+        data = option.data
+        if not isinstance(data, HotelOptionData):
+            continue
+        quote = data.cheapest_quote
+        if quote is None or quote.nightly is None:
+            continue
+        prediction = by_subject.get(f"headline:{data.entity_id or data.name}")
+        if prediction is None:
+            continue
+        outcomes.append(
+            outcome_from_measurement(prediction, quote.nightly.amount, checked_by="same_fetch")
+        )
+
+    return outcomes
+
+
 # --- calibration, derived ----------------------------------------------------
 
 
@@ -269,21 +323,47 @@ def _matching(
     ]
 
 
-def _bias_and_spread(samples: list[Outcome]) -> tuple[float, float]:
-    """Median signed relative error, and a spread that errs wide.
+def _quantile(values: list[float], q: float) -> float:
+    """Linear-interpolated quantile. Small samples clamp to their extremes
+    rather than pretend to resolve a tail they do not have."""
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    position = q * (len(ordered) - 1)
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = position - lower
+    return ordered[lower] * (1 - weight) + ordered[upper] * weight
 
-    Two different vaguenesses go into the spread and both belong there: the
-    samples disagree with each other (median absolute deviation), and each
-    sample is itself only an interval (its own half-width). Adding them
-    double-counts a little, in the direction where being wrong is harmless.
+
+def _bias_and_band(samples: list[Outcome]) -> tuple[float, float, float]:
+    """The median error, and the band eight checks in ten actually landed in.
+
+    Quantiles of the observed errors, not a spread computed around the median.
+    The first version used median absolute deviation and the live corpus
+    showed why that is unsafe here: half of thirty advertised hotel rates were
+    matched exactly, so the deviation collapsed to ±1.6% and an advertised
+    $200 was reported as "more likely $197-$203" - while three of those same
+    thirty were understated by 13%, 20% and 67%. A tight interval wrapped
+    around a fat tail is a more confident lie than no interval at all.
+
+    Asymmetric because reality is: an advertised price is understated far more
+    often than overstated, and forcing ± around a midpoint would invent a
+    symmetry the data does not have. Each sample is itself an interval, so the
+    low edge is taken over the samples' low ends and the high edge over their
+    high ends - which folds in how vague each answer was without counting it
+    twice.
+
+    The tail outside the band is real and is not hidden: `sample_count`
+    travels with every figure, and eight in ten is what the band claims.
     """
     bands = [o.relative_error for o in samples]
-    mids = [(low + high) / 2 for low, high in bands]
-    half_widths = [(high - low) / 2 for low, high in bands]
-
-    bias = median(mids)
-    disagreement = median([abs(m - bias) for m in mids])
-    return bias, disagreement + median(half_widths)
+    bias = median([(low + high) / 2 for low, high in bands])
+    return (
+        bias,
+        _quantile([low for low, _ in bands], BAND_TAIL),
+        _quantile([high for _, high in bands], 1 - BAND_TAIL),
+    )
 
 
 def calibration_for(
@@ -316,7 +396,7 @@ def calibration_for(
     for level, samples, scope_used in ladder:
         if len(samples) < settings.calibration_min_samples:
             continue
-        bias, spread = _bias_and_spread(samples)
+        bias, low_error, high_error = _bias_and_band(samples)
         return Calibration(
             provider=provider,
             dimension=dimension,
@@ -331,7 +411,8 @@ def calibration_for(
             ),
             sample_count=len(samples),
             bias=bias,
-            spread=spread,
+            low_error=low_error,
+            high_error=high_error,
         )
 
     # Nothing stood up. Report the widest count we have so the surface can say
@@ -357,28 +438,131 @@ def calibrate(value: float, calibration: Calibration) -> CalibratedEstimate:
     """
     if not calibration.is_usable:
         return CalibratedEstimate(raw=value, calibration=calibration)
-    bias, spread = calibration.bias or 0.0, calibration.spread or 0.0
     return CalibratedEstimate(
         raw=value,
-        low=max(0.0, value * (1 + bias - spread)),
-        high=value * (1 + bias + spread),
+        low=max(0.0, value * (1 + (calibration.low_error or 0.0))),
+        high=max(0.0, value * (1 + (calibration.high_error or 0.0))),
         calibration=calibration,
     )
 
 
-def comparable(value: float, calibration: Calibration) -> float:
-    """The figure moved onto the calibrated basis, for comparing like with like.
+# There is deliberately no function here that moves a figure onto a calibrated
+# basis for ranking.
+#
+# The plan called for one: `hotel_area_service` falls back from transit to
+# driving where Google publishes no transit data (ledger 2), so two areas'
+# `mean_minutes` looked like they could be measured in different units and
+# ranked against each other anyway. Checked against the live database, that
+# never happens - twelve stored shortlists carry a travel mode and none of
+# them mixes two, because a shortlist is measured in a single route matrix and
+# the fallback applies to the whole matrix at once.
+#
+# So every option on a card shares a bias, correcting them all would multiply
+# them by the same number, and no order would change. A transform that
+# provably cannot alter its output is not neutral: it is a place for a future
+# reader to believe something is happening. Calibration annotates a card and
+# widens a feasibility warning. It does not reorder anything, and
+# `test_calibration_annotates_a_card_and_never_reorders_it` holds that shut.
 
-    Used only where a comparison is *already* broken - `hotel_area_service`
-    falls back from transit to driving where Google has no transit data
-    (ledger 2), so today two areas' `mean_minutes` can be measured in
-    different things and are ranked against each other anyway. Where the
-    modes already match, every option shifts by the same factor and this
-    changes no order at all, which is why it is not applied for its own sake.
+
+# --- the corpus, ready to be asked -------------------------------------------
+
+# How a band reads, per unit. Minutes are whole minutes: a band of "16.3 to
+# 21.7 min" claims a resolution the answers behind it never had.
+_UNIT_FORMAT: dict[str, Callable[[float], str]] = {
+    "minutes": lambda v: f"{v:.0f} min",
+    "currency": lambda v: f"{v:,.0f}",
+    "celsius": lambda v: f"{v:.0f}°C",
+    "days": lambda v: f"{v:.0f} days",
+}
+
+
+def _format(value: float, unit: str) -> str:
+    return _UNIT_FORMAT.get(unit, lambda v: f"{v:g}")(value)
+
+
+async def calibrations_for(session, state: TripState) -> "Calibrations":
+    """Load the corpus for a trip's place. One query, at the edge.
+
+    Lives here rather than in each router so there is one answer to "which
+    outcomes are relevant to this trip" - all of them, filtered by key when
+    asked, because a provider's record elsewhere is what the backoff chain
+    falls back to.
     """
-    if not calibration.is_usable or calibration.status != "calibrated":
-        return value
-    return value * (1 + (calibration.bias or 0.0))
+    from app.db.repository import CalibrationRepository
+
+    return Calibrations.of(
+        await CalibrationRepository(session).list_for(),
+        scope=scope_of(state),
+        settings=get_settings(),
+    )
+
+
+@dataclass(frozen=True)
+class Calibrations:
+    """The corpus and the place being asked about, ready for any key.
+
+    Built once where a session exists and passed down, so that the pure
+    services stay pure and a card, its explanation and its ranking cannot
+    disagree about how well a number is known. Absent, every consumer falls
+    back to the raw figure and says nothing - which is what every caller did
+    before this milestone and remains correct.
+    """
+
+    outcomes: tuple[Outcome, ...] = ()
+    scope: str = "unknown"
+    settings: Settings | None = None
+
+    @classmethod
+    def of(
+        cls, outcomes: Iterable[Outcome], *, scope: str, settings: Settings
+    ) -> "Calibrations":
+        return cls(outcomes=tuple(outcomes), scope=scope, settings=settings)
+
+    def for_(
+        self, provider: str, dimension: Dimension, mode: str | None = None
+    ) -> Calibration:
+        return calibration_for(
+            self.outcomes,
+            provider=provider,
+            dimension=dimension,
+            mode=mode,
+            scope=self.scope,
+            settings=self.settings or Settings(),
+        )
+
+    def band(
+        self, value: float, provider: str, dimension: Dimension, mode: str | None = None
+    ) -> CalibratedEstimate:
+        return calibrate(value, self.for_(provider, dimension, mode))
+
+    def note(
+        self, value: float, provider: str, dimension: Dimension, mode: str | None = None
+    ) -> str:
+        """What the record says about this figure, including that it says nothing.
+
+        Never silent. A dimension nobody has ever checked and a dimension that
+        has always been right look identical on a screen that renders nothing,
+        and only one of them has earned the reader's trust.
+        """
+        estimate = self.band(value, provider, dimension, mode)
+        record = estimate.calibration
+        unit = DIMENSIONS[dimension].unit
+
+        if not estimate.adjusted:
+            if record.sample_count == 0:
+                return "never checked against what actually happened"
+            return (
+                f"checked {record.sample_count} time"
+                f"{'' if record.sample_count == 1 else 's'} so far — "
+                "not enough to say how close this runs"
+            )
+
+        where = "here" if record.level == "scoped" else "elsewhere; none here yet"
+        return (
+            f"{record.sample_count} checks {where} — 8 in 10 landed "
+            f"{_format(estimate.low, unit)}–{_format(estimate.high, unit)}"
+        )
 
 
 # --- what to ask a person ----------------------------------------------------

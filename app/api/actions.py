@@ -39,6 +39,7 @@ from app.models.rejection import RejectionRecord
 from app.models.route import LocationRef
 from app.models.trip import TripState
 from app.services import json_pointer as jp
+from app.services.calibration_service import Calibrations, calibrations_for
 from app.services.conflict_service import detect_conflicts, unresolved_blocking
 from app.services.explanation_service import Explanation, explain, explain_item
 from app.services.intake_service import today_at
@@ -144,11 +145,12 @@ def _view(
     errors: list[PatchError] | None = None,
     warnings: list[str] | None = None,
     travel: TravelLookup | None = None,
+    calibrations: Calibrations | None = None,
 ) -> ActionResult:
     """One response shape, built from the state the caller will actually see."""
     # With no lookup the validator reports every pair as `travel_time_unknown`,
     # which is true but useless: it was unknown because nobody looked.
-    validation = validate_itinerary(state, travel=travel)
+    validation = validate_itinerary(state, travel=travel, calibrations=calibrations)
     return ActionResult(
         applied=applied,
         revision=state.revision,
@@ -190,6 +192,7 @@ async def _commit(
             errors=failed.errors,
             warnings=warnings,
             travel=await _measure(current, current.itinerary.days),
+            calibrations=await calibrations_for(session, current),
         )
 
     committed = results[-1].state
@@ -200,6 +203,7 @@ async def _commit(
         summary=summary,
         warnings=warnings,
         travel=await _measure(committed, committed.itinerary.days),
+        calibrations=await calibrations_for(session, committed),
     )
 
 

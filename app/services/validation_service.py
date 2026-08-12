@@ -12,6 +12,7 @@ which spec section 21 forbids.
 
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.config import get_settings
@@ -24,6 +25,9 @@ from app.models.validation import ValidationIssue, ValidationState
 from app.services.conflict_service import detect_conflicts
 from app.services.geo import haversine_km
 from app.services.opening_hours import OpenState, covers_visit, describe
+
+if TYPE_CHECKING:
+    from app.services.calibration_service import Calibrations
 
 # A leg needs slack for finding the door, queueing, and being human about it.
 TRANSFER_BUFFER_MINUTES = 5
@@ -177,8 +181,25 @@ def _check_opening_hours(day: ItineraryDay, state: TripState) -> list[Validation
     return issues
 
 
+def _likely_minutes(
+    minutes: float, mode: str, calibrations: "Calibrations | None"
+) -> float:
+    """The top of the band journeys like this have actually landed in.
+
+    Falls back to the raw figure whenever there is no record to speak from,
+    which makes every caller without a corpus behave exactly as before.
+    """
+    if calibrations is None:
+        return minutes
+    band = calibrations.band(minutes, "google_routes", "travel_minutes", mode)
+    return band.high if band.high is not None else minutes
+
+
 def _check_travel(
-    day: ItineraryDay, state: TripState, travel: TravelLookup
+    day: ItineraryDay,
+    state: TripState,
+    travel: TravelLookup,
+    calibrations: "Calibrations | None" = None,
 ) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     ordered = _timed(day.items)
@@ -220,6 +241,23 @@ def _check_travel(
                         f"{mode} journey takes {minutes:.0f} min"
                     ),
                     suggested_fix=f"start {later.title!r} at least {minutes:.0f} min later",
+                )
+            )
+        elif (likely := _likely_minutes(minutes, mode, calibrations)) > gap:
+            # It fits the number the provider gave and not the time those
+            # journeys actually take here. The raw figure stays the error
+            # threshold; this is the warning it could never have raised.
+            issues.append(
+                ValidationIssue(
+                    severity="warning",
+                    type="tight_against_measured_history",
+                    item_ids=[earlier.item_id, later.item_id],
+                    message=(
+                        f"{gap:.0f} min between {earlier.title!r} and {later.title!r} fits the "
+                        f"{minutes:.0f} min estimate, but journeys like this have taken up to "
+                        f"{likely:.0f} min"
+                    ),
+                    suggested_fix=f"leave {likely - gap:.0f} min more, or accept the risk",
                 )
             )
         elif gap < minutes + TRANSFER_BUFFER_MINUTES:
@@ -779,8 +817,15 @@ def validate_itinerary(
     travel: TravelLookup | None = None,
     target_date: date | None = None,
     limits: ValidationLimits | None = None,
+    calibrations: "Calibrations | None" = None,
 ) -> ValidationState:
-    """Check the itinerary, or one day of it, and report what is wrong."""
+    """Check the itinerary, or one day of it, and report what is wrong.
+
+    `calibrations` is how long this provider's journeys *actually* take here.
+    It may only ever add a warning the raw figure would have missed - never
+    clear one. A measured route saying a day does not fit is a fact about the
+    schedule, and no amount of track record is allowed to argue with it.
+    """
     travel = travel or TravelLookup()
     limits = limits or ValidationLimits.for_trip(state)
 
@@ -791,7 +836,7 @@ def validate_itinerary(
         issues.extend(_check_overlaps(day))
         issues.extend(_check_locked_items(day, state))
         issues.extend(_check_opening_hours(day, state))
-        issues.extend(_check_travel(day, state, travel))
+        issues.extend(_check_travel(day, state, travel, calibrations))
         issues.extend(_check_day_load(day, state, travel, limits))
         issues.extend(_check_backtracking(day, state, limits))
         issues.extend(_check_weather(day, state))

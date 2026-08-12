@@ -18,6 +18,8 @@ at 22:00 and Reddit saying it is atmospheric are different kinds of claim, and
 structural rather than a matter of how the renderer feels.
 """
 
+from typing import TYPE_CHECKING
+
 from pydantic import BaseModel
 
 from app.models.decision import (
@@ -34,6 +36,9 @@ from app.models.weather import WeatherContext
 from app.services.decision_service import label_for
 from app.services.option_metrics import Metric, metrics_for, unscored_for
 from app.services.scoring import ranking_value
+
+if TYPE_CHECKING:
+    from app.services.calibration_service import Calibrations
 
 # How `source_authority` maps onto what a reader should do with a claim.
 _EVIDENCE_GROUPS: dict[Authority, str] = {
@@ -233,7 +238,11 @@ def _deltas(chosen, rival) -> list[str]:
 
 
 def _fill_from_option(
-    explanation: Explanation, state: TripState, name: str, option: DecisionOption
+    explanation: Explanation,
+    state: TripState,
+    name: str,
+    option: DecisionOption,
+    calibrations: "Calibrations | None" = None,
 ) -> None:
     """The half of an explanation that comes from the decision, not the place.
 
@@ -248,7 +257,7 @@ def _fill_from_option(
     explanation.score = option.score
     explanation.pros = list(option.pros)
     explanation.cons = list(option.cons)
-    explanation.metrics = metrics_for(option.data)
+    explanation.metrics = metrics_for(option.data, calibrations)
     explanation.unscored = unscored_for(option.data)
 
     group = option.group_score
@@ -282,7 +291,12 @@ def _fill_from_option(
     explanation.complete = bool(option.score and (option.pros or option.cons))
 
 
-def explain_option(state: TripState, decision_name: str, option_id: str) -> Explanation | None:
+def explain_option(
+    state: TripState,
+    decision_name: str,
+    option_id: str,
+    calibrations: "Calibrations | None" = None,
+) -> Explanation | None:
     """Why this option, for anything a decision can hold.
 
     `explain` reaches a place through its entity. Flights, neighbourhoods and
@@ -308,7 +322,7 @@ def explain_option(state: TripState, decision_name: str, option_id: str) -> Expl
         explanation.price_level = entity.price_level
         explanation.serves_vegetarian = entity.serves_vegetarian
 
-    _fill_from_option(explanation, state, decision_name, option)
+    _fill_from_option(explanation, state, decision_name, option, calibrations)
     explanation.alternative = _closest_alternative(decision, option)
     return explanation
 

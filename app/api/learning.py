@@ -14,6 +14,7 @@ post-trip questionnaire, answered once, written through the trip patch
 engine so it is audited and cannot be re-asked.
 """
 
+import logging
 from datetime import date
 from typing import Annotated, Any
 
@@ -24,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.actions import ActionResult, _commit, _load, _note_signals
 from app.config import get_settings
 from app.db.repository import (
+    CalibrationRepository,
     LearningRepository,
     ProfileNotFound,
     ProfileRepository,
@@ -33,6 +35,8 @@ from app.db.session import get_session
 from app.models.learning import PreferenceHypothesis, ReflectionItem, TripReflection
 from app.models.patch import TripPatch
 from app.models.rejection import RejectionRecord
+from app.models.trip import TripState
+from app.services.calibration_service import outcome_for, predictions_from
 from app.services.intake_service import today_at
 from app.services.learning_service import (
     derive_hypotheses,
@@ -43,10 +47,24 @@ from app.services.learning_service import (
 
 router = APIRouter(tags=["learning"])
 
+logger = logging.getLogger(__name__)
+
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 
 # --- reflection --------------------------------------------------------------
+
+
+class EstimateAnswer(BaseModel):
+    """One of our own numbers, marked by the person who lived through it.
+
+    `answer` is a chip; `exact` is the optional figure from somebody who
+    actually timed it or kept the receipt, and wins when both are given.
+    """
+
+    prediction_id: str
+    answer: str = ""
+    exact: float | None = None
 
 
 class ReflectionRequest(BaseModel):
@@ -55,6 +73,42 @@ class ReflectionRequest(BaseModel):
     skipped_item_ids: list[str] = []
     notes: str | None = None
     answered_by: str
+    estimates: list[EstimateAnswer] = []
+
+
+async def _note_outcomes(
+    session: AsyncSession,
+    state: TripState,
+    answers: list[EstimateAnswer],
+    result: ActionResult,
+) -> None:
+    """Record what the traveller said about our own numbers.
+
+    Answers are matched against predictions *derived from this trip*, so an id
+    that names nothing on it records nothing - a caller cannot post arbitrary
+    figures into the corpus by inventing an id. Like every other check in this
+    codebase, a fault here is never allowed to cost the traveller the
+    reflection they just wrote.
+    """
+    if not answers:
+        return
+    try:
+        derived = {p.prediction_id: p for p in predictions_from(state)}
+        repo = CalibrationRepository(session)
+        seen = await repo.already_recorded(list(derived))
+        outcomes = []
+        for answer in answers:
+            prediction = derived.get(answer.prediction_id)
+            if prediction is None or prediction.prediction_id in seen:
+                continue
+            outcome = outcome_for(prediction, answer=answer.answer, exact=answer.exact)
+            if outcome is not None:
+                outcomes.append(outcome)
+        if outcomes:
+            await repo.record_many(outcomes)
+    except Exception:  # noqa: BLE001 - never worth the reflection they just wrote
+        logger.warning("estimate answers not recorded for %s", state.trip_id, exc_info=True)
+        result.warnings.append("your notes on our estimates could not be saved")
 
 
 @router.post("/trips/{trip_id}/reflection", response_model=ActionResult)
@@ -132,6 +186,10 @@ async def submit_reflection(
             result.warnings.append(
                 f"{traveler.name} has no stored profile, so nothing was learned from this"
             )
+        # What they said about our own figures belongs to no traveller at all -
+        # it is a fact about a provider, and it is recorded whether or not
+        # anybody on this trip has a profile.
+        await _note_outcomes(session, state, payload.estimates, result)
     return result
 
 

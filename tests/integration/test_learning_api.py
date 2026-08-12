@@ -8,6 +8,7 @@ answered once, after the trip is over, by a named traveller.
 from datetime import date, datetime, time, timedelta
 
 from app.db.repository import (
+    CalibrationRepository,
     LearningRepository,
     ProfileRepository,
     ProfileRevisionConflict,
@@ -358,6 +359,141 @@ async def test_a_malformed_edited_value_is_a_422_not_a_stored_lie(client, sessio
     assert profile.pace_preferences.preferred_start_time == "09:00"
 
 
+# --- marking our own numbers --------------------------------------------------
+
+
+def ended_state_with_a_chosen_area():
+    """A trip that is over, with a neighbourhood chosen on a measured figure."""
+    from app.models.decision import Decision, DecisionOption, HotelAreaOption
+
+    state = ended_solo_state()
+    state.brief.timezone = "Asia/Tokyo"
+    state.decisions.hotel_area = Decision(
+        options=[
+            DecisionOption(
+                option_id="opt_ginza",
+                data=HotelAreaOption(area_name="Ginza", mean_minutes=14.0, travel_mode="transit"),
+            ),
+            DecisionOption(
+                option_id="opt_asakusa",
+                data=HotelAreaOption(
+                    area_name="Asakusa", mean_minutes=27.0, travel_mode="transit"
+                ),
+            ),
+        ],
+        selected_option_id="opt_ginza",
+    )
+    return state
+
+
+async def test_the_card_asks_about_the_figure_that_decided_something(client, session):
+    await make_profile(session)
+    stored = await TripRepository(session).create(ended_state_with_a_chosen_area())
+
+    asked = (await client.get(f"/trips/{stored.trip_id}/overview")).json()["reflection"][
+        "estimates"
+    ]
+
+    assert len(asked) == 1
+    assert "14" in asked[0]["question"] and "Ginza" in asked[0]["question"]
+    assert asked[0]["unit"] == "minutes"
+
+
+async def test_marking_an_estimate_records_it_against_the_provider(client, session):
+    await make_profile(session)
+    stored = await TripRepository(session).create(ended_state_with_a_chosen_area())
+    asked = (await client.get(f"/trips/{stored.trip_id}/overview")).json()["reflection"][
+        "estimates"
+    ]
+
+    response = await client.post(
+        f"/trips/{stored.trip_id}/reflection",
+        json={
+            "answered_by": "trv_solo",
+            "estimates": [
+                {"prediction_id": asked[0]["prediction_id"], "answer": "much_longer"}
+            ],
+        },
+    )
+
+    assert response.status_code == 200 and response.json()["applied"]
+    outcomes = await CalibrationRepository(session).list_for(dimension="travel_minutes")
+    assert len(outcomes) == 1
+    assert outcomes[0].predicted == 14.0
+    assert outcomes[0].actual_low > 14.0
+    assert outcomes[0].mode == "transit"
+    assert outcomes[0].scope == "Asia/Tokyo"
+
+
+async def test_an_exact_figure_beats_the_chip(client, session):
+    await make_profile(session)
+    stored = await TripRepository(session).create(ended_state_with_a_chosen_area())
+    asked = (await client.get(f"/trips/{stored.trip_id}/overview")).json()["reflection"][
+        "estimates"
+    ]
+
+    await client.post(
+        f"/trips/{stored.trip_id}/reflection",
+        json={
+            "answered_by": "trv_solo",
+            "estimates": [
+                {
+                    "prediction_id": asked[0]["prediction_id"],
+                    "answer": "about_right",
+                    "exact": 23,
+                }
+            ],
+        },
+    )
+
+    outcomes = await CalibrationRepository(session).list_for(dimension="travel_minutes")
+    assert (outcomes[0].actual_low, outcomes[0].actual_high) == (23.0, 23.0)
+
+
+async def test_an_id_that_names_nothing_on_this_trip_records_nothing(client, session):
+    """The corpus is only ever fed by figures this trip actually made. A caller
+    cannot post arbitrary numbers into it by inventing an id."""
+    await make_profile(session)
+    stored = await TripRepository(session).create(ended_state_with_a_chosen_area())
+
+    response = await client.post(
+        f"/trips/{stored.trip_id}/reflection",
+        json={
+            "answered_by": "trv_solo",
+            "estimates": [{"prediction_id": "pred_madeup", "answer": "much_longer"}],
+        },
+    )
+
+    assert response.status_code == 200
+    assert await CalibrationRepository(session).list_for() == []
+
+
+async def test_a_trip_with_nobody_profiled_still_marks_our_numbers(client, session):
+    """What they said about a routing API is a fact about the API. It has
+    nothing to do with whether anyone on the trip has a profile."""
+    state = ended_state_with_a_chosen_area()
+    state.travelers[0].profile_id = None
+    stored = await TripRepository(session).create(state)
+    asked = (await client.get(f"/trips/{stored.trip_id}/overview")).json()["reflection"][
+        "estimates"
+    ]
+
+    result = (
+        await client.post(
+            f"/trips/{stored.trip_id}/reflection",
+            json={
+                "answered_by": "trv_solo",
+                "estimates": [
+                    {"prediction_id": asked[0]["prediction_id"], "answer": "a_bit_longer"}
+                ],
+            },
+        )
+    ).json()
+
+    assert any("no stored profile" in w for w in result["warnings"])
+    assert len(await CalibrationRepository(session).list_for()) == 1
+
+
 # --- overview projection -----------------------------------------------------
 
 
@@ -368,10 +504,15 @@ async def test_the_overview_says_when_reflection_is_due_and_what_is_proposable(
     stored = await TripRepository(session).create(ended_solo_state())
 
     body = (await client.get(f"/trips/{stored.trip_id}/overview")).json()
-    assert body["reflection"] == {"due": True, "submitted": False}
+    assert body["reflection"]["due"] is True
+    assert body["reflection"]["submitted"] is False
+    # This fixture chose nothing, so there is no figure that argued for
+    # anything and nothing worth asking about. The card is not a survey.
+    assert body["reflection"]["estimates"] == []
     assert body["learning"][0]["proposable"] == 1
     assert body["learning"][0]["profile_id"] == "user_solo"
 
     ongoing = await TripRepository(session).create(solo_state())
     body = (await client.get(f"/trips/{ongoing.trip_id}/overview")).json()
     assert body["reflection"]["due"] is False
+    assert body["reflection"]["estimates"] == [], "a trip still running asks nothing"

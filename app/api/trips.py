@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db.repository import (
+    CalibrationRepository,
     LearningRepository,
     ProfileNotFound,
     ProfileRepository,
@@ -13,8 +14,14 @@ from app.db.repository import (
     TripRepository,
 )
 from app.db.session import get_session
+from app.models.calibration import DIMENSIONS
 from app.models.patch import PatchResult, TripPatch
 from app.models.trip import TripBrief, TripState, TripSummary, TripTraveler
+from app.services.calibration_service import (
+    calibrations_for,
+    question_text,
+    questions_for,
+)
 from app.services.conflict_service import detect_conflicts, unresolved_blocking
 from app.services.intake_service import today_at
 from app.services.learning_service import derive_hypotheses
@@ -141,17 +148,25 @@ async def get_trip_overview(trip_id: str, session: SessionDep) -> dict[str, Any]
     of truth.
     """
     state = await _load(session, trip_id)
-    validation = validate_itinerary(state)
+    calibrations = await calibrations_for(session, state)
+    validation = validate_itinerary(state, calibrations=calibrations)
 
     # Reflection is due when the trip has ended, nobody has answered, and
-    # there is at least one traveller a lesson could belong to. Judged against
-    # the destination's clock, never the browser's.
+    # there is somebody who could answer. Judged against the destination's
+    # clock, never the browser's.
+    #
+    # A *profile* used to be required, which was right while the card only fed
+    # M9: a lesson has to belong to someone. It also asks about our own
+    # estimates now, and how wrong a routing API was is a fact about the API -
+    # true whether or not the person who noticed keeps a profile. Requiring one
+    # would have left those questions derived, reachable by the endpoint, and
+    # rendered by nothing.
     end = state.brief.dates.end if state.brief.dates else None
     reflection_due = (
         end is not None
         and today_at(state) > end
         and state.reflection is None
-        and any(t.profile_id for t in state.travelers)
+        and bool(state.travelers)
     )
 
     # Per-traveler learning counts, so the attention bar can say "your call"
@@ -195,7 +210,32 @@ async def get_trip_overview(trip_id: str, session: SessionDep) -> dict[str, Any]
         "blocking": [
             conflict.model_dump(mode="json") for conflict in unresolved_blocking(state)
         ],
-        "reflection": {"due": reflection_due, "submitted": state.reflection is not None},
+        "reflection": {
+            "due": reflection_due,
+            "submitted": state.reflection is not None,
+            # The estimates worth this traveller's attention, at most two.
+            # Derived here so the card and the endpoint that accepts its
+            # answers cannot disagree about which questions exist.
+            "estimates": (
+                [
+                    {
+                        "prediction_id": p.prediction_id,
+                        "question": question_text(p),
+                        "unit": DIMENSIONS[p.dimension].unit,
+                        "value": p.value,
+                    }
+                    for p in questions_for(
+                        state,
+                        await CalibrationRepository(session).list_for(
+                            dimension="travel_minutes"
+                        ),
+                        settings=settings,
+                    )
+                ]
+                if reflection_due
+                else []
+            ),
+        },
         "learning": learning,
         # What the trip is waiting for. Derived here rather than in the browser
         # so the screen, the model and the progress strip cannot disagree about

@@ -11,14 +11,16 @@ import pytest
 
 from app.config import Settings
 from app.models.calibration import DIMENSIONS, Outcome, Prediction
+from app.models.common import Money
 from app.models.decision import Decision, DecisionOption, HotelAreaOption, HotelOptionData
 from app.models.flight import AirportOption
+from app.models.hotel import HotelPriceQuote
 from app.models.weather import ClimatologyMethod, WeatherContext
 from app.services.calibration_service import (
     ANSWER_BANDS,
+    automatic_outcomes,
     calibrate,
     calibration_for,
-    comparable,
     dimensions_never_checked,
     evidence_line,
     outcome_for,
@@ -216,6 +218,58 @@ def test_an_outcome_carries_no_trip_and_no_place():
     assert stored["scope"] == "Asia/Tokyo"  # region-coarse, and that is all
 
 
+def hotel(name: str, headline: float | None, quoted: float | None) -> HotelOptionData:
+    return HotelOptionData(
+        provider="serpapi_google_hotels",
+        live_mode=True,
+        name=name,
+        entity_id=f"ent_{name}",
+        headline_nightly=None if headline is None else Money(amount=headline),
+        quotes=(
+            []
+            if quoted is None
+            else [HotelPriceQuote(source="a booking site", nightly=Money(amount=quoted))]
+        ),
+    )
+
+
+def test_an_advertised_rate_checks_itself_the_moment_it_is_made():
+    """Both numbers arrive in the same fetch, so this one needs no person, no
+    network and no waiting. Ledger 4 found it by hand once - an advertised $70
+    that no listed site would honour - and nothing counted it after that."""
+    state = trip_with("hotel", hotel("Cheap Inn", 70.0, 90.0), selected=0)
+
+    outcomes = automatic_outcomes(state)
+
+    assert len(outcomes) == 1
+    assert outcomes[0].dimension == "hotel_headline_gap"
+    assert (outcomes[0].predicted, outcomes[0].actual_low) == (70.0, 90.0)
+    assert outcomes[0].checked_by == "same_fetch"
+    assert outcomes[0].relative_error[0] == pytest.approx(0.2857, abs=1e-3)
+
+
+def test_a_hotel_with_nothing_to_compare_checks_nothing():
+    state = trip_with(
+        "hotel",
+        hotel("No headline", None, 90.0),
+        hotel("No quote anyone can be named for", 70.0, None),
+    )
+
+    assert automatic_outcomes(state) == []
+
+
+def test_the_same_advertised_rate_records_once_however_often_it_is_derived():
+    """The runner calls this at the end of every turn. Without a stable id the
+    same claim would be counted again each time and a provider would look
+    consistently wrong by repetition."""
+    state = trip_with("hotel", hotel("Cheap Inn", 70.0, 90.0))
+
+    first = automatic_outcomes(state)[0]
+    second = automatic_outcomes(state)[0]
+
+    assert first.prediction_id == second.prediction_id
+
+
 # --- calibration -------------------------------------------------------------
 
 
@@ -230,7 +284,8 @@ def test_below_the_minimum_it_says_nothing_at_all():
     )
 
     assert calibration.status == "uncalibrated"
-    assert calibration.bias is None and calibration.spread is None
+    assert calibration.bias is None
+    assert calibration.low_error is None and calibration.high_error is None
     # And it still reports how little it has, so a surface can say "checked
     # three times, which is not enough" rather than fall silent.
     assert calibration.sample_count == 3
@@ -255,6 +310,61 @@ def test_one_road_closure_does_not_become_a_finding():
         ).bias
 
     assert bias(with_outlier) == pytest.approx(bias(ordinary), abs=0.01)
+
+
+def test_a_mostly_right_provider_still_reports_its_bad_days():
+    """The band is quantiles of the observed errors, not a spread computed
+    around the median, and this is why.
+
+    Thirty advertised hotel rates from the live database: fifteen matched
+    exactly and three were understated by 13%, 20% and 67%. Median absolute
+    deviation collapsed to ±1.6% on the strength of the fifteen, and an
+    advertised $200 was reported as "more likely $197-$203" - a tight interval
+    wrapped around a fat tail, which is a more confident lie than no interval.
+    """
+    exact = [
+        outcome_from_measurement(prediction(100.0, mode=None, subject=f"m{i}"), 100.0)
+        for i in range(15)
+    ]
+    bad = [
+        outcome_from_measurement(prediction(100.0, mode=None, subject=f"b{i}"), actual)
+        for i, actual in enumerate((113.0, 120.0, 167.0))
+    ]
+
+    calibration = calibration_for(
+        exact + bad,
+        provider="google_routes",
+        dimension="travel_minutes",
+        mode=None,
+        scope="Asia/Tokyo",
+        settings=SETTINGS,
+    )
+    estimate = calibrate(100.0, calibration)
+
+    assert calibration.bias == pytest.approx(0.0, abs=0.01)  # it is usually right
+    assert estimate.high > 105.0, "a band that ends at 103 has hidden the tail"
+
+
+def test_the_band_is_asymmetric_where_the_errors_are():
+    """Forcing ± around a midpoint would invent a symmetry the data lacks.
+    An estimate that is occasionally far too low and never too high should
+    read that way."""
+    samples = [
+        outcome_from_measurement(prediction(10.0, subject=f"s{i}"), actual)
+        for i, actual in enumerate((10.0, 10.0, 11.0, 12.0, 18.0, 20.0))
+    ]
+
+    calibration = calibration_for(
+        samples,
+        provider="google_routes",
+        dimension="travel_minutes",
+        mode="transit",
+        scope="Asia/Tokyo",
+        settings=SETTINGS,
+    )
+
+    assert calibration.low_error == pytest.approx(0.0, abs=0.01)
+    assert calibration.high_error > 0.5
 
 
 def test_the_chain_says_which_rung_answered():
@@ -356,28 +466,43 @@ def test_a_band_never_goes_below_zero():
     assert calibrate(10.0, calibration).low >= 0.0
 
 
-def test_only_a_calibrated_record_may_move_a_ranking():
-    """Provisional evidence may be shown and may widen a warning; it may not
-    quietly reorder somebody's shortlist."""
-    provisional = calibration_for(
-        answered(6),
-        provider="google_routes",
-        dimension="travel_minutes",
-        mode="transit",
-        scope="Asia/Tokyo",
-        settings=SETTINGS,
-    )
-    confident = calibration_for(
-        answered(12),
-        provider="google_routes",
-        dimension="travel_minutes",
-        mode="transit",
-        scope="Asia/Tokyo",
-        settings=SETTINGS,
-    )
+def test_calibration_annotates_a_card_and_never_reorders_it():
+    """The plan wanted a ranking correction for shortlists that mix travel
+    modes. Checked against the live database, none does: twelve stored
+    shortlists carry a mode and not one holds two, because a shortlist is
+    measured in a single route matrix and the transit-to-driving fallback
+    applies to the whole matrix at once.
 
-    assert comparable(14.0, provisional) == 14.0
-    assert comparable(14.0, confident) > 14.0
+    So every option on a card shares a bias, correcting them would multiply
+    them all by the same number, and no order could change. The note is the
+    consumer; the order is not.
+    """
+    from app.services.decision_service import decision_views
+    from app.services.calibration_service import Calibrations
+
+    state = trip_with(
+        "hotel_area",
+        area("Ginza", 14.0),
+        area("Asakusa", 27.0),
+        area("Shinjuku", 20.0),
+    )
+    corpus = Calibrations.of(answered(12), scope="Asia/Tokyo", settings=SETTINGS)
+
+    plain = decision_views(state)
+    annotated = decision_views(state, corpus)
+
+    def order(views):
+        return [o.label for v in views if v.name == "hotel_area" for o in v.options]
+
+    assert order(annotated) == order(plain)
+
+    notes = [
+        o.metrics[0].note
+        for v in annotated
+        if v.name == "hotel_area"
+        for o in v.options
+    ]
+    assert all(note and "12 checks" in note for note in notes)
 
 
 # --- what gets asked ---------------------------------------------------------

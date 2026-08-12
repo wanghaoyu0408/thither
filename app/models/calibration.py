@@ -244,11 +244,13 @@ class Calibration(BaseModel):
     status: CalibrationStatus = "uncalibrated"
     sample_count: int = 0
 
-    # Median signed relative error, and a spread that errs wide. Both None
-    # while `status == "uncalibrated"`: a bias is a claim, and this file does
-    # not make claims it cannot support.
+    # The median signed relative error, and the band eight checks in ten
+    # landed in - as observed quantiles, so it is asymmetric wherever reality
+    # is. All three are None while `status == "uncalibrated"`: a bias is a
+    # claim, and this file does not make claims it cannot support.
     bias: float | None = None
-    spread: float | None = None
+    low_error: float | None = None
+    high_error: float | None = None
 
     @model_validator(mode="after")
     def _identify(self) -> "Calibration":
@@ -262,7 +264,7 @@ class Calibration(BaseModel):
 
     @property
     def is_usable(self) -> bool:
-        return self.bias is not None and self.spread is not None
+        return self.low_error is not None and self.high_error is not None
 
 
 class CalibratedEstimate(BaseModel):

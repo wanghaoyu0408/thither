@@ -27,6 +27,7 @@ from app.models.trip import TripState
 from app.services import json_pointer as jp
 from app.services.decision_service import DecisionView, decision_views, visible
 from app.services.explanation_service import Explanation, explain_option
+from app.services.calibration_service import calibrations_for
 from app.services.learning_service import behavioral_signal_allowed, signals_for_choice
 
 router = APIRouter(prefix="/trips/{trip_id}/decisions", tags=["decisions"])
@@ -114,7 +115,7 @@ async def list_decisions(trip_id: str, session: SessionDep) -> list[DecisionView
     can be answered by reading the decision alone.
     """
     state = await _load(session, trip_id)
-    return visible(decision_views(state))
+    return visible(decision_views(state, await calibrations_for(session, state)))
 
 
 # --- choosing ----------------------------------------------------------------
@@ -306,7 +307,9 @@ async def explain_decision_option(
     two milestones the flight and area cards had no explanation available at all.
     """
     state = await _load(session, trip_id)
-    explanation = explain_option(state, name, option_id)
+    explanation = explain_option(
+        state, name, option_id, await calibrations_for(session, state)
+    )
     if explanation is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, f"no option {option_id!r} on decision {name!r}"

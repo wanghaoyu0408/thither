@@ -27,10 +27,16 @@ from app.agent.tool_registry import (
     staged_operations,
 )
 from app.config import Settings, get_settings
-from app.db.repository import LearningRepository, ProfileRepository, TripRepository
+from app.db.repository import (
+    CalibrationRepository,
+    LearningRepository,
+    ProfileRepository,
+    TripRepository,
+)
 from app.models.patch import PatchResult, TripPatch
 from app.models.trip import TripState
 from app.providers.openai_llm import LLMClient, LLMTurn
+from app.services.calibration_service import automatic_outcomes
 from app.services.proposal_store import ProposalStore
 from app.services.toolbox import Toolbox
 
@@ -115,6 +121,8 @@ class AgentRunner:
         self._profiles = ProfileRepository(session)
         # Signals commit at record time - no pending buffer, nothing to clear.
         self._learning = LearningRepository(session)
+        # Where this system's own numbers go to be contradicted.
+        self._calibration = CalibrationRepository(session)
         self._settings = settings or get_settings()
         self._proposals = proposals or ProposalStore()
 
@@ -183,6 +191,7 @@ class AgentRunner:
             if not turn.wants_tools:
                 run.reply = turn.text or ""
                 await self._flush_staged(context, run)
+                await self._note_outcomes(context)
                 return run
 
             for call in turn.tool_calls:
@@ -322,6 +331,32 @@ class AgentRunner:
             detail = errors[0]["message"] if errors else "the staged work was refused"
             run.error = f"this turn's findings could not be saved: {detail}"
             logger.warning("end-of-turn flush rejected for %s: %s", run.trip_id, detail)
+
+    async def _note_outcomes(self, context: ToolContext) -> None:
+        """Record the checks that need nobody, after the turn's work is saved.
+
+        Searches are where claims are born, so the end of a turn is where the
+        self-checkable ones become checkable. Fire-and-forget in the shape
+        ledger 54 established: the derivation runs inside the guard too, so a
+        fault in measuring ourselves can never cost the traveller their reply.
+
+        Idempotent by construction - a prediction's id is a content hash, so
+        the same advertised rate derives to the same id every turn and is
+        recorded once.
+        """
+        try:
+            state = await self._repo.get(context.state.trip_id)
+            candidates = automatic_outcomes(state)
+            if not candidates:
+                return
+            seen = await self._calibration.already_recorded(
+                [outcome.prediction_id for outcome in candidates]
+            )
+            fresh = [o for o in candidates if o.prediction_id not in seen]
+            if fresh:
+                await self._calibration.record_many(fresh)
+        except Exception:  # noqa: BLE001 - measuring ourselves is never worth a turn
+            logger.warning("outcomes not recorded for %s", context.state.trip_id, exc_info=True)
 
     def _stopped(self, run: AgentRun) -> AgentRun:
         """The turn as it stands at the moment the traveller stopped it."""

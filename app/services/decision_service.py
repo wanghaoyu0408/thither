@@ -12,7 +12,7 @@ ask" and "we asked and found nothing" are different answers and a blank space
 tells them apart badly.
 """
 
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel
 
@@ -20,6 +20,9 @@ from app.models.decision import SINGLETON_DECISIONS, Decision, DecisionOption
 from app.models.trip import TripState
 from app.services.conflict_service import unresolved_blocking
 from app.services.option_metrics import Metric, metrics_for, unscored_for
+
+if TYPE_CHECKING:
+    from app.services.calibration_service import Calibrations
 
 # What each slot is called on screen, and the order they are worked through.
 TITLES: dict[str, str] = {
@@ -127,7 +130,12 @@ def label_for(data: Any) -> str:
     return getattr(data, "entity_id", None) or "option"
 
 
-def _option_view(option: DecisionOption, *, selected_id: str | None) -> OptionView:
+def _option_view(
+    option: DecisionOption,
+    *,
+    selected_id: str | None,
+    calibrations: "Calibrations | None" = None,
+) -> OptionView:
     return OptionView(
         option_id=option.option_id,
         label=label_for(option.data),
@@ -143,7 +151,7 @@ def _option_view(option: DecisionOption, *, selected_id: str | None) -> OptionVi
         pros=option.pros,
         cons=option.cons,
         evidence_count=len(option.evidence_refs),
-        metrics=metrics_for(option.data),
+        metrics=metrics_for(option.data, calibrations),
         unscored=unscored_for(option.data),
     )
 
@@ -186,8 +194,16 @@ def _relevance(state: TripState, name: str) -> tuple[bool, str | None]:
     return True, None
 
 
-def decision_views(state: TripState) -> list[DecisionView]:
-    """Every decision this trip makes, settled or not, in working order."""
+def decision_views(
+    state: TripState, calibrations: "Calibrations | None" = None
+) -> list[DecisionView]:
+    """Every decision this trip makes, settled or not, in working order.
+
+    `calibrations` is how well this system's own figures are known. Passed
+    in rather than looked up, because the corpus lives in a table and this
+    module reads only the trip; absent, the cards say exactly what they
+    said before M10.
+    """
     stored = dict(state.decisions.iter_decisions())
     rejected_ids = _rejected_ids(state)
     blocked = {
@@ -207,7 +223,7 @@ def decision_views(state: TripState) -> list[DecisionView]:
             needs_verification=name in blocked,
         )
         if decision is not None:
-            _fill(view, state, decision, rejected_ids=rejected_ids)
+            _fill(view, state, decision, rejected_ids=rejected_ids, calibrations=calibrations)
         views.append(view)
 
     for key, decision in state.decisions.place_shortlists.items():
@@ -217,7 +233,7 @@ def decision_views(state: TripState) -> list[DecisionView]:
             title=decision.rationale or key.replace("_", " "),
             needs_verification=f"place_shortlists.{key}" in blocked,
         )
-        _fill(view, state, decision, rejected_ids=rejected_ids)
+        _fill(view, state, decision, rejected_ids=rejected_ids, calibrations=calibrations)
         views.append(view)
 
     return views
@@ -229,6 +245,7 @@ def _fill(
     decision: Decision,
     *,
     rejected_ids: set[str],
+    calibrations: "Calibrations | None" = None,
 ) -> None:
     view.exists = True
     view.status = decision.status
@@ -239,7 +256,9 @@ def _fill(
     view.locked, view.lock_id = _lock_for(state, decision)
 
     for option in decision.options:
-        rendered = _option_view(option, selected_id=decision.selected_option_id)
+        rendered = _option_view(
+            option, selected_id=decision.selected_option_id, calibrations=calibrations
+        )
         if option.status == "rejected" or option.option_id in rejected_ids:
             view.rejected.append(rendered)
             continue
