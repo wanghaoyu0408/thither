@@ -4,7 +4,7 @@
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.12+-blue.svg)](pyproject.toml)
-[![Tests](https://img.shields.io/badge/tests-1022%20passing-brightgreen.svg)](#测试)
+[![Tests](https://img.shields.io/badge/tests-1026%20passing-brightgreen.svg)](#测试)
 
 *[English](README.md) · 中文*
 
@@ -15,6 +15,8 @@
 
 > *问津*，是在渡口问路 —— 陶渊明《桃花源记》末句 *后遂无问津者*，从此再没有人打听那个渡口。
 > 英文名 *Whither* 是同一个问题：**whither goest thou？**
+
+![工作区：带真实数字的对比卡，以及哪些数字从没被核对过](docs/images/hero.png)
 
 ---
 
@@ -38,6 +40,10 @@
 - **引擎算数，模型解释。** 每一个到达窗口、每一个判定、每一个通勤时间都由确定性代码算出，
   模型被明令禁止在散文里重算一遍。
   （[不变量 8](INVARIANTS.md#8-the-engine-computes-the-model-explains)）
+
+上面第四条，放在一个四天的行程上是这样的 —— 行程自己的数字，按各自已知的幅度推过每一天：
+
+![旅行预演：四天四种判定，每个输入都标明自己是哪种数字](docs/images/stress-test.png)
 
 这个仓库里最值得读的大概是 **[docs/FIELD-NOTES.md](docs/FIELD-NOTES.md)** ——
 那些只有把系统对着真实票价、真实路线、真实旅行者跑起来才会暴露的缺陷，
@@ -92,7 +98,7 @@ python scripts/demo_milestone1.py         # 终端 2
 python -m pytest -q
 ```
 
-1022 个测试，不联网、不需要 key。`tests/scenarios/` 与每个里程碑的验收标准一一对应。
+1026 个测试，不联网、不需要 key。`tests/scenarios/` 与每个里程碑的验收标准一一对应。
 
 ---
 

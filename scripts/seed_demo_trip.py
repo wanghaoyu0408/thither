@@ -46,6 +46,7 @@ from app.models.trip import (  # noqa: E402
     PartySpec,
     TripBrief,
     TripDates,
+    TripIntake,
     TripState,
     TripTraveler,
 )
@@ -56,18 +57,38 @@ START = date(2026, 10, 15)
 DAYS = 4
 ZONE = "America/New_York"
 
+# The landmarks, with their real Google place ids, coordinates and ratings -
+# resolved once through this project's own Places search and then written down
+# here, so the script itself stays keyless and identical on every run.
+#
+# The ids matter beyond authenticity: the UI loads a place's photograph with
+# `new Place({ id })` against the Maps JavaScript library, so an entity with no
+# `provider_refs.google_place_id` renders as a lettered square. A demo whose
+# cards are all grey squares does not show anyone what the interface looks
+# like. These are public identifiers for public landmarks; the *itinerary* is
+# the fictional part.
 PLACES = [
-    # entity_id, name, categories, lat, lng, rating, reviews
-    ("ent_met", "The Metropolitan Museum of Art", ["museum"], 40.7794, -73.9632, 4.8, 84210),
-    ("ent_central_park", "Central Park", ["park"], 40.7829, -73.9654, 4.8, 271450),
-    ("ent_highline", "The High Line", ["park"], 40.7480, -74.0048, 4.7, 63980),
-    ("ent_katz", "Katz's Delicatessen", ["restaurant"], 40.7223, -73.9874, 4.5, 43170),
-    ("ent_moma", "MoMA", ["museum"], 40.7614, -73.9776, 4.6, 61840),
-    ("ent_dumbo", "Brooklyn Bridge Park", ["park"], 40.7024, -73.9968, 4.8, 39210),
-    ("ent_grand", "Grand Central Terminal", ["tourist_attraction"], 40.7527, -73.9772, 4.7, 92330),
-    ("ent_theatre", "Lyceum Theatre", ["performing_arts_theater"], 40.7580, -73.9847, 4.6, 4180),
-    ("ent_joes", "Joe's Pizza", ["restaurant"], 40.7305, -74.0021, 4.4, 21460),
-    ("ent_russ", "Russ & Daughters Cafe", ["restaurant"], 40.7223, -73.9884, 4.5, 5320),
+    # entity_id, google_place_id, name, categories, lat, lng, rating, reviews
+    ("ent_met", "ChIJb8Jg9pZYwokR-qHGtvSkLzs", "The Metropolitan Museum of Art",
+     ["museum"], 40.7794, -73.9632, 4.8, 94451),
+    ("ent_central_park", "ChIJ4zGFAZpYwokRGUGph3Mf37k", "Central Park",
+     ["park"], 40.7826, -73.9656, 4.8, 300880),
+    ("ent_highline", "ChIJ5bQPhMdZwokRkTwKhVxhP1g", "The High Line",
+     ["park"], 40.7480, -74.0048, 4.7, 67775),
+    ("ent_katz", "ChIJCar0f49ZwokR6ozLV-dHNTE", "Katz's Delicatessen",
+     ["restaurant"], 40.7222, -73.9874, 4.5, 54627),
+    ("ent_moma", "ChIJKxDbe_lYwokRVf__s8CPn-o", "The Museum of Modern Art",
+     ["museum"], 40.7614, -73.9776, 4.6, 60517),
+    ("ent_dumbo", "ChIJjaFpo0ZawokRBcOFUZ13CaE", "Brooklyn Bridge Park",
+     ["park"], 40.7022, -73.9959, 4.8, 43237),
+    ("ent_grand", "ChIJhRwB-yFawokRi0AhGH87UTc", "Grand Central",
+     ["tourist_attraction"], 40.7528, -73.9772, 4.7, 7866),
+    ("ent_theatre", "ChIJtehhClVYwokRjEHM1kjDj2M", "Lyceum Theatre",
+     ["performing_arts_theater"], 40.7577, -73.9846, 4.6, 2285),
+    ("ent_joes", "ChIJ8Q2WSpJZwokRQz-bYYgEskM", "Joe's Pizza",
+     ["restaurant"], 40.7307, -74.0022, 4.4, 10507),
+    ("ent_russ", "ChIJ53yq2oZZwokRqIHSP4qZT3o", "Russ & Daughters Cafe",
+     ["restaurant"], 40.7196, -73.9896, 4.6, 3683),
 ]
 
 
@@ -84,8 +105,9 @@ def entities() -> dict[str, PlaceEntity]:
             address=f"{name}, New York, NY",
             timezone=ZONE,
             price_level=2,
+            provider_refs={"google_place_id": place_id},
         )
-        for eid, name, cats, lat, lng, rating, reviews in PLACES
+        for eid, place_id, name, cats, lat, lng, rating, reviews in PLACES
     }
 
 
@@ -443,6 +465,15 @@ def demo_state() -> TripState:
         notes="Two of us. No early starts, and we want one proper night out.",
     )
     state.travelers = [TripTraveler(traveler_id="trv_demo", name="Sam", role="organizer")]
+    # Confirmed, because this trip is meant to look like one that has been
+    # planned rather than one still being briefed - otherwise the intake card
+    # owns the screen and the itinerary never gets a look in.
+    state.intake = TripIntake(
+        status="confirmed",
+        confirmed_brief=state.brief,
+        confirmed_revision=0,
+        confirmed_at=datetime(2026, 9, 20, 10, 40),
+    )
     state.entities = entities()
     state.itinerary = itinerary()
     state.decisions.departure_airport = departure_airport_decision()

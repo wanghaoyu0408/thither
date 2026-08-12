@@ -4,7 +4,7 @@
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.12+-blue.svg)](pyproject.toml)
-[![Tests](https://img.shields.io/badge/tests-1022%20passing-brightgreen.svg)](#test)
+[![Tests](https://img.shields.io/badge/tests-1026%20passing-brightgreen.svg)](#test)
 
 *English · [中文](README.zh-CN.md)*
 
@@ -18,6 +18,8 @@ LLM-generated facts as authoritative.
 > *问津* is to ask the way at a river crossing — 陶渊明's *后遂无问津者*, the line
 > that closes *Peach Blossom Spring* once nobody asks after the ford any more.
 > *Whither* is the same question in English: **whither goest thou?**
+
+![The workspace: choice cards with the figures behind them, and what has never been checked](docs/images/hero.png)
 
 ---
 
@@ -45,6 +47,11 @@ for — all eight in **[INVARIANTS.md](INVARIANTS.md)**:
 - **The engine computes; the model explains.** Every arrival window, verdict
   and travel time is deterministic code the model is forbidden from redoing in
   prose. ([invariant 8](INVARIANTS.md#8-the-engine-computes-the-model-explains))
+
+Here is the fourth of those, on a four-day trip: the plan's own figures
+pushed through each day at their known widths.
+
+![The stress test: four days, four verdicts, every input naming what kind of number it is](docs/images/stress-test.png)
 
 The most-read document in this repo is probably
 **[docs/FIELD-NOTES.md](docs/FIELD-NOTES.md)** — the defects that only appeared
@@ -103,7 +110,7 @@ Full catalogue, including the ones that hit live providers:
 python -m pytest -q
 ```
 
-1022 tests, no network, no API keys. `tests/scenarios/` maps one-to-one onto
+1026 tests, no network, no API keys. `tests/scenarios/` maps one-to-one onto
 each milestone's acceptance criteria.
 
 ---
