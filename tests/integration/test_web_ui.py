@@ -96,6 +96,32 @@ async def test_the_page_names_the_travel_dna_surface_and_the_new_tools(client):
         assert f"dna-badge.{word}" in body or word in body
 
 
+async def test_the_page_can_show_how_close_our_own_numbers_run(client):
+    """The panel that exists to be mostly empty.
+
+    A grep again, and worth as little as the last one: what holds this feature
+    up is `tests/scenarios/test_milestone10_acceptance.py`, which goes through
+    the real endpoints and asserts a never-checked dimension says so out loud
+    rather than rendering nothing.
+    """
+    body = (await client.get("/")).text
+
+    assert "How close my numbers run" in body
+    assert "never checked against what actually happened" in body
+    assert 'data-open="accuracy"' in body
+    # The chip toggles a flag, and a hardcoded list decides which flags get
+    # rendered. A kind missing from that list is a button that opens nothing -
+    # which is exactly what happened, with every string above already present.
+    rendered = re.search(r'for \(const kind of \[([^\]]+)\]\)', body, re.S)
+    assert rendered and '"accuracy"' in rendered.group(1)
+    # And the reflection can mark one of our estimates.
+    assert "estimateQuestionsHtml" in body
+    assert "data-estchip=" in body
+    # Answers live in S, not the DOM: pressing a chip re-renders the workspace.
+    assert "S.estimates" in body
+    assert "estimates: estimateAnswers()" in body
+
+
 async def test_the_new_trip_form_asks_who_the_trip_is_for(client):
     """Without a traveller the trip has nobody in it, and everything keyed to a
     person is unreachable rather than merely empty. The form collected a head

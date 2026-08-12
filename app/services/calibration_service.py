@@ -632,12 +632,24 @@ def question_text(prediction: Prediction) -> str:
 
 
 def evidence_line(outcome: Outcome) -> str:
-    """One check, in the words it was given in."""
+    """One check, in the words it was given in.
+
+    A check that matched says so rather than printing the same number twice,
+    and the dimension is named in its own label - "256 currency" is a unit
+    key leaking onto a screen.
+    """
     entry = DIMENSIONS[outcome.dimension]
-    return (
-        f"said {outcome.predicted:g} {entry.unit} — {outcome.answer or 'checked'} "
-        f"({outcome.checked_by.replace('_', ' ')})"
-    )
+    said = _format(outcome.predicted, entry.unit)
+    how = outcome.checked_by.replace("_", " ")
+
+    if outcome.actual_low == outcome.actual_high:
+        if outcome.actual_low == outcome.predicted:
+            return f"{entry.label}: said {said} — matched ({how})"
+        return (
+            f"{entry.label}: said {said} — was "
+            f"{_format(outcome.actual_low, entry.unit)} ({how})"
+        )
+    return f"{entry.label}: said {said} — {outcome.answer or 'checked'} ({how})"
 
 
 def dimensions_never_checked(outcomes: Iterable[Outcome]) -> list[Dimension]:

@@ -63,7 +63,14 @@ from app.services.intake_service import (
     resolve_date,
     today_at,
 )
+from app.models.calibration import DIMENSIONS
+from app.services.calibration_service import (
+    Calibrations,
+    dimensions_never_checked,
+    scope_of,
+)
 from app.services.learning_service import CATALOGUE, derive_hypotheses
+from app.services.option_metrics import ROUTES_PROVIDER
 from app.services.itinerary_service import (
     arrival_penalty,
     build_itinerary,
@@ -749,6 +756,30 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "type": "function",
+        "name": "review_estimate_accuracy",
+        "description": (
+            "How close this system's own numbers have turned out to be, measured against "
+            "what actually happened. Use it before quoting a travel time or an advertised "
+            "rate as though it were a fact: if the record says these run long here, say so "
+            "in the same breath as the figure. Read-only, and it will often answer that "
+            "nothing has been checked yet - which is the true answer and worth saying "
+            "rather than dressing up."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "dimension": {
+                    "type": "string",
+                    "enum": list(DIMENSIONS),
+                    "description": "Limit to one kind of figure. Omit for all of them.",
+                },
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
         "name": "generate_itinerary",
         "description": (
             "Lay out the whole trip from the places already stored: clusters them "
@@ -899,6 +930,10 @@ class ToolContext:
     # happened, not a proposal, so it takes no pending buffer (the _commit_now
     # lesson: staged work the model must remember to apply sometimes is not).
     learning: Any = None
+    # Reads how close our own past figures have run. Read-only from a tool:
+    # outcomes are written by the reflection card and the end-of-turn sweep,
+    # never by the model deciding it was right.
+    calibration: Any = None
     # decision name -> why it is now questionable, from a confirmed refresh.
     pending_stale: dict = field(default_factory=dict)
     # Brief facts learned this turn, as patch operations on /brief/...
@@ -2492,6 +2527,75 @@ async def _record_stated_preference(
     }
 
 
+async def _review_estimate_accuracy(
+    context: ToolContext, args: dict[str, Any]
+) -> dict[str, Any]:
+    """How close our own figures have run. Read-only, and often "we do not know".
+
+    Reports the modes separately rather than one number per dimension: a
+    driving estimate and a transit estimate are different measurements, and
+    the fallback between them is why this exists at all.
+    """
+    if context.calibration is None:
+        return {"error": "the record of our own accuracy is not available in this run"}
+
+    wanted = args.get("dimension")
+    if wanted and wanted not in DIMENSIONS:
+        return {"error": f"no such dimension {wanted!r}; try one of {list(DIMENSIONS)}"}
+
+    corpus = Calibrations.of(
+        await context.calibration.list_for(),
+        scope=scope_of(context.state),
+        settings=context.settings,
+    )
+
+    keys: list[tuple[str, str, str | None]] = []
+    for dimension in [wanted] if wanted else list(DIMENSIONS):
+        if dimension == "travel_minutes":
+            keys += [(ROUTES_PROVIDER, dimension, mode) for mode in ("transit", "driving")]
+        else:
+            provider = {
+                "hotel_headline_gap": "serpapi_google_hotels",
+                "day_high_c": "google_weather",
+                "hours_shelf_life": "google_places",
+            }[dimension]
+            keys.append((provider, dimension, None))
+
+    report = []
+    for provider, dimension, mode in keys:
+        record = corpus.for_(provider, dimension, mode)
+        report.append(
+            {
+                "what": f"{DIMENSIONS[dimension].label}"
+                + (f" by {mode}" if mode else "")
+                + f" ({provider})",
+                "checks": record.sample_count,
+                "status": record.status,
+                "measured_where": record.scope_used or ("this provider overall" if record.bias is not None else None),
+                # Percentages, not multipliers: "runs 22% long" is the sentence
+                # a traveller would understand hearing back.
+                "usually_off_by": (
+                    None if record.bias is None else f"{record.bias:+.0%}"
+                ),
+                "eight_in_ten_between": (
+                    None
+                    if not record.is_usable
+                    else f"{record.low_error:+.0%} and {record.high_error:+.0%}"
+                ),
+            }
+        )
+
+    return {
+        "accuracy": report,
+        "never_checked": dimensions_never_checked(corpus.outcomes),
+        "note": (
+            "Quote the raw figure and the record together, or quote the figure alone when "
+            "there is no record. Never present a corrected number as though a provider had "
+            "said it."
+        ),
+    }
+
+
 async def _review_learned_preferences(
     context: ToolContext, args: dict[str, Any]
 ) -> dict[str, Any]:
@@ -3068,6 +3172,7 @@ HANDLERS = {
     "record_constraints": _record_constraints,
     "record_stated_preference": _record_stated_preference,
     "review_learned_preferences": _review_learned_preferences,
+    "review_estimate_accuracy": _review_estimate_accuracy,
     "discover_restaurants": _discover_restaurants,
     "get_weather_context": _get_weather_context,
     "search_airports": _search_airports,

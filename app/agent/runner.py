@@ -146,6 +146,7 @@ class AgentRunner:
             settings=self._settings,
             profiles=self._profiles,
             learning=self._learning,
+            calibration=self._calibration,
         )
 
         conversation: list[Any] = list(history or [])

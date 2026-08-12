@@ -72,8 +72,11 @@ class DimensionEntry(BaseModel):
     unit: str
     label: str
     checked_by: CheckedBy
-    # Prose: what actually performs the check. The `CatalogueEntry.consumer`
-    # discipline, pointed the other way.
+    # What actually performs the check, in a sentence a traveller can read.
+    # The `CatalogueEntry.consumer` discipline pointed the other way - and
+    # deliberately free of identifiers, because this reaches a screen: the
+    # first version put "`HotelOptionData.headline_gap()`" in front of
+    # somebody planning a holiday.
     checker: str
     # Present only for traveller-checked dimensions: how to ask, with `{what}`
     # and `{value}` filled from the prediction's subject.
@@ -92,23 +95,25 @@ DIMENSIONS: dict[Dimension, DimensionEntry] = {
         unit="currency",
         label="advertised nightly rate",
         checked_by="same_fetch",
-        checker="`HotelOptionData.headline_gap()` - the advertised rate and the "
-        "cheapest attributable quote arrive in the same fetch, so the claim is "
-        "checkable the moment it is made",
+        # `HotelOptionData.headline_gap()` is where the two numbers meet.
+        checker="the advertised rate and the cheapest rate a named booking site will "
+        "actually honour arrive together, so this one checks itself",
     ),
     "hours_shelf_life": DimensionEntry(
         unit="days",
         label="opening hours",
         checked_by="provider_recheck",
-        checker="asking Google Places again later and seeing whether the hours moved",
+        checker="asking Google again later and seeing whether the hours had moved",
     ),
     "day_high_c": DimensionEntry(
         unit="celsius",
         label="forecast high",
         checked_by="archive",
-        checker="Open-Meteo's archive for the date the forecast was about. Forecasts "
-        "only: a historical norm is a claim about a season and checking it against "
-        "one Tuesday is the category error `app/models/weather.py` exists to prevent",
+        # Norms are excluded in `predictions_from`, for the reason
+        # `app/models/weather.py` exists.
+        checker="the weather archive for the day the forecast was about. Forecasts "
+        "only - a typical-for-the-season figure is not a claim about a Tuesday, so "
+        "there is nothing there to be right or wrong about",
     ),
 }
 

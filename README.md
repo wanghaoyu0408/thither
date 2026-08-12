@@ -13,7 +13,7 @@ same question in English: **whither goest thou?** Both are a question, not a pro
 which is the right register for something whose whole discipline is saying what it does
 not know.
 
-## Status: Milestones 1-9 complete
+## Status: Milestones 1-10 complete
 
 The architectural claim this project rests on is that **`TripState` is the source of
 truth and the LLM may never overwrite it freely**. Every mutation goes through a
@@ -29,6 +29,7 @@ validated `TripPatch` with revision control, lock enforcement and rejection memo
 | 6 | Hotels: neighbourhood decided first, then priced inventory | done |
 | 7 | Multi-traveler preferences, group scoring, fairness | done |
 | 9 | Evolving travel twin: learning signals, consent, Travel DNA | done |
+| 10 | Calibration: the agent measures its own error against what happened | done |
 
 ## Setup
 
@@ -93,7 +94,7 @@ minutes because it is really calling Google, Duffel, SerpApi and an LLM, so it s
 .venv/Scripts/python.exe -m pytest -q
 ```
 
-602 tests, no network, no API keys. The `tests/scenarios/` files map one-to-one onto each
+982 tests, no network, no API keys. The `tests/scenarios/` files map one-to-one onto each
 milestone's acceptance criteria.
 
 Contract tests against the real Google APIs are opt-in, since they cost quota:
@@ -454,6 +455,65 @@ app whether the model participates or not, and a sentence does not. The test
 pins where the instruction sits, which is what was wrong with it. No test can
 pin that a model complies.
 
+### It never checked whether it was right
+
+Everything above is about being careful with what is known. Absence is not
+negation, a score is not a confidence, a seasonal norm may not speak about a
+Tuesday. None of it ever asked the other question.
+
+Eighty-three travel-time estimates were sitting in the database — every hotel
+area, every hotel, every airport — all from one provider that already has a
+ledger entry against it for being regionally wrong. Not one had ever been
+checked against what happened.
+
+**Predictions are derived from the trip, not stored.** The figures were always
+there with their own provenance: a neighbourhood's mean travel time beside the
+mode it was measured in, an airport's drive time beside whether anyone actually
+looked it up. So there is no new write path, every trip planned before this
+existed is covered retroactively, a prediction cannot drift from the state that
+produced it, and it cannot outlive its trip because it was never anywhere else.
+Only the outcome is stored, and it carries no trip id and nothing finer than a
+region — a durable table keyed to where somebody went is not a thing to create
+by accident while measuring a routing API.
+
+**Every dimension names who could contradict it.** A figure nobody can check is
+a claim that can never be wrong, which is milestone 9's preference-that-changes-
+nothing wearing a different hat. Travel time needs a person who was there.
+An advertised hotel rate checks itself, because the rate and the cheapest price
+a named booking site will actually honour arrive in the same fetch. A forecast
+is checked against the weather archive — a *forecast*, never a seasonal norm,
+because a norm is a claim about a season and scoring it against one Tuesday is
+the exact category error the weather model exists to prevent.
+
+Thirty checks were available immediately, from data already stored. They also
+caught the arithmetic being wrong on its first run: fifteen of the thirty
+advertised rates matched exactly, so median absolute deviation collapsed to
+±1.6% and reported an advertised \$200 as "more likely \$197–\$203" — while
+three of the same thirty were understated by 13%, 20% and 67%. The band is
+quantiles of the observed errors now: \$176–\$217, asymmetric because reality
+is, claiming eight checks in ten and carrying the sample count beside it.
+
+**Below five checks it says nothing, and says that out loud.** A dimension
+nobody has ever checked renders as "never checked against what actually
+happened" rather than as blank space, because a screen that stays silent lets
+never-once-checked and always-right look identical.
+
+**It annotates and does not reorder.** The plan called for a ranking correction
+where a shortlist mixes travel modes. Checked against the live database, none
+does — a shortlist is measured in one route matrix, so every option on a card
+shares a bias and correcting them would multiply them all by the same number.
+There is a comment where that function would have been, and a test that the
+order does not move. What calibration does change is a feasibility warning: a
+gap that fits the estimate but not the time those journeys have actually taken
+now says so. It may add a warning; it may never clear one.
+
+Found on the way: **`brief.timezone` had never been written by anything.** Its
+docstring says it comes from Places, `today_at` reads it to answer "what is
+today where they are going", and the reflection gate, the flight date logic and
+the model's daily context all go through it — so every trip that has ever
+existed computed its dates in UTC, while all 332 entities in the database sat
+there carrying the correct zone.
+
 ### A fork in the road is a card, not a paragraph
 
 No airline flew ALB → MDW on the chosen dates. The agent worked out the right
@@ -649,6 +709,30 @@ location and price for hotels — are the numbers `flight_ranking` and
 `hotel_ranking` already multiply their dimensions by. Every key in the
 learnable catalogue names its consumer in code, because a preference that
 influences nothing is a lie told slowly.
+
+### Milestone 10 acceptance
+
+```bash
+.venv/Scripts/python.exe scripts/check_our_own_numbers.py
+```
+
+Offline, keyless, deterministic. Seven acts: a trip's checkable figures derived
+without a row being written to make it possible; the honest "never checked";
+an advertised rate refuting itself from the same fetch; the card rationed to
+two questions; answers accumulating until the record will speak; a 95-minute
+journey against a 14-minute estimate moving the median by nothing; and the
+trips deleted, after which the predictions are gone and the record remains,
+carrying no trip id and nothing finer than a region.
+
+```
+5. Answers accumulate, and it refuses to speak until they add up
+   after 4 check(s): uncalibrated nothing yet
+   after 5 check(s): provisional  off by +32%, 8 in 10 between -3% and +92%
+
+6. One road closure is not a finding
+   a 14-minute estimate that took 95 minutes is a +579% error
+   median before: +32.5%    after: +32.5%
+```
 
 ## How a change reaches the database
 

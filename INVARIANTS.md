@@ -263,6 +263,74 @@ criteria, one test each —
 
 ---
 
+## 7. A figure is only worth something if something could contradict it
+
+> Every dimension this system judges itself on must name **who could check
+> it**. Predictions are derived from `TripState` and never stored; only
+> outcomes are, and they carry no trip id and nothing finer than a region. A
+> calibration is derived on every read, reports which rung of the backoff
+> chain answered it and how many checks stood behind that, and below
+> `calibration_min_samples` it makes no claim at all. The raw figure is never
+> rewritten, and calibration may add a warning but never clear one.
+
+**Why.** The rest of this file is about being honest with what is known:
+absence is not negation, a score is not a confidence, a norm may not speak
+about a Tuesday. None of it ever asked whether the numbers were *right*.
+Eighty-three travel-time estimates sat in the database, all from one provider
+that already has a ledger entry against it for being regionally wrong, and not
+one had been checked. A dimension with no checker is a claim that can never be
+wrong - the same defect as invariant 6's preference that influences nothing,
+one level up.
+
+**Predictions are derived because the figures were already there.** A hotel
+area's `mean_minutes` sits beside its `travel_mode`, an airport's
+`ground_travel_minutes` beside its `ground_travel_source`. Deriving them means
+no new write path, retroactive coverage of every trip planned before this
+existed, no way for a prediction to drift from the state that produced it, and
+no way for one to outlive its trip - because it was never anywhere else.
+Outcomes must outlive their trips (the `learning_signals` reasoning), so they
+denormalize what calibration needs and nothing more: a durable table keyed to
+where somebody went is not a thing to create while measuring a routing API.
+
+**The band is quantiles, not a spread around the median.** Live data proved
+why: of thirty advertised hotel rates, fifteen matched exactly and three were
+understated by 13%, 20% and 67%. Median absolute deviation collapsed to ±1.6%
+on the strength of the fifteen and reported an advertised $200 as "more likely
+$197-$203". A tight interval wrapped around a fat tail is a more confident lie
+than no interval at all. The band is asymmetric wherever the errors are, and
+claims only what it can - eight checks in ten, with the count beside it.
+
+**It annotates; it does not reorder.** The plan called for a ranking
+correction where a shortlist mixes travel modes. Checked against the live
+database, none does: a shortlist is measured in a single route matrix and the
+transit-to-driving fallback applies to the whole matrix, so every option on a
+card shares a bias and correcting them would multiply them all by the same
+number. There is a comment where that function would have been.
+
+**No consent gate, and that is the point.** Invariant 6 needs the traveller's
+word for every write because it changes what the system thinks of a *person*.
+This is about providers. Nothing here touches a `TravelerProfile`, and
+acceptance 9 holds that shut by checking the profile's revision does not move.
+
+**Enforced in.** `app/models/calibration.py` (the closed `DIMENSIONS`
+catalogue, each naming its checker; `Outcome` with no trip id);
+`app/services/calibration_service.py` (`predictions_from` - derived, and
+refusing to check a `historical_norm` against one day; `_bias_and_band`;
+`calibration_for` - the backoff chain and the honest `uncalibrated`;
+`Calibrations.note` - never silent); `app/db/models.py::OutcomeRow`;
+`app/services/validation_service.py::_likely_minutes` (may warn, never clear);
+`app/api/calibration.py` (read-only, not trip-scoped).
+
+**Pinned by.** `tests/scenarios/test_milestone10_acceptance.py`: all ten
+criteria, one test each. `tests/unit/test_calibration_service.py`, especially
+`test_a_mostly_right_provider_still_reports_its_bad_days`,
+`test_one_road_closure_does_not_become_a_finding`,
+`test_a_historical_norm_is_never_checked_against_one_day`,
+`test_an_outcome_carries_no_trip_and_no_place`, and
+`test_every_dimension_names_who_checks_it`.
+
+---
+
 ## Ledger — defects found by running it
 
 Reasoning about the code did not find these. Running it did. Each has a test so
@@ -319,6 +387,10 @@ it cannot come back.
 | 54 | `_note_signals` guards the *write* against exceptions but its callers built the signals **outside that guard**, so any error while deriving one took the traveller's click down with it — the opposite of the "a signal is never a reason the click fails" contract in its own docstring. It now takes a callable and evaluates the derivation inside the try | found by the test written for 53 | `test_a_failed_signal_does_not_fail_the_choice` |
 | 55 | Adding a catalogue key was **two silent failures wide**: a `PreferenceKey` with no catalogue entry is dropped by `derive_hypotheses` without a word, and an entry whose section is missing from `_SECTION_FOR_PATH` derives, proposes and shows a card that raises the moment the traveller presses Add. Both were one line away while 53 was being written | found while fixing 53 | `test_every_learnable_key_is_in_the_catalogue_and_can_actually_be_written` |
 | 56 | `record_stated_preference` was called **zero times in five agent turns** of a real session, while a correct, well-argued section about it sat two thirds of the way down the prompt. A rule the model must remember to consult is a rule it will not; the instruction moved into a `## Every turn, before you reply` section at the top and says why it alone cannot be deferred — a click gets recorded by the app either way, a sentence is gone. The test pins the placement, which is the part that was wrong; it cannot pin compliance | found while fixing 53 | `test_recording_what_was_said_is_a_step_in_the_turn_not_an_optional_rule` |
+| 57 | **`brief.timezone` had never been written by anything.** Its own docstring says it comes from the Places `timeZone` field; `today_at` reads it to answer "what is today where they are going"; the reflection gate, the model's daily context, the flight date logic and the trip-is-over check all go through it. Fourteen trips, zero with it set — so every trip that has ever existed worked out its dates in **UTC**, while all 332 of their entities sat in the database each carrying the correct IANA zone. Taken from the places now, once, by majority, never re-voted | found while looking for a calibration scope key | `test_the_trip_takes_its_timezone_from_the_places_it_finds`, `test_a_trip_that_already_knows_its_zone_is_not_re_voted` |
+| 58 | The calibration band was **median absolute deviation** and the first thirty real checks showed why that is unsafe: fifteen advertised hotel rates matched exactly, so the deviation collapsed to ±1.6% and an advertised \$200 was reported as "more likely \$197–\$203" — while three of the same thirty were understated by 13%, 20% and **67%**. A tight interval wrapped around a fat tail is a more confident lie than no interval. Now quantiles of the observed errors, asymmetric, claiming eight checks in ten and carrying the count | live data, on the first run of the new code | `test_a_mostly_right_provider_still_reports_its_bad_days` |
+| 59 | The "My accuracy" chip toggled a flag that **no render list read**, so the button opened nothing — every string the grep test looked for was already present and green. The artifact loop iterates a hardcoded list of kinds and the new one was not in it. This is ledger 41/50's shape a third time: a surface that exists everywhere except where it is drawn | opening the panel by hand | `test_the_page_can_show_how_close_our_own_numbers_run` (now asserts the kind is in the render list, not just that the words exist) |
+| 60 | The accuracy panel printed **developer prose at the traveller**: "\`HotelOptionData.headline_gap()\` - the advertised rate…" and a sentence naming `app/models/weather.py`. `DimensionEntry.checker` was written as a note to whoever reads the catalogue and then rendered verbatim on a screen. Rewritten as sentences a person planning a holiday can read, with the identifiers moved into comments beside them | opening the panel by hand | the field's docstring now says it reaches a screen |
 | 44 | **The agent worked out the way forward and could not offer it.** No airline flew ALB → MDW on those dates; the reply said, correctly, that the practical next step was to reconsider the arrival airport with ORD already shortlisted — and then stopped, with nothing on screen to do it with. Every surface refused the question: `ask_clarifications` only asks about an outstanding intake requirement, `OpenQuestion` has no choices and **no route anywhere can mark one answered**, the chooser hides a decision that is already settled (which the airport was), and nothing can re-open one. `AgentProposal` + `propose_next_step` turn a fork into buttons whose actions are a closed set | user report, live | `tests/unit/test_proposals.py`, especially `test_a_proposal_names_choices_that_exist` |
 | 45 | A search that found nothing **staged nothing at all**, so "no airline flies this route on these dates" and "nobody has looked yet" were the same stored state — absence read as never-asked, one more wearing of invariant 1. And `next_steps` tested whether the decision *existed*, so the step vanished the moment a search came back empty, which is when it is most needed | found while fixing 44 | `test_a_flight_search_that_finds_nothing_records_that_it_looked`, `test_a_search_that_found_nothing_is_still_work` |
 | 46 | "Park this for now" had no honest home: `not_needed` claims they are not flying, `already_arranged` claims tickets exist, and `unknown` re-opens a blocking intake gap and un-confirms the brief. `Decision.set_aside_reason` is a fourth kind of claim beside `status`, `booked` and the scope states — the outcome of a search rather than an instruction or a fact about the world — and `should_shop_for` reads all three | found while fixing 44 | `test_setting_a_part_aside_stops_it_being_a_next_step` (asserts `scope.flights` is still `plan`) |

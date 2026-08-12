@@ -885,6 +885,12 @@ const S = { tripId: null, trip: null, over: null, busy: false,
             // profile_id -> GET /profiles/{id}/learning payload. Fetched when
             // the Travel DNA panel opens, re-fetched after every consent action.
             learning: {},
+            // prediction_id -> {answer, exact} on the reflection card. Held
+            // here for the same reason `extra` is: pressing a chip re-renders
+            // the workspace, and an answer living in the DOM would not survive.
+            estimates: {},
+            // GET /calibration, fetched when the accuracy panel first opens.
+            accuracy: null,
             // Artifacts the traveller opened on purpose. A set, not a single
             // slot: this is a stream, and wanting the map open should not shut
             // the itinerary you are reading it against.
@@ -1394,6 +1400,11 @@ function openedArtifact(kind) {
     return artifact("dna", "Travel DNA",
       dnaHtml(), { sub: "What I've learned — you decide what sticks" });
   }
+  if (kind === "accuracy") {
+    if (S.accuracy === null) loadAccuracy().then(render);
+    return artifact("accuracy", "How close my numbers run",
+      accuracyHtml(), { sub: "Measured against what actually happened" });
+  }
   return "";
 }
 
@@ -1410,6 +1421,7 @@ function chipsHtml() {
   }
   if (confirmed) chips.push(`<button class="chip" data-open="brief">Trip brief</button>`);
   chips.push(`<button class="chip" data-open="overview">Trip facts</button>`);
+  chips.push(`<button class="chip" data-open="accuracy">My accuracy</button>`);
   if ((S.decisions || []).some((d) => d.exists))
     chips.push(`<button class="chip" data-open="decisions">Decisions</button>`);
   if (Object.keys(S.trip.evidence || {}).length)
@@ -1558,7 +1570,10 @@ function render() {
   // Opened on purpose, in a stable order, and never a second copy of what is
   // already shown above.
   const briefIsWaiting = S.intake && S.intake.status !== "confirmed";
-  for (const kind of ["itinerary", "map", "decisions", "research", "brief", "overview", "dna"]) {
+  // Every kind a chip can open must be in this list, or the chip toggles a
+  // flag nobody reads and the panel never appears.
+  for (const kind of ["itinerary", "map", "decisions", "research", "brief",
+                      "overview", "dna", "accuracy"]) {
     if (!S.open.has(kind)) continue;
     if (briefIsWaiting && kind === "brief") continue;
     out.push(openedArtifact(kind));
@@ -2590,6 +2605,101 @@ function dnaHtml() {
    answers become learning signals attributed to whoever answered - never to
    a guess. */
 
+/* --- how close our own numbers run ------------------------------------------
+   The panel that exists to be mostly empty. A system that reports only what it
+   has measured, and stays silent about the rest, reads as though silence were
+   a pass mark - so every key is listed, and the ones nobody has ever checked
+   say exactly that. */
+
+async function loadAccuracy() {
+  const scope = S.trip?.brief?.timezone || "unknown";
+  try {
+    S.accuracy = await api(`/calibration?scope=${encodeURIComponent(scope)}`);
+  } catch { S.accuracy = { records: [], recent: [], total_checks: 0 }; }
+}
+
+function pct(value) { return `${value >= 0 ? "+" : ""}${Math.round(value * 100)}%`; }
+
+function accuracyRow(rec) {
+  const known = rec.low_error != null && rec.high_error != null;
+  // "measured in unknown" is not a place. A trip planned before the zone was
+  // recorded lands in that bucket, and saying so plainly beats printing the
+  // key.
+  const where = rec.level !== "scoped"
+    ? "borrowed from this provider elsewhere"
+    : rec.scope_used === "unknown"
+      ? "region not recorded on those trips"
+      : `measured in ${esc(rec.scope_used)}`;
+  return `<div class="dna-row thin">
+    <b>${esc(rec.label)}</b>
+    ${known
+      ? `<span class="meta">${dnaBadge(rec.status)} ${rec.checks} checks ·
+           ${esc(where)}</span>
+         <p class="meta">usually off by <b>${esc(pct(rec.bias))}</b> ·
+           8 in 10 landed between ${esc(pct(rec.low_error))} and
+           ${esc(pct(rec.high_error))}</p>`
+      : `<span class="meta">${rec.checks
+           ? `checked ${rec.checks} time${rec.checks === 1 ? "" : "s"} — not enough to say`
+           : "never checked against what actually happened"}</span>`}
+    <p class="meta">${esc(rec.checker)}</p>
+  </div>`;
+}
+
+function accuracyHtml() {
+  const view = S.accuracy;
+  if (view === null) return '<p class="empty">Loading…</p>';
+  return `<div class="dna-traveler">
+    <p class="eyebrow">${view.total_checks} check${view.total_checks === 1 ? "" : "s"} in all</p>
+    ${view.records.map(accuracyRow).join("")}
+    ${view.recent.length ? `<p class="eyebrow" style="margin-top:12px">Most recent</p>
+      ${view.recent.map((r) => `<div class="dna-row thin">
+        <span class="meta">${esc(r.line)}</span></div>`).join("")}` : ""}
+    <p class="meta" style="margin-top:12px">Nothing here is adjusted behind your back:
+      a figure on a card is still what the provider said. This is what the record
+      says about it.</p>
+  </div>`;
+}
+
+/* --- marking our own numbers ------------------------------------------------
+   The one part of the reflection that is not about the traveller at all. How
+   wrong a routing API was is a fact about the API, so these are asked of
+   whoever is there and stored against the provider, never against a person.
+
+   Chips rather than a number box on purpose: nobody timed their walk, and a
+   figure typed from memory is invented precision with someone's name on it.
+   The exact field is there for the rare person who did keep count. */
+const ESTIMATE_CHIPS = [
+  ["about_right", "About right"],
+  ["a_bit_longer", "A bit longer"],
+  ["much_longer", "Much longer"],
+  ["quicker", "Quicker than that"],
+];
+
+function estimateQuestionsHtml() {
+  const asked = S.over?.reflection?.estimates || [];
+  if (!asked.length) return "";
+  return asked.map((e, index) => `<div class="q estimate" data-estimate="${esc(e.prediction_id)}">
+    <b>${esc(e.question)}</b>
+    <div class="pickrow">${ESTIMATE_CHIPS.map(([value, label]) =>
+      `<button class="pick${(S.estimates[e.prediction_id] || {}).answer === value ? " on" : ""}"
+        type="button"
+        data-estchip="${esc(e.prediction_id)}|${esc(value)}">${esc(label)}</button>`
+    ).join("")}</div>
+    <div class="free"><input type="number" min="0" step="1"
+      id="estExact${index}" data-estexact="${esc(e.prediction_id)}"
+      value="${esc((S.estimates[e.prediction_id] || {}).exact ?? "")}"
+      placeholder="or the exact ${esc(e.unit === "minutes" ? "minutes" : e.unit)}, if you counted"></div>
+  </div>`).join("");
+}
+
+/* Answers live in S, never in the DOM: render() replaces the whole workspace
+   and a half-filled card must survive it - the same reason `S.extra` exists. */
+function estimateAnswers() {
+  return Object.entries(S.estimates || {})
+    .map(([prediction_id, answer]) => ({ prediction_id, ...answer }))
+    .filter((a) => a.answer || a.exact != null);
+}
+
 function reflectionHtml() {
   const days = S.trip.itinerary.days || [];
   const items = days.flatMap((d) => d.items);
@@ -2615,6 +2725,7 @@ function reflectionHtml() {
       </label>`).join("")}</div>`;
 
   return `<div class="reflect">
+    ${estimateQuestionsHtml()}
     ${days.length ? `<div class="q"><b>Which days felt too busy?</b>${dayBoxes}</div>` : ""}
     ${items.length ? `<div class="q"><b>What did you skip?</b>${itemBoxes}</div>` : ""}
     <div class="q"><b>What did you love?</b>
@@ -3484,6 +3595,17 @@ function wireWorkspace() {
     dnaAct(parts.slice(0, 3).join("|"), "accept", { value: parts[3] });
   });
 
+  // Marking one of our own estimates. Nothing is sent until the reflection is
+  // saved - a chip is an answer in progress, and the card is answered once.
+  on("estchip", (v) => {
+    const [id, answer] = v.split("|");
+    const current = S.estimates[id] || {};
+    // Pressing the same chip again unsets it: an answer given by accident has
+    // to be retractable, and a silent wrong answer is worse than none.
+    S.estimates[id] = { ...current, answer: current.answer === answer ? "" : answer };
+    render();
+  });
+
   // Reflection. One POST; the response is an ordinary ActionResult, and a
   // full refresh afterwards flips reflection.due off from the store's truth.
   const reflectBtn = $("reflectBtn");
@@ -3496,12 +3618,21 @@ function wireWorkspace() {
     const loved = ($("reflectLoved")?.value || "").trim();
     reflectBtn.disabled = true;
     try {
+      // Sweep the exact fields into S first: somebody may have typed a figure
+      // and never touched a chip, and that answer is the better one.
+      document.querySelectorAll("[data-estexact]").forEach((el) => {
+        const value = (el.value || "").trim();
+        if (!value) return;
+        const id = el.dataset.estexact;
+        S.estimates[id] = { ...(S.estimates[id] || {}), exact: Number(value) };
+      });
       const result = await api(`/trips/${S.tripId}/reflection`, post({
         answered_by: who,
         days_too_busy: checked("reflect_day"),
         skipped_item_ids: checked("reflect_skip"),
         loved: loved ? [loved] : [],
         notes: ($("reflectNotes")?.value || "").trim() || null,
+        estimates: estimateAnswers(),
       }));
       adopt(result);
       if (result.warnings?.length) toast(result.warnings[0]);

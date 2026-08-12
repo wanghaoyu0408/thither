@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse
 
 from app.api import (
     actions_router,
+    calibration_router,
     chat_router,
     decisions_router,
     intake_router,
@@ -56,6 +57,7 @@ app.include_router(actions_router)
 app.include_router(decisions_router)
 app.include_router(intake_router)
 app.include_router(learning_router)
+app.include_router(calibration_router)
 app.include_router(proposals_router)
 
 
