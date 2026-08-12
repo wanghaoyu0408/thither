@@ -331,6 +331,24 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
    behind the plain sentence, not in front of it. */
 .dna-card code.dna-path { display: block; margin-top: 2px; opacity: 0.55; }
 .dna-card .pickrow { margin-top: 8px; }
+
+/* Stress test: verdict badges reuse the dna-badge shell; provenance marks keep
+   a measured drive and a guessed buffer visibly different kinds of number. */
+.dna-badge.comfortable { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+.dna-badge.workable { background: var(--info-soft); border-color: transparent; color: var(--info); }
+.dna-badge.fragile { background: rgba(217, 119, 6, 0.14); border-color: transparent; color: #b45309; }
+.dna-badge.blocking { background: rgba(220, 38, 38, 0.12); border-color: transparent; color: var(--error); }
+.stress-day { margin: 10px 0 14px; }
+.stress-day .day-head small { color: var(--ink-3); }
+.issue.note { border-left-color: var(--line); color: var(--ink-2); }
+.prov {
+  font-size: 10px; padding: 0 6px; border-radius: 999px; margin-left: 4px;
+  text-transform: uppercase; letter-spacing: 0.04em;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--ink-3);
+}
+.prov.measured { color: var(--accent); }
+.prov.calibrated { color: var(--info); }
+.prov.unknown { color: var(--error); }
 .linkish.danger { color: var(--error); }
 
 /* Reflection card: intake's question shapes, reused. */
@@ -891,6 +909,9 @@ const S = { tripId: null, trip: null, over: null, busy: false,
             estimates: {},
             // GET /calibration, fetched when the accuracy panel first opens.
             accuracy: null,
+            // POST /stress-test result, fetched when the preview panel opens.
+            // stressDay narrows it to one day ("Preview this day").
+            stress: null, stressDay: null,
             // Artifacts the traveller opened on purpose. A set, not a single
             // slot: this is a stream, and wanting the map open should not shut
             // the itinerary you are reading it against.
@@ -986,6 +1007,7 @@ function resetWorkspace() {
   S.tripId = null; S.trip = null; S.over = null; S.intake = null;
   S.decisions = null; S.lastDiff = null; S.mapDay = null;
   S.messages = []; S.open.clear(); S.selectedItem = null;
+  S.stress = null; S.stressDay = null;
   rememberTrip(null);
   parkMap();
   $("work").innerHTML = `<div class="welcome">
@@ -1101,6 +1123,7 @@ function rememberedTrip() {
 async function selectTrip(id) {
   S.tripId = id; S.lastDiff = null; S.mapDay = null; S.decisions = null; S.intake = null;
   S.open.clear(); S.selectedItem = null; S.messages = []; S.learning = {};
+  S.stress = null; S.stressDay = null;
   S.dismissedChoosers.clear();
   rememberTrip(id);
   stopRunPoll();
@@ -1143,6 +1166,9 @@ function adopt(result) {
   // options were refused are not readable off the trip - so anything we hold is
   // now stale. Rejecting a place from the itinerary changes a shortlist too.
   S.decisions = null;
+  // The stress-test forecast names the revision it was computed from, and the
+  // revision just moved. If the panel is open, the null makes it re-fetch.
+  S.stress = null;
   paintHeader();
   render();
   loadDecisions().then(render);
@@ -1405,6 +1431,11 @@ function openedArtifact(kind) {
     return artifact("accuracy", "How close my numbers run",
       accuracyHtml(), { sub: "Measured against what actually happened" });
   }
+  if (kind === "stress") {
+    if (S.stress === null) loadStress().then(render);
+    return artifact("stress", "Stress test",
+      stressHtml(), { sub: "Known facts and stated assumptions, pushed through every day" });
+  }
   return "";
 }
 
@@ -1418,6 +1449,7 @@ function chipsHtml() {
     chips.push(`<button class="chip done" data-open="itinerary">✓ ${days}-day plan · ${
       S.open.has("itinerary") ? "Hide" : "Open"} itinerary</button>`);
     chips.push(`<button class="chip" data-open="map">Map</button>`);
+    chips.push(`<button class="chip" data-open="stress">Stress test</button>`);
   }
   if (confirmed) chips.push(`<button class="chip" data-open="brief">Trip brief</button>`);
   chips.push(`<button class="chip" data-open="overview">Trip facts</button>`);
@@ -1573,7 +1605,7 @@ function render() {
   // Every kind a chip can open must be in this list, or the chip toggles a
   // flag nobody reads and the panel never appears.
   for (const kind of ["itinerary", "map", "decisions", "research", "brief",
-                      "overview", "dna", "accuracy"]) {
+                      "overview", "dna", "accuracy", "stress"]) {
     if (!S.open.has(kind)) continue;
     if (briefIsWaiting && kind === "brief") continue;
     out.push(openedArtifact(kind));
@@ -1603,6 +1635,10 @@ function wireStream() {
     const opening = !S.open.has(kind);
     if (opening) S.open.add(kind); else S.open.delete(kind);
     if (kind === "decisions" && S.decisions === null) loadDecisions().then(render);
+    if (kind === "stress" && opening && S.stressDay) {
+      // The chip means the whole trip; a leftover single-day preview is stale.
+      S.stressDay = null; S.stress = null;
+    }
     render();
     if (opening) {
       document.querySelector(`[data-art="${kind}"]`)
@@ -1782,6 +1818,7 @@ function itineraryHtml() {
         <h3>${esc(dayLabel(day.date))}</h3>
         ${day.theme ? `<small>${esc(day.theme)}</small>` : ""}
         <div class="spacer"></div>
+        <button class="linkish" data-preview="${day.date}">Preview this day</button>
         <button class="linkish" data-replan="${day.date}">Make this day easier</button>
       </div>
       <div class="dayline">${weatherChipHtml(day)}${dayMetricsHtml(day)}</div>
@@ -2657,6 +2694,100 @@ function accuracyHtml() {
     <p class="meta" style="margin-top:12px">Nothing here is adjusted behind your back:
       a figure on a card is still what the provider said. This is what the record
       says about it.</p>
+  </div>`;
+}
+
+/* --- the stress test --------------------------------------------------------
+   Known facts and stated assumptions, propagated through every day by the
+   server. Everything numeric here was computed by the engine; this code only
+   lays it out - and keeps the three kinds of input visibly different, because
+   a measured drive and a guessed parking buffer must never look alike. */
+
+async function loadStress() {
+  try {
+    S.stress = await api(`/trips/${S.tripId}/stress-test`,
+      post(S.stressDay ? { day: S.stressDay } : {}));
+  } catch (err) {
+    S.stress = { days: [], worst: "comfortable", error: err.message };
+  }
+}
+
+const VERDICT_BLURB = {
+  comfortable: "room to breathe, every journey measured",
+  workable: "fine, with things worth knowing",
+  fragile: "works as expected — breaks if the day runs slow",
+  blocking: "does not work as written",
+};
+
+function provMark(text) {
+  const kind = /· unknown|not looked up/.test(text) ? "unknown"
+    : /· assumption/.test(text) ? "assumption"
+    : /checked record/.test(text) ? "calibrated"
+    : /· measured|provider figure|validator:/.test(text) ? "measured" : "";
+  return kind ? `<span class="prov ${kind}">${esc(kind)}</span>` : "";
+}
+
+const fmtWin = (w) => {
+  const t = (iso) => iso.slice(11, 16);
+  return t(w.low) === t(w.high) ? t(w.low) : `${t(w.low)}–${t(w.high)}`;
+};
+
+function stressStopRow(stop) {
+  if (!stop.arrival || !stop.arrival.expected) return "";
+  return `<div class="dna-row thin">
+    <b>${esc(stop.title)}</b>
+    <span class="meta">${stop.scheduled_start ? `planned ${stop.scheduled_start.slice(11, 16)} · ` : ""}
+      expected ${esc(fmtWin(stop.arrival.expected))}
+      · conservative ${esc(fmtWin(stop.arrival.conservative))}
+      ${stop.rests_on_unknown ? " · assumes the schedule held earlier" : ""}</span>
+    ${stop.inputs.length ? `<p class="meta">${stop.inputs.map((i) =>
+      `${esc(i.label)} ${provMark(i.label)}`).join("<br>")}</p>` : ""}
+  </div>`;
+}
+
+function stressDayHtml(d) {
+  const findings = d.findings.map((f) => `<div class="issue ${f.breaks ? "warning" : "note"}">
+    ${f.breaks ? "⚠" : "·"} ${esc(f.message)}
+    ${f.evidence.length ? `<details class="notscored"><summary>Why?</summary>
+      <ul>${f.evidence.map((e) => `<li>${esc(e)} ${provMark(e)}</li>`).join("")}</ul>
+    </details>` : ""}
+  </div>`).join("");
+
+  const windows = d.stops.filter((s) => s.arrival && s.arrival.expected);
+  return `<div class="stress-day">
+    <div class="day-head">
+      <h3>${esc(dayLabel(d.date))}</h3>
+      <span class="dna-badge ${esc(d.verdict)}">${esc(d.verdict)}</span>
+      <small>${esc(VERDICT_BLURB[d.verdict] || "")}</small>
+      <div class="spacer"></div>
+      ${d.verdict === "fragile" || d.verdict === "blocking"
+        ? `<button class="linkish" data-saferday="${esc(d.date)}">Make this day safer</button>`
+        : ""}
+    </div>
+    ${d.legs_total ? `<p class="meta">${d.legs_measured} of ${d.legs_total} journey(s) measured</p>` : ""}
+    ${findings || '<p class="meta">✓ Nothing worth a warning.</p>'}
+    ${windows.length ? `<details class="notscored"><summary>Arrival windows</summary>
+      ${windows.map(stressStopRow).join("")}
+    </details>` : ""}
+  </div>`;
+}
+
+function stressHtml() {
+  const view = S.stress;
+  if (view === null) {
+    return '<p class="empty">Measuring real routes — this can take a moment…</p>';
+  }
+  if (view.error) return `<p class="empty">${esc(view.error)}</p>`;
+  if (!view.days.length) {
+    return '<p class="empty">Nothing to test yet — the trip has no itinerary days.</p>';
+  }
+  return `<div class="stress">
+    ${S.stressDay ? `<p class="meta">Previewing ${esc(S.stressDay)} only —
+      <button class="linkish" data-stressall="1">test the whole trip</button></p>` : ""}
+    ${view.days.map(stressDayHtml).join("")}
+    <p class="meta" style="margin-top:10px">Not a prediction. These are the plan's own
+      figures and this system's stated assumptions, pushed through each day at their
+      known widths — nothing here was invented to fill a gap.</p>
   </div>`;
 }
 
@@ -3675,6 +3806,18 @@ function wireWorkspace() {
   on("remove", (id) => act(`/items/${id}`, { method: "DELETE" }, (r) => r.summary));
   on("replace", (id) => act(`/items/${id}/replace`, post({}), (r) => r.summary));
   on("replan", (date) => act(`/days/${date}/replan`, post({ intensity: "relaxed" }), (r) => r.summary));
+  // Preview one day: narrow the stress panel and let it re-fetch.
+  on("preview", (date) => {
+    S.stressDay = date; S.stress = null; S.open.add("stress");
+    render();
+    document.querySelector('[data-art="stress"]')?.scrollIntoView({ behavior: "smooth" });
+  });
+  on("stressall", () => { S.stressDay = null; S.stress = null; render(); });
+  // "Make this day safer" is the existing scoped replan, launched from the
+  // findings. adopt() nulls S.stress, so the open panel re-runs itself against
+  // the day that now exists.
+  on("saferday", (date) =>
+    act(`/days/${date}/replan`, post({ intensity: "relaxed" }), (r) => r.summary));
   on("reject", (id) => {
     const entity = S.trip.entities[id];
     if (confirm(`Not interested in ${entity?.name || "this place"}? It will be removed and not suggested again.`))
@@ -3832,6 +3975,8 @@ const TOOL_LABELS = {
   generate_itinerary: "Built a draft itinerary",
   replace_item: "Looked for a substitute",
   replan_day: "Reworked a day",
+  run_stress_test: "Stress-tested the plan",
+  review_estimate_accuracy: "Checked its own accuracy",
   validate_itinerary: "Checked the plan for problems",
   apply_trip_patch: "Saved progress",
 };

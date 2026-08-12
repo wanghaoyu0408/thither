@@ -122,6 +122,35 @@ async def test_the_page_can_show_how_close_our_own_numbers_run(client):
     assert "estimates: estimateAnswers()" in body
 
 
+async def test_the_page_can_stress_test_a_trip(client):
+    """The preview panel, and — the ledger-59 lesson — its full wiring.
+
+    A kind that exists everywhere except the hardcoded render list is a
+    button that opens nothing, with every grep string present and green. So
+    this asserts the three registrations and the handlers, not just words.
+    """
+    body = (await client.get("/")).text
+
+    # All three registrations, or the chip toggles a flag nobody reads.
+    assert 'data-open="stress"' in body                       # the chip
+    assert 'if (kind === "stress")' in body                   # openedArtifact
+    rendered = re.search(r'for \(const kind of \[([^\]]+)\]\)', body, re.S)
+    assert rendered and '"stress"' in rendered.group(1)       # the render list
+
+    # The per-day entry points and the safer button's handler.
+    assert 'data-preview="${day.date}"' in body
+    assert 'on("preview"' in body and 'on("saferday"' in body
+    assert "data-saferday" in body
+    # The safer button goes through the existing scoped replan, nothing new.
+    assert body.count("/replan`, post({ intensity: \"relaxed\" })") >= 2
+
+    # Provenance is visibly three different kinds of number, and the panel
+    # says what it is not.
+    assert "provMark" in body
+    assert "prov unknown" in body or ".prov.unknown" in body
+    assert "Not a prediction." in body
+
+
 async def test_the_new_trip_form_asks_who_the_trip_is_for(client):
     """Without a traveller the trip has nobody in it, and everything keyed to a
     person is unreachable rather than merely empty. The form collected a head

@@ -11,6 +11,7 @@ trip, and it does so through the same validated patch engine as everything else.
 import json
 from dataclasses import dataclass, field
 from datetime import date as date_type
+from types import SimpleNamespace
 from typing import Any
 
 from app.config import Settings
@@ -71,6 +72,7 @@ from app.services.calibration_service import (
 )
 from app.services.learning_service import CATALOGUE, derive_hypotheses
 from app.services.option_metrics import ROUTES_PROVIDER
+from app.services.simulation_service import simulate_trip
 from app.services.itinerary_service import (
     arrival_penalty,
     build_itinerary,
@@ -772,6 +774,30 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "type": "string",
                     "enum": list(DIMENSIONS),
                     "description": "Limit to one kind of figure. Omit for all of them.",
+                },
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "run_stress_test",
+        "description": (
+            "Pressure-test the itinerary: the engine propagates every measured figure and "
+            "stated assumption through each day at its known width and reports which days "
+            "are comfortable, workable, fragile or blocking, with findings and arrival "
+            "windows. Use it when the traveller asks whether the plan will actually work, "
+            "whether a day is too tight, or before presenting a finished itinerary. "
+            "Read-only. The arithmetic is the engine's: you explain the findings and "
+            "windows it returns, you never compute or adjust a schedule figure yourself."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "date": {
+                    "type": "string",
+                    "description": "ISO date to preview one day. Omit for the whole trip.",
                 },
             },
             "required": [],
@@ -2722,6 +2748,92 @@ async def _ensure_routes(context: ToolContext, proposal) -> int:
     return measured
 
 
+async def _run_stress_test(context: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    """The preview, computed by the engine. Read-only, and often reassuring.
+
+    Routes are fetched for the days in question first, so the windows rest on
+    measured figures wherever measuring is possible - an unmeasured leg is
+    reported as unknown, never invented.
+    """
+    state = _working_state(context)
+    target = None
+    if args.get("date"):
+        try:
+            target = date_type.fromisoformat(str(args["date"]))
+        except ValueError:
+            return {"error": f"{args['date']!r} is not an ISO date"}
+
+    days = [d for d in state.itinerary.days if target is None or d.date == target]
+    if not days:
+        return {
+            "error": "no itinerary days to test"
+            + (f" on {target}" if target else " - generate an itinerary first")
+        }
+
+    # Measure what can be measured first; without a toolbox the forecast still
+    # runs, and every unmeasured leg reports itself as unknown rather than 0.
+    if context.toolbox is not None:
+        await _ensure_routes(context, SimpleNamespace(days=days))
+
+    calibrations = None
+    if context.calibration is not None:
+        calibrations = Calibrations.of(
+            await context.calibration.list_for(),
+            scope=scope_of(state),
+            settings=context.settings,
+        )
+
+    forecast = simulate_trip(
+        state,
+        travel=context.travel,
+        calibrations=calibrations,
+        settings=context.settings,
+        target_date=target,
+    )
+
+    return {
+        "worst": forecast.worst,
+        "days": [
+            {
+                "date": day.date.isoformat(),
+                "verdict": day.verdict,
+                "journeys_measured": f"{day.legs_measured} of {day.legs_total}",
+                "findings": [
+                    {
+                        "kind": finding.kind,
+                        "breaks_conservative": finding.breaks,
+                        "message": finding.message,
+                        "evidence": finding.evidence,
+                    }
+                    for finding in day.findings
+                ],
+                "arrivals": [
+                    {
+                        "stop": stop.title,
+                        "planned": stop.scheduled_start.strftime("%H:%M")
+                        if stop.scheduled_start
+                        else None,
+                        "expected": stop.arrival["expected"].label(),
+                        "conservative": stop.arrival["conservative"].label(),
+                        "rests_on_unknown": stop.rests_on_unknown,
+                        "inputs": [estimate.label for estimate in stop.inputs],
+                    }
+                    for stop in day.stops
+                    if stop.arrival
+                ],
+            }
+            for day in forecast.days
+        ],
+        "note": (
+            "Every figure above was computed by the engine from stored measurements and "
+            "stated assumptions. Explain the verdicts and findings in plain words, quote "
+            "windows with their provenance, and never redo or adjust the arithmetic "
+            "yourself. A day that rests on unknowns is not safe or unsafe - it is "
+            "unmeasured, and saying so is the answer."
+        ),
+    }
+
+
 async def _generate_itinerary(context: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
     working = _working_state(context)
     await _ensure_hours(context, list(working.entities))
@@ -3185,6 +3297,7 @@ HANDLERS = {
     "generate_itinerary": _generate_itinerary,
     "replace_item": _replace_item,
     "replan_day": _replan_day,
+    "run_stress_test": _run_stress_test,
     "validate_itinerary": _validate_itinerary,
     "apply_trip_patch": _apply_trip_patch,
 }
@@ -3211,6 +3324,7 @@ RESEARCH_TOOLS = frozenset(
         "search_hotels",
         "generate_itinerary",
         "replan_day",
+        "run_stress_test",
         "replace_item",
     }
 )

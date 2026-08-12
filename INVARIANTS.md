@@ -331,6 +331,53 @@ criteria, one test each. `tests/unit/test_calibration_service.py`, especially
 
 ---
 
+## 8. The engine computes; the model explains
+
+> Every schedule figure a traveller sees — an arrival window, a verdict, a
+> finding — was computed deterministically from stored measurements and
+> stated assumptions. The language model runs `run_stress_test` and explains
+> its output; it never adds minutes, estimates a journey, or adjusts a window
+> itself. Every simulation input carries a provenance
+> (`measured | calibrated | assumption | unknown`), an unknown never
+> contributes zero, and the verdict vocabulary is four words with no score.
+
+**Why.** A model doing clock arithmetic in prose is confidently wrong in the
+exact register a traveller cannot check — ledger 33 was a model *correctly*
+narrating a wrong stored number, and the lesson generalises: numbers must
+come from code that can be tested, and the model's job is the part code
+cannot do, which is saying what the numbers mean. The three-scenario
+propagation is honest about its own inputs the way invariant 7 demands:
+an earned band (`calibrated` only) may widen a window, a stated assumption
+must show itself as one, and a journey nobody measured resets the chain to
+the schedule and says so rather than inventing a zero — a day resting on
+unknowns can be called neither safe nor dangerous, so it caps at `workable`
+from both directions.
+
+**One validator.** The simulation never re-judges what `validate_itinerary`
+already judges: errors decide `blocking`, warnings fold into findings under
+simulation names with the validator's own messages as evidence, and no
+threshold exists in two places. Calibration keeps its M10 rule — it may add
+a warning, never clear a validator error.
+
+**Enforced in.** `app/services/simulation_service.py` (pure; invokes the
+validator itself so a forecast cannot forget to consult it; `_FOLDS`;
+`ASSUMPTIONS` with `overridable_by` naming only fields that exist);
+`app/models/simulation.py` (closed vocabularies); the `run_stress_test`
+tool and its returned `note`; the prompt section "Whether a day will
+actually work is a computation, not an opinion";
+`POST /trips/{id}/stress-test` (read-only, no revision, no rows).
+
+**Pinned by.** `tests/scenarios/test_milestone11_acceptance.py` (all twelve
+criteria, one test each — unmeasured-never-zero, expected-safe /
+conservative-fragile, parking uncertainty, weather fragility, locked items
+byte-for-byte through "Make this day safer", unrelated days byte-identical,
+provenance end to end, the prompt fence, zero writes, four-word verdicts,
+single-day preview). `tests/unit/test_simulation_service.py` (the interval
+arithmetic, the cascade, folds carrying the validator's words, provisional
+moving nothing).
+
+---
+
 ## Ledger — defects found by running it
 
 Reasoning about the code did not find these. Running it did. Each has a test so

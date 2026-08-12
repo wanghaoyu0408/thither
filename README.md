@@ -13,7 +13,7 @@ same question in English: **whither goest thou?** Both are a question, not a pro
 which is the right register for something whose whole discipline is saying what it does
 not know.
 
-## Status: Milestones 1-10 complete
+## Status: Milestones 1-11 complete
 
 The architectural claim this project rests on is that **`TripState` is the source of
 truth and the LLM may never overwrite it freely**. Every mutation goes through a
@@ -30,6 +30,7 @@ validated `TripPatch` with revision control, lock enforcement and rejection memo
 | 7 | Multi-traveler preferences, group scoring, fairness | done |
 | 9 | Evolving travel twin: learning signals, consent, Travel DNA | done |
 | 10 | Calibration: the agent measures its own error against what happened | done |
+| 11 | Stress test / 旅行预演: propagate every figure at its known width | done |
 
 ## Setup
 
@@ -94,7 +95,7 @@ minutes because it is really calling Google, Duffel, SerpApi and an LLM, so it s
 .venv/Scripts/python.exe -m pytest -q
 ```
 
-982 tests, no network, no API keys. The `tests/scenarios/` files map one-to-one onto each
+1019 tests, no network, no API keys. The `tests/scenarios/` files map one-to-one onto each
 milestone's acceptance criteria.
 
 Contract tests against the real Google APIs are opt-in, since they cost quota:
@@ -514,6 +515,48 @@ the model's daily context all go through it — so every trip that has ever
 existed computed its dates in UTC, while all 332 entities in the database sat
 there carrying the correct zone.
 
+### A plan that validates can still be a plan that only works if nothing slips
+
+The validator answers "is this schedule consistent as written" — one scenario,
+raw figures. The stress test (旅行预演) answers the question after that one: when
+every figure wanders inside the width it is known to wander, which days stay
+comfortable and which quietly depend on everything going right?
+
+Not prediction. The engine propagates the plan's own figures and this system's
+**stated** assumptions through each day — previous departure plus route plus
+parking plus check-in equals an arrival window — under three scenarios. Every
+input is an interval wearing its provenance: a measured drive brackets its
+claim by a per-mode spread, or by the earned calibration band where milestone
+10 has one (`calibrated` only — provisional evidence moves nothing); the
+parking buffer is an assumption that refuses to be a point, which is why even
+the *expected* arrival is honestly a range:
+
+```
+Lunch reservation: planned 11:00 · expected 10:58 · conservative 10:58–11:02
+   walking · 28 min · provider figure                              [measured]
+   finding parking and walking in · 5–15 min                     [assumption]
+⚠ late_arrival_risk — fragile in the conservative case, fine as expected
+```
+
+An unmeasured leg advances nothing. The chain resets to the schedule,
+everything downstream says "assumes the schedule held", and no lateness is
+ever derived from an invented zero — a day resting on unknowns caps at
+`workable` from both directions, since it can be called neither safe nor
+dangerous on data nobody has.
+
+Verdicts are four words — comfortable, workable, fragile, blocking — with one
+rule each and no score. The validator stays the single authority: its errors
+*are* `blocking`, its warnings fold into findings carrying its own sentences,
+and nothing is recomputed against a second set of thresholds. New ground is
+only what nobody covered — meal gaps, and outdoor stops running past sunset
+whatever their name says.
+
+"Make this day safer" is the existing scoped replan behind a new button:
+locked items survive byte-for-byte, unrelated days do not move a byte, one
+revision is spent, and the open stress panel re-runs itself against the day
+that now exists. The model's role is fenced in the prompt: it runs the tool
+and explains the findings; it never does schedule arithmetic itself.
+
 ### A fork in the road is a card, not a paragraph
 
 No airline flew ALB → MDW on the chosen dates. The agent worked out the right
@@ -733,6 +776,20 @@ carrying no trip id and nothing finer than a region.
    a 14-minute estimate that took 95 minutes is a +579% error
    median before: +32.5%    after: +32.5%
 ```
+
+### Milestone 11 acceptance
+
+```bash
+.venv/Scripts/python.exe scripts/preview_the_trip.py
+```
+
+Offline, keyless, deterministic. Six acts: a day that validates cleanly still
+cracking under its own error bars; every input wearing measured / assumption /
+unknown on its sleeve; an unmeasured leg that is unknown rather than zero; an
+earned calibration band replacing the assumption spread while a provisional
+one moves nothing; "Make this day safer" running through the existing scoped
+replan with the locked dinner byte-identical and the other day untouched; and
+a verdict vocabulary you can count on one hand.
 
 ## How a change reaches the database
 
