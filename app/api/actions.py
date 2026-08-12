@@ -45,6 +45,7 @@ from app.services.explanation_service import Explanation, explain, explain_item
 from app.services.intake_service import today_at
 from app.services.itinerary_diff import DayDiff, changed_days
 from app.services.itinerary_service import replan_day, substitute_item
+from app.services.simulation_service import simulate_trip
 from app.services.learning_service import (
     behavioral_signal_allowed,
     signal_for_move,
@@ -916,6 +917,41 @@ async def replan_one_day(
                 ],
             )
     return result
+
+
+class StressTestRequest(BaseModel):
+    # One day, or the whole trip when omitted.
+    day: date_type | None = None
+
+
+@router.post("/stress-test")
+async def stress_test(
+    trip_id: str, payload: StressTestRequest, session: SessionDep
+) -> dict[str, Any]:
+    """Pressure-test the itinerary: propagate every figure at its known width.
+
+    Read-only in the strictest sense - no revision, no rows, nothing learned.
+    A POST because it measures real routes on the way (the `_measure` path
+    buttons already use), which costs quota and seconds; the forecast itself
+    is a pure function of what comes back and is recomputed on every call.
+    """
+    state = await _load(session, trip_id)
+    days = [
+        day
+        for day in state.itinerary.days
+        if payload.day is None or day.date == payload.day
+    ]
+    if payload.day is not None and not days:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no day {payload.day} on this trip")
+
+    travel = await _measure(state, days)
+    forecast = simulate_trip(
+        state,
+        travel=travel,
+        calibrations=await calibrations_for(session, state),
+        target_date=payload.day,
+    )
+    return {**forecast.model_dump(mode="json"), "worst": forecast.worst}
 
 
 # --- explanations ------------------------------------------------------------
