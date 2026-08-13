@@ -4,7 +4,7 @@
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.12+-blue.svg)](pyproject.toml)
-[![Tests](https://img.shields.io/badge/tests-1026%20passing-brightgreen.svg)](#test)
+[![Tests](https://img.shields.io/badge/tests-1049%20passing-brightgreen.svg)](#test)
 
 *English · [中文](README.zh-CN.md)*
 
@@ -110,7 +110,7 @@ Full catalogue, including the ones that hit live providers:
 python -m pytest -q
 ```
 
-1026 tests, no network, no API keys. `tests/scenarios/` maps one-to-one onto
+1049 tests, no network, no API keys. `tests/scenarios/` maps one-to-one onto
 each milestone's acceptance criteria.
 
 ---
@@ -178,7 +178,7 @@ path that lets a caller hand back a replacement state.
 
 | Document | What it is for |
 |---|---|
-| **[INVARIANTS.md](INVARIANTS.md)** | The eight rules that must not drift, each with why, where it is enforced, and the tests that pin it — plus a 60-row ledger of every defect found by running it |
+| **[INVARIANTS.md](INVARIANTS.md)** | The eight rules that must not drift, each with why, where it is enforced, and the tests that pin it — plus a 63-row ledger of every defect found by running it |
 | **[docs/FIELD-NOTES.md](docs/FIELD-NOTES.md)** | The long version of that ledger: what broke, how it was found, what changed |
 | **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | Design decisions worth knowing, the layout, the API surface, storage |
 | **[docs/DEMOS.md](docs/DEMOS.md)** | Every acceptance script, what it proves, and what it costs to run |
@@ -198,6 +198,10 @@ Being clear about this is the same discipline as the rest of the project.
 - **One process.** The per-trip agent mutex, the run registry and the HTTP
   cache all live in memory, so running multiple workers would silently break
   the guarantee that one trip has one turn at a time.
+- **Bounded per turn, not per day.** A turn is capped on rounds, on tokens, on
+  paid provider calls and on the length of one reply, and hitting any of them
+  ends the turn out loud rather than quietly. Nothing caps spending *across*
+  turns — the table is in [SECURITY.md](SECURITY.md#what-one-turn-can-spend).
 - **It does not book.** No ticketing, no payment, no reservation. Flight and
   hotel providers are read-only by construction, and a test asserts the Duffel
   module contains nothing named for orders, payment, seats or cancellation.

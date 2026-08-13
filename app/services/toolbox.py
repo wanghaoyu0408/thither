@@ -11,7 +11,7 @@ import httpx
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.config import Settings, get_settings
-from app.providers.base import shared_client
+from app.providers.base import budget_for, current_budget, shared_client, turn_budget
 from app.providers.duffel import DuffelProvider
 from app.providers.google_places import GooglePlacesProvider
 from app.providers.google_routes import GoogleRoutesProvider
@@ -152,6 +152,15 @@ class Toolbox:
             await self._client.aclose()
 
     async def __aenter__(self) -> "Toolbox":
+        # Meter whatever happens in here, unless something outside already is.
+        # The agent scopes a budget to the whole turn and reuses one Toolbox, so
+        # its count survives; a button press builds its own Toolbox and would
+        # otherwise spend unwatched. Five endpoints open one, and asking each to
+        # remember a budget is how a guard ends up missing from the sixth.
+        self._budget_scope = None
+        if current_budget() is None:
+            self._budget_scope = turn_budget(budget_for(self._settings))
+            self._budget_scope.__enter__()
         return self
 
     async def __aexit__(
@@ -160,4 +169,9 @@ class Toolbox:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        await self.aclose()
+        try:
+            await self.aclose()
+        finally:
+            if self._budget_scope is not None:
+                self._budget_scope.__exit__(exc_type, exc, tb)
+                self._budget_scope = None

@@ -11,6 +11,7 @@ from typing import Any, Protocol
 
 from openai import APIError, AsyncOpenAI
 
+from app.config import Settings, get_settings
 from app.models.tool import ToolError
 
 
@@ -31,6 +32,12 @@ class LLMTurn:
     output_tokens: int = 0
     response_id: str | None = None
     error: ToolError | None = None
+    # The model was still writing when it hit `max_output_tokens`. Whatever came
+    # back is a fragment, and a fragment presented as an answer is worse than no
+    # answer: the reader cannot tell it was cut. Capping output without saying
+    # when the cap bit would have been the same defect as a loop that runs out
+    # of rounds and looks like it finished.
+    truncated: bool = False
 
     @property
     def wants_tools(self) -> bool:
@@ -48,9 +55,18 @@ class LLMClient(Protocol):
 
 
 class OpenAIClient:
-    def __init__(self, api_key: str, model: str) -> None:
-        self._client = AsyncOpenAI(api_key=api_key)
+    def __init__(self, api_key: str, model: str, *, settings: Settings | None = None) -> None:
+        config = settings or get_settings()
+        # The SDK's own defaults are a 600s timeout and two silent retries, so
+        # one hung request could hold a turn for half an hour and be paid for
+        # three times. Both are stated here instead of inherited.
+        self._client = AsyncOpenAI(
+            api_key=api_key,
+            timeout=config.openai_request_timeout_seconds,
+            max_retries=config.openai_max_retries,
+        )
         self._model = model
+        self._max_output_tokens = config.openai_max_output_tokens
 
     @property
     def model(self) -> str:
@@ -69,6 +85,7 @@ class OpenAIClient:
                 instructions=instructions,
                 input=conversation,
                 tools=tools,
+                max_output_tokens=self._max_output_tokens,
             )
         except APIError as exc:
             # A dead or misconfigured model must surface as an explicit failure,
@@ -100,6 +117,7 @@ class OpenAIClient:
                         texts.append(text)
 
         usage = getattr(response, "usage", None)
+        details = getattr(response, "incomplete_details", None)
         return LLMTurn(
             text="\n".join(texts) or None,
             tool_calls=calls,
@@ -107,4 +125,5 @@ class OpenAIClient:
             input_tokens=getattr(usage, "input_tokens", 0) or 0,
             output_tokens=getattr(usage, "output_tokens", 0) or 0,
             response_id=getattr(response, "id", None),
+            truncated=getattr(details, "reason", None) == "max_output_tokens",
         )

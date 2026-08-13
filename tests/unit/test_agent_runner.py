@@ -478,6 +478,123 @@ async def test_words_spoken_before_the_cap_are_kept_and_qualified(session, setti
     assert "ran out of steps" in run.reply
 
 
+# --- what a turn costs --------------------------------------------------------
+
+
+def spending(input_tokens: int, call_id: str) -> LLMTurn:
+    return LLMTurn(
+        input_tokens=input_tokens,
+        tool_calls=[LLMToolCall(call_id=call_id, name="validate_itinerary", arguments={})],
+    )
+
+
+async def test_a_turn_stops_when_it_has_spent_its_tokens(session):
+    """The round cap bounds rounds. This bounds the bill.
+
+    A round can emit any number of tool calls and every result is fed back in,
+    so a turn's cost grows with what it has already read - not with how many
+    times it has gone round.
+    """
+    settings = Settings(
+        openai_api_key="test",
+        database_url="sqlite+aiosqlite:///:memory:",
+        agent_max_iterations=50,
+        agent_max_turn_tokens=1_000,
+    )
+    llm = ScriptedLLM([spending(600, f"call_{i}") for i in range(20)])
+    runner = await make_runner(session, llm, settings)
+
+    run = await runner.run(sample_state(), "keep going")
+
+    # Stopped on cost, well before the round cap it was nowhere near.
+    assert run.hit_token_limit is True
+    assert run.hit_iteration_limit is False
+    assert run.iterations == 2
+    assert llm.calls == 2
+    # And says so. Running out of budget must not read like finishing.
+    assert "expensive" in run.reply
+    assert run.error is None
+
+
+async def test_a_turn_that_finishes_inside_its_budget_is_not_flagged(session, settings):
+    llm = ScriptedLLM([LLMTurn(text="all done", input_tokens=40)])
+    runner = await make_runner(session, llm, settings)
+
+    run = await runner.run(sample_state(), "check it")
+
+    assert run.hit_token_limit is False
+    assert run.reply == "all done"
+
+
+async def test_a_final_answer_is_never_cut_short_for_cost(session):
+    """A model that has just answered has finished; the door is the wrong place.
+
+    The check belongs after the "no more tools" exit, or an expensive turn that
+    reached its conclusion would have the conclusion taken away from it.
+    """
+    settings = Settings(
+        openai_api_key="test",
+        database_url="sqlite+aiosqlite:///:memory:",
+        agent_max_turn_tokens=100,
+    )
+    llm = ScriptedLLM([LLMTurn(text="Here is your itinerary.", input_tokens=90_000)])
+    runner = await make_runner(session, llm, settings)
+
+    run = await runner.run(sample_state(), "plan it")
+
+    assert run.hit_token_limit is False
+    assert run.reply == "Here is your itinerary."
+
+
+async def test_an_answer_cut_off_by_the_output_cap_says_so(session, settings):
+    """`max_output_tokens` can end a reply mid-sentence.
+
+    Handing that fragment back as an answer would be the same defect as a loop
+    that runs out of rounds and looks like it finished.
+    """
+    llm = ScriptedLLM([LLMTurn(text="The best route is to take the", truncated=True)])
+    runner = await make_runner(session, llm, settings)
+
+    run = await runner.run(sample_state(), "which way?")
+
+    assert "The best route is to take the" in run.reply
+    assert "cut off" in run.reply
+
+
+async def test_the_run_records_what_it_spent(session, settings):
+    """So the ceilings get set from what a turn costs, not from a guess."""
+    llm = ScriptedLLM([say("done")])
+    runner = await make_runner(session, llm, settings)
+
+    run = await runner.run(sample_state(), "hello")
+
+    assert run.budget_used == {}  # this turn reached no provider
+    assert "budget_used" in run.as_log()
+    assert run.as_log()["hit_token_limit"] is False
+
+
+async def test_every_turn_runs_under_a_budget(session, settings):
+    """The meter has to be installed by the time a tool could reach a provider.
+
+    Checked from inside a tool call rather than from outside, because "a budget
+    exists somewhere" is not the claim - the claim is that a provider call made
+    during this turn is counted.
+    """
+    from app.providers.base import current_budget
+
+    seen: list = []
+
+    class Peeking(ScriptedLLM):
+        async def respond(self, **kwargs):
+            seen.append(current_budget())
+            return await super().respond(**kwargs)
+
+    runner = await make_runner(session, Peeking([say("done")]), settings)
+    await runner.run(sample_state(), "hello")
+
+    assert seen and all(budget is not None for budget in seen)
+
+
 # --- the end-of-turn flush ----------------------------------------------------
 
 

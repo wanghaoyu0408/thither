@@ -23,9 +23,11 @@ from urllib.parse import urlparse
 
 from openai import APIError, AsyncOpenAI
 
+from app.config import Settings, get_settings
 from app.models.evidence import MAX_QUOTE_WORDS, SourceType
 from app.models.research import Citation, MentionedEntity, ResearchWebInput
 from app.models.tool import ToolError
+from app.providers.base import BudgetExhausted, current_budget
 
 PROVIDER = "openai_research"
 
@@ -157,12 +159,32 @@ Use the venue's name as written. Do not invent places that are not in the text.
 
 
 class OpenAIResearchProvider:
-    def __init__(self, api_key: str, model: str) -> None:
-        self._client = AsyncOpenAI(api_key=api_key)
+    def __init__(self, api_key: str, model: str, *, settings: Settings | None = None) -> None:
+        config = settings or get_settings()
+        # Same reasoning as OpenAIClient: the SDK's 600s timeout and two silent
+        # retries are stated here rather than inherited. Research runs two calls
+        # per query, so an unbounded one costs twice.
+        self._client = AsyncOpenAI(
+            api_key=api_key,
+            timeout=config.openai_request_timeout_seconds,
+            max_retries=config.openai_max_retries,
+        )
         self._model = model
+        self._max_output_tokens = config.openai_max_output_tokens
 
     async def research(self, spec: ResearchWebInput) -> ResearchPass:
         """Search, then extract. Returns prose, real citations, and mentions."""
+        # Metered by hand because this goes through the OpenAI SDK rather than
+        # `request_json`. It needs its own count even though `research_web` has
+        # a tool budget: `recommend_hotel_areas` reaches this provider without
+        # passing that tool, so the tool budget is not the whole story.
+        budget = current_budget()
+        if budget is not None:
+            try:
+                budget.spend(PROVIDER)
+            except BudgetExhausted as exc:
+                return ResearchPass(error=exc.as_tool_error())
+
         tool: dict[str, Any] = {"type": "web_search"}
         if spec.domains:
             # Up to 100 domains, no scheme, subdomains included.
@@ -180,6 +202,7 @@ class OpenAIResearchProvider:
                 instructions=SEARCH_INSTRUCTIONS,
                 input=[{"role": "user", "content": prompt}],
                 tools=[tool],
+                max_output_tokens=self._max_output_tokens,
             )
         except APIError as exc:
             return ResearchPass(
@@ -211,6 +234,16 @@ class OpenAIResearchProvider:
     ) -> list[MentionedEntity]:
         valid = {citation.index for citation in citations}
 
+        budget = current_budget()
+        if budget is not None:
+            try:
+                budget.spend(PROVIDER)
+            except BudgetExhausted:
+                # Same as a failed extraction below: the prose and its real
+                # citations still stand, and the caller reports that nothing
+                # was extracted rather than inventing mentions.
+                return []
+
         try:
             response = await self._client.responses.create(
                 model=self._model,
@@ -224,6 +257,7 @@ class OpenAIResearchProvider:
                         "strict": True,
                     }
                 },
+                max_output_tokens=self._max_output_tokens,
             )
         except APIError:
             # Losing the extraction is survivable; the prose and citations still

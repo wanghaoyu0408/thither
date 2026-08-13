@@ -11,6 +11,11 @@ ToolErrorCode = Literal[
     "invalid_request",
     "auth_failed",
     "timeout",
+    # We stopped, not them. Distinct from `rate_limited` on purpose: saying a
+    # provider throttled us when it was our own ceiling would be a small lie
+    # told to the one reader who most needs the truth, and it would invite a
+    # retry that cannot possibly succeed.
+    "budget_exhausted",
     "unknown",
 ]
 

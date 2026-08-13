@@ -35,6 +35,7 @@ from app.db.repository import (
 )
 from app.models.patch import PatchResult, TripPatch
 from app.models.trip import TripState
+from app.providers.base import budget_for, turn_budget
 from app.providers.openai_llm import LLMClient, LLMTurn
 from app.services.calibration_service import automatic_outcomes
 from app.services.proposal_store import ProposalStore
@@ -75,9 +76,20 @@ class AgentRun:
     # result - which is how an unfinished plan comes to look like a finished one.
     hit_iteration_limit: bool = False
 
+    # True when the turn was stopped because it had spent its token ceiling.
+    # Same shape and the same reason as the flag above: a turn that ran out of
+    # budget must not read like a turn that finished.
+    hit_token_limit: bool = False
+
     # True when the traveller asked for the turn to stop. Same shape as the
     # iteration cap: whatever committed before the stop is real and stays.
     cancelled: bool = False
+
+    # Paid provider calls this turn made, by provider. Recorded so the ceilings
+    # can be set from what a turn actually costs rather than from a guess -
+    # a turn running close to its limit means the number is wrong, not that the
+    # guard is working.
+    budget_used: dict[str, int] = field(default_factory=dict)
 
     @property
     def changed_state(self) -> bool:
@@ -98,6 +110,9 @@ class AgentRun:
             "patches_rejected": [[e.code for e in p.errors] for p in self.patches if not p.applied],
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
+            "hit_iteration_limit": self.hit_iteration_limit,
+            "hit_token_limit": self.hit_token_limit,
+            "budget_used": self.budget_used,
             "response_ids": self.response_ids,
             "error": self.error,
         }
@@ -127,6 +142,27 @@ class AgentRunner:
         self._proposals = proposals or ProposalStore()
 
     async def run(
+        self,
+        state: TripState,
+        message: str,
+        *,
+        history: list[dict[str, Any]] | None = None,
+        control: RunControl | None = None,
+    ) -> AgentRun:
+        """One turn, metered.
+
+        The budget is scoped here rather than inside the loop because a turn is
+        the unit a traveller asks for and therefore the unit worth pricing. Two
+        turns running at once get one budget each: the ContextVar follows the
+        task, not the process.
+        """
+        budget = budget_for(self._settings)
+        with turn_budget(budget):
+            run = await self._turn(state, message, history=history, control=control)
+        run.budget_used = budget.as_log()
+        return run
+
+    async def _turn(
         self,
         state: TripState,
         message: str,
@@ -191,9 +227,27 @@ class AgentRunner:
 
             if not turn.wants_tools:
                 run.reply = turn.text or ""
+                if turn.truncated:
+                    # The model hit `openai_max_output_tokens` mid-sentence.
+                    # What came back is a fragment, and handing back a fragment
+                    # as an answer is the failure this whole project is about.
+                    note = (
+                        "(That answer was cut off part-way. Ask me to continue "
+                        "and I will finish it.)"
+                    )
+                    run.reply = f"{run.reply}\n\n{note}" if run.reply else note
                 await self._flush_staged(context, run)
                 await self._note_outcomes(context)
                 return run
+
+            # Everything spent so far, against everything this turn may spend.
+            # Checked here rather than the moment tokens accumulate: a model
+            # that has just given its final answer has finished, and cutting it
+            # short at the door would be wrong. Only a turn asking for another
+            # round of work has to be able to afford one.
+            if run.input_tokens + run.output_tokens > self._settings.agent_max_turn_tokens:
+                run.hit_token_limit = True
+                break
 
             for call in turn.tool_calls:
                 # Between calls, never during one: a dispatch that has started
@@ -237,16 +291,26 @@ class AgentRunner:
                     }
                 )
 
-        # Falling out of the loop means the model was still working. Whatever it
-        # had already said is kept, but the truncation is stated either way -
-        # silently returning a half-finished turn's last words as if they were
-        # its conclusion would be the worst of both.
-        run.hit_iteration_limit = True
-        cut_short = (
-            f"I ran out of steps working on that after {run.iterations} rounds. Anything "
-            "already applied is safe and complete - nothing was left half-applied - but I "
-            "had more to do. Tell me which part to focus on and I will do that one thing."
-        )
+        # Leaving the loop means the model was still working, whether it ran out
+        # of rounds or out of budget. Whatever it had already said is kept, but
+        # the truncation is stated either way - silently returning a
+        # half-finished turn's last words as if they were its conclusion would
+        # be the worst of both.
+        rounds = f"{run.iterations} round" + ("" if run.iterations == 1 else "s")
+        if run.hit_token_limit:
+            cut_short = (
+                f"I stopped after {rounds}: that turn had grown large enough to be expensive, "
+                "and it was still growing. Anything already applied is safe and complete - "
+                "nothing was left half-applied - but I had more to do. Tell me which part "
+                "matters most and I will do that one thing on a fresh turn."
+            )
+        else:
+            run.hit_iteration_limit = True
+            cut_short = (
+                f"I ran out of steps working on that after {rounds}. Anything already applied "
+                "is safe and complete - nothing was left half-applied - but I had more to do. "
+                "Tell me which part to focus on and I will do that one thing."
+            )
         run.reply = f"{turn.text}\n\n{cut_short}" if turn.text else cut_short
         await self._flush_staged(context, run)
         return run

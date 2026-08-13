@@ -4,7 +4,7 @@
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.12+-blue.svg)](pyproject.toml)
-[![Tests](https://img.shields.io/badge/tests-1026%20passing-brightgreen.svg)](#测试)
+[![Tests](https://img.shields.io/badge/tests-1049%20passing-brightgreen.svg)](#测试)
 
 *[English](README.md) · 中文*
 
@@ -98,7 +98,7 @@ python scripts/demo_milestone1.py         # 终端 2
 python -m pytest -q
 ```
 
-1026 个测试，不联网、不需要 key。`tests/scenarios/` 与每个里程碑的验收标准一一对应。
+1049 个测试，不联网、不需要 key。`tests/scenarios/` 与每个里程碑的验收标准一一对应。
 
 ---
 
@@ -161,7 +161,7 @@ UI 是单个文件（`app/web/index.html`），不用 CDN、不烤任何 key 进
 
 | 文档 | 它的职责 |
 |---|---|
-| **[INVARIANTS.md](INVARIANTS.md)** | 八条不许漂移的规则，每条附上理由、强制点和钉住它的测试 —— 外加一份 60 行的缺陷账本，全是跑出来才发现的 |
+| **[INVARIANTS.md](INVARIANTS.md)** | 八条不许漂移的规则，每条附上理由、强制点和钉住它的测试 —— 外加一份 63 行的缺陷账本，全是跑出来才发现的 |
 | **[docs/FIELD-NOTES.md](docs/FIELD-NOTES.md)** | 那本账本的长篇版：什么坏了、怎么发现的、改了什么 |
 | **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | 值得知道的设计决策、目录结构、API 面、存储 |
 | **[docs/DEMOS.md](docs/DEMOS.md)** | 每个验收脚本证明什么、跑一次要花什么 |
@@ -179,6 +179,9 @@ UI 是单个文件（`app/web/index.html`），不用 CDN、不烤任何 key 进
   见 [SECURITY.md](SECURITY.md)。
 - **单进程。** 每个行程的 agent 互斥锁、运行注册表和 HTTP 缓存都在内存里，
   所以起多个 worker 会静默破坏"一个行程同时只有一个回合"这个保证。
+- **按回合设限，不按天。** 一个回合在轮数、token、付费接口调用数和单次回复长度
+  四个维度上都有上限，撞上任何一个都会明说，不会静默截断。但**跨回合**没有任何总量控制 ——
+  表在 [SECURITY.md](SECURITY.md#what-one-turn-can-spend)。
 - **它不订票。** 没有出票、没有支付、没有预订。航班和酒店 provider 在结构上是只读的，
   并且有一个测试断言 Duffel 模块里不存在任何与订单、支付、选座、退改相关的命名。
 - **它不把事实托付给模型。** 每个数字要么来自 provider，要么来自确定性代码。

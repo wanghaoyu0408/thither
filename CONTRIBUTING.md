@@ -10,7 +10,7 @@ what it does not know.** Every rule below is downstream of that, and every one
 of them was written after something went wrong. They are worth keeping.
 
 **1. A defect gets a ledger row and a test that would have caught it.**
-[INVARIANTS.md](INVARIANTS.md) ends with a numbered ledger — 60 rows so far —
+[INVARIANTS.md](INVARIANTS.md) ends with a numbered ledger — 63 rows so far —
 of every defect that only appeared by running the thing. A fix without a row
 is a fix that will be made again; a row without a test is a story. Both, or
 neither.
@@ -42,6 +42,13 @@ that printed a backticked method name at somebody planning a holiday.
 **7. Green tests are not evidence the feature is reachable.** Ledger 41, 50
 and 59 are all the same shape: a string present in the source, a test grepping
 for it, and a feature no user could get to. Assert the route a user travels.
+
+**8. A guard goes where it cannot be forgotten.** Spending is counted in
+`request_json` and in `Toolbox.__aenter__` — the two places everything paid
+passes through — rather than in each of the seventeen callers that could reach
+a provider. Rule 7's failure mode applies to guards too: one that has to be
+remembered will be missing from exactly the case that needed it (ledger 61,
+63).
 
 ## Running the checks
 
