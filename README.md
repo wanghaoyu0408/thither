@@ -64,7 +64,7 @@ each with the test that now pins it.
 ## See it work in 60 seconds — no API key needed
 
 ```bash
-git clone https://github.com/wanghaoyu0408/travel-agent
+git clone https://github.com/wanghaoyu0408/thither
 cd travel-agent
 python -m venv .venv && . .venv/bin/activate     # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"

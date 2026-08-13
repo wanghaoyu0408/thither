@@ -54,7 +54,7 @@
 ## 60 秒看它跑起来 —— 不需要任何 API key
 
 ```bash
-git clone https://github.com/wanghaoyu0408/travel-agent
+git clone https://github.com/wanghaoyu0408/thither
 cd travel-agent
 python -m venv .venv && . .venv/bin/activate     # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"

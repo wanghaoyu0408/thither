@@ -42,10 +42,10 @@ postgres = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/wanghaoyu0408/travel-agent"
-Repository = "https://github.com/wanghaoyu0408/travel-agent"
-Issues = "https://github.com/wanghaoyu0408/travel-agent/issues"
-"Design invariants" = "https://github.com/wanghaoyu0408/travel-agent/blob/main/INVARIANTS.md"
+Homepage = "https://github.com/wanghaoyu0408/thither"
+Repository = "https://github.com/wanghaoyu0408/thither"
+Issues = "https://github.com/wanghaoyu0408/thither/issues"
+"Design invariants" = "https://github.com/wanghaoyu0408/thither/blob/main/INVARIANTS.md"
 
 [build-system]
 requires = ["setuptools>=68"]

@@ -108,7 +108,7 @@ the question you asked.
 
 ## Reporting a vulnerability
 
-Open a [GitHub issue](https://github.com/wanghaoyu0408/travel-agent/issues) for
+Open a [GitHub issue](https://github.com/wanghaoyu0408/thither/issues) for
 anything that is not itself sensitive to disclose.
 
 For something that should not be public first, email
