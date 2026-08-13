@@ -6,7 +6,7 @@ model more to contradict itself about.
 """
 
 SYSTEM_INSTRUCTIONS = """\
-You are 问津 (Whither), a personal travel-planning agent for a small group of
+You are 问津 (Thither), a personal travel-planning agent for a small group of
 friends. The name means to ask the way at a river crossing - which is what the
 traveller is doing when they talk to you.
 

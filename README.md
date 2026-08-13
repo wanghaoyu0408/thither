@@ -1,4 +1,4 @@
-# 问津 · Whither
+# 问津 · Thither
 
 **A travel planning agent that is honest about what it does not know.**
 
@@ -17,7 +17,8 @@ LLM-generated facts as authoritative.
 
 > *问津* is to ask the way at a river crossing — 陶渊明's *后遂无问津者*, the line
 > that closes *Peach Blossom Spring* once nobody asks after the ford any more.
-> *Whither* is the same question in English: **whither goest thou?**
+> *Thither* is the other half of that exchange: **to that place, yonder** —
+> what the asking was for.
 
 ![The workspace: choice cards with the figures behind them, and what has never been checked](docs/images/hero.png)
 

@@ -74,7 +74,7 @@ async def main() -> None:
         page = await browser.new_page(viewport=VIEWPORT, device_scale_factor=2)
 
         await page.goto(BASE, wait_until="networkidle")
-        await page.evaluate(f"() => localStorage.setItem('whither.trip', '{TRIP}')")
+        await page.evaluate(f"() => localStorage.setItem('thither.trip', '{TRIP}')")
         await page.reload(wait_until="networkidle")
         await settle(page, 2000)
 

@@ -11,7 +11,7 @@ async def test_the_ui_is_served_from_the_app(client):
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
     body = response.text
-    assert "<title>问津 · Whither</title>" in body
+    assert "<title>问津 · Thither</title>" in body
     # No CDN for the app itself: markup, styles and script are all served here.
     assert "//cdn." not in body
     assert "https://" not in body.split("<style>")[1].split("</style>")[0]
@@ -240,7 +240,7 @@ async def test_the_page_remembers_which_trip_you_had_open(client):
     """
     body = (await client.get("/")).text
 
-    assert "whither.trip" in body
+    assert "thither.trip" in body
     assert "localStorage" in body
     # A browser with storage disabled must not take the app down over a
     # convenience, and a deleted trip must fall back to the drawer.

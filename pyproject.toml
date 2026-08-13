@@ -1,7 +1,7 @@
 [project]
-name = "whither"
+name = "thither"
 version = "0.1.0"
-description = "问津 · Whither - a travel planning agent that is honest about what it does not know"
+description = "问津 · Thither - a travel planning agent that is honest about what it does not know"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]

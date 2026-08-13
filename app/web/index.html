@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>问津 · Whither</title>
+<title>问津 · Thither</title>
 <style>
 /* Quiet on purpose. Travel information should be easier to scan than chat text,
    and a loud interface makes an honest answer look like a sales pitch. */
@@ -800,7 +800,7 @@ details.debug li { font: 11.5px/1.7 var(--mono); color: var(--ink-3); }
 <div class="app">
   <header>
     <button class="side-toggle" id="sideToggle" title="Show or hide the trip list">☰</button>
-    <h1 class="brand">问津 · Whither<span id="sub">no trip selected</span></h1>
+    <h1 class="brand">问津 · Thither<span id="sub">no trip selected</span></h1>
     <div class="spacer"></div>
     <button class="chip" id="validChip" hidden></button>
   </header>
@@ -1111,7 +1111,7 @@ async function createTrip(e) {
 /** Which trip was open, so closing the laptop does not lose your place.
  *  Wrapped because a browser with storage disabled must not take the app
  *  down over a convenience. */
-const TRIP_KEY = "whither.trip";
+const TRIP_KEY = "thither.trip";
 function rememberTrip(id) {
   try { id ? localStorage.setItem(TRIP_KEY, id) : localStorage.removeItem(TRIP_KEY); }
   catch {}
